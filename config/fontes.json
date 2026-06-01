@@ -1,0 +1,9 @@
+{
+  "ceasa-pe": {
+    "name": "CEASA-PE",
+    "state": "Pernambuco",
+    "uf": "PE",
+    "city": "Recife",
+    "base_url": "https://www.ceasape.org.br/cotacao"
+  }
+}
