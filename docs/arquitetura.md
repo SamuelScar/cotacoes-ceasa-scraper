@@ -69,7 +69,7 @@ Cada fonte pode ter seu proprio parser quando a estrutura do HTML for especifica
 
 Contem a persistencia dos dados.
 
-No inicio, existem apenas arquivos para salvar HTML bruto. Depois esta camada tambem deve salvar as cotacoes tratadas em SQLite.
+No inicio, existiam apenas arquivos para salvar HTML bruto. Agora esta camada tambem salva PDFs brutos quando a fonte entrega arquivos, mantendo a mesma regra de organizacao por fonte e categoria. A persistencia das cotacoes tratadas fica em SQLite.
 
 ### main.py
 

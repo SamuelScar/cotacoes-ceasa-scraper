@@ -8,7 +8,7 @@ Este documento acompanha o avanco dos scrapers por fonte.
 | --- | --- | --- | --- | --- |
 | CEASA-PE | PE | <span style="color: #22863a;">Concluido</span> | <span style="color: #22863a;">Concluido</span> | Coleta todas as categorias descobertas e permite buscar datas anteriores com `COTACOES_QUOTES_BACK`. |
 | CEASA-MG | MG | <span style="color: #22863a;">Concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Coleta a ultima cotacao por cidade; nao foi identificado acesso confiavel a cotacoes anteriores. |
-| CEASA-PR | PR | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa avaliar se a fonte entrega HTML direto ou arquivos. |
+| CEASA-PR | PR | <span style="color: #22863a;">Concluido</span> | <span style="color: #22863a;">Concluido</span> | Coleta PDFs diarios por cidade na estrutura unificada a partir de 2022. |
 | CEAGESP-SP | SP | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Pode exigir formulario por categoria, produto ou data. |
 | CEASA-RJ | RJ | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa reavaliar URL e estrutura da pagina. |
 | CEASA-DF | DF | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa avaliar estrutura da pagina de precos. |

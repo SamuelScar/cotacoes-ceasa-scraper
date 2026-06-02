@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
+from http.client import RemoteDisconnected
 from time import monotonic, sleep
+
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -22,18 +24,32 @@ class HttpClient:
 
     def get_text(self, url: str, encoding: str = "utf-8") -> str:
         """Baixa uma URL e retorna o corpo da resposta como texto."""
-        self._wait_before_request()
-        request = Request(url, headers=self.headers)
-
-        try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                body = response.read()
-        except HTTPError as error:
-            raise RuntimeError(f"Erro HTTP ao baixar {url}: {error.code}") from error
-        except URLError as error:
-            raise RuntimeError(f"Erro de conexao ao baixar {url}: {error.reason}") from error
+        body = self.get_bytes(url)
 
         return body.decode(encoding, errors="replace")
+
+    def get_bytes(self, url: str) -> bytes:
+        """Baixa uma URL e retorna o corpo da resposta como bytes."""
+        for attempt in range(2):
+            self._wait_before_request()
+            request = Request(url, headers=self.headers)
+
+            try:
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    return response.read()
+            except HTTPError as error:
+                raise RuntimeError(f"Erro HTTP ao baixar {url}: {error.code}") from error
+            except RemoteDisconnected as error:
+                if attempt == 1:
+                    raise RuntimeError(
+                        f"Conexao encerrada pela fonte ao baixar {url}."
+                    ) from error
+            except URLError as error:
+                raise RuntimeError(
+                    f"Erro de conexao ao baixar {url}: {error.reason}"
+                ) from error
+
+        raise RuntimeError(f"Nao foi possivel baixar {url}.")
 
     def _wait_before_request(self) -> None:
         if self._last_request_at == 0:

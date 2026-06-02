@@ -64,7 +64,7 @@ O `.env` nao deve ser versionado. O arquivo versionavel e o `.env.example`.
 
 ## Dependencias
 
-O projeto usa dependencias externas para leitura e parsing de HTML.
+O projeto usa dependencias externas para leitura e parsing de HTML e PDF.
 
 As dependencias sao instaladas dentro da imagem Docker durante o build:
 
@@ -76,18 +76,19 @@ Dependencias principais:
 
 - `beautifulsoup4`: extracao de dados do HTML.
 - `lxml`: parser HTML usado pelo BeautifulSoup.
+- `pypdf`: extracao de texto dos PDFs da CEASA-PR.
 
 ## Executar coleta
 
 Ver comandos de execucao em [Comandos](comandos.md).
 
-Baixar os HTMLs de todas as categorias:
+Baixar os arquivos brutos de todas as categorias:
 
 ```bash
 docker compose run --rm baixar
 ```
 
-Processar os HTMLs baixados e salvar no SQLite:
+Processar os arquivos brutos baixados e salvar no SQLite:
 
 ```bash
 docker compose run --rm banco

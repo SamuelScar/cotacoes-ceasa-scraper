@@ -6,7 +6,7 @@ Projeto para coletar cotacoes publicas de CEASAs brasileiras, padronizar os dado
 
 Construir um scraper simples e extensivel para extrair cotacoes de produtos hortifrutigranjeiros em diferentes centrais de abastecimento do Brasil.
 
-O foco inicial e trabalhar com fontes publicas em HTML ou APIs abertas. Fontes em PDF, paginas instaveis ou com bloqueios devem ser avaliadas depois que a base do projeto estiver funcionando.
+O foco inicial foi trabalhar com fontes publicas em HTML ou APIs abertas. Com a base funcionando, o projeto tambem passou a tratar PDFs quando a fonte oferece uma estrutura estavel.
 
 ## O que sera feito
 
@@ -50,7 +50,7 @@ Cada cotacao deve seguir um formato padrao, independentemente da fonte:
 
 - Priorizar fontes com dados HTML ou API publica.
 - Tratar tabelas e paginas estaveis primeiro.
-- Fontes em PDF ou com muitos bloqueios podem ficar fora do escopo inicial.
+- Fontes em PDF podem ser tratadas quando tiverem links publicos e estrutura estavel.
 - Coletar o maior numero possivel de fontes viaveis, respeitando o formato e a disponibilidade de cada CEASA.
 - Usar SQLite como arquivo final de armazenamento.
 
@@ -122,13 +122,13 @@ Buildar a imagem:
 docker compose build
 ```
 
-Baixar os HTMLs de todas as categorias:
+Baixar os arquivos brutos de todas as categorias:
 
 ```bash
 docker compose run --rm baixar
 ```
 
-Processar os HTMLs baixados e salvar no SQLite:
+Processar os arquivos brutos baixados e salvar no SQLite:
 
 ```bash
 docker compose run --rm banco
@@ -148,7 +148,7 @@ docker compose run --rm compactar-old
 
 Esse comando gera um novo `.zip` em `data/raw/<fonte>/old/` e remove os `.html` que entraram no arquivo compactado.
 
-Para evitar downloads repetidos quando o HTML ja existe na pasta raw principal:
+Para evitar downloads repetidos quando o raw ja existe na pasta principal:
 
 ```env
 COTACOES_REUSE_RAW_BEFORE_REQUEST=true

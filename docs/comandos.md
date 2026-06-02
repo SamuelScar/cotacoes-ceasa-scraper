@@ -16,13 +16,13 @@ Buildar a imagem:
 docker compose build
 ```
 
-Baixar os HTMLs de todas as categorias:
+Baixar os arquivos brutos de todas as categorias:
 
 ```bash
 docker compose run --rm baixar
 ```
 
-Processar os HTMLs baixados e salvar no SQLite:
+Processar os arquivos brutos baixados e salvar no SQLite:
 
 ```bash
 docker compose run --rm banco
@@ -60,6 +60,14 @@ Tambem e possivel passar a fonte direto no comando:
 docker compose run --rm app --source ceasa-mg --parse
 ```
 
+Exemplo para CEASA-PR em uma data especifica:
+
+```bash
+docker compose run --rm app --source ceasa-pr --target-date 02/06/2026 --save
+```
+
+Na CEASA-PR, as categorias representam as cidades descobertas na pagina anual da fonte.
+
 ## Verificar CLI
 
 Mostra os parametros disponiveis sem acessar a internet:
@@ -82,7 +90,7 @@ Faz uma requisicao para a URL base e lista as categorias encontradas:
 docker compose run --rm app --list-categories
 ```
 
-## Baixar HTML bruto
+## Baixar raw bruto
 
 Baixar todas as categorias descobertas:
 
@@ -90,7 +98,7 @@ Baixar todas as categorias descobertas:
 docker compose run --rm app
 ```
 
-Os arquivos sao salvos em `data/raw/<fonte>/`. Para cada fonte, categoria, data de cotacao consultada e dia de execucao, a pasta principal fica somente com o HTML mais recente. Arquivos anteriores do mesmo grupo no mesmo dia sao movidos para `data/raw/<fonte>/old/`.
+Os arquivos sao salvos em `data/raw/<fonte>/`. Para cada fonte, categoria, data de cotacao consultada e dia de execucao, a pasta principal fica somente com o raw mais recente. Arquivos anteriores do mesmo grupo no mesmo dia sao movidos para `data/raw/<fonte>/old/`.
 
 ## Baixar e extrair cotacoes
 
@@ -215,13 +223,13 @@ O intervalo minimo entre requisicoes vem do `.env`:
 COTACOES_REQUEST_DELAY_SECONDS=2.0
 ```
 
-Para evitar requisicoes repetidas quando o HTML ja existe na pasta raw principal:
+Para evitar requisicoes repetidas quando o raw ja existe na pasta principal:
 
 ```env
 COTACOES_REUSE_RAW_BEFORE_REQUEST=true
 ```
 
-Com essa opcao ativa, o scraper procura o HTML correspondente em `data/raw/<fonte>/` antes de fazer download. A regra nao usa `old/` nem arquivos `.zip`.
+Com essa opcao ativa, o scraper procura o raw correspondente em `data/raw/<fonte>/` antes de fazer download. A regra nao usa `old/` nem arquivos `.zip`.
 
 A data alvo e a janela de cotacoes tambem vem do `.env`:
 

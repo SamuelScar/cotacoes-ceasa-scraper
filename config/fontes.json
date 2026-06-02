@@ -12,5 +12,12 @@
     "uf": "MG",
     "city": "Varias cidades",
     "base_url": "https://minas1.ceasa.mg.gov.br/ceasainternet/cst_precosmaiscomumMG/cst_precosmaiscomumMG.php"
+  },
+  "ceasa-pr": {
+    "name": "CEASA-PR",
+    "state": "Parana",
+    "uf": "PR",
+    "city": "Varias cidades",
+    "base_url": "https://www.ceasa.pr.gov.br/Pagina/Cotacao-Diaria-de-Precos"
   }
 }

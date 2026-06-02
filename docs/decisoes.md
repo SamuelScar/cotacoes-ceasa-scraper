@@ -125,3 +125,13 @@ Decisao: a normalizacao de unidades deve preservar a unidade original da fonte e
 Motivo: a CEASA-PE mistura unidade, embalagem e quantidade no mesmo texto. Exemplos: `Kg`, `Cx.20Kg`, `Cx.30 Dz`, `Molho 0,350 Kg`, `Cx12Unid.1L`. Se o scraper apenas sobrescrever esse texto por uma sigla simples, parte da informacao comercial sera perdida.
 
 Caminho recomendado: criar um normalizador especifico de unidade que extraia `embalagem`, `quantidade_minima`, `quantidade_maxima`, `unidade_medida` e `detalhe`, mantendo tambem `unidade_original`.
+
+## 2026-06-02
+
+### Implementar CEASA-PR por PDFs diarios
+
+Decisao: implementar a CEASA-PR pela pagina anual unificada, onde cada cidade, mes e dia aponta para um PDF diario.
+
+Motivo: a estrutura a partir de 2022 concentra as cidades em paginas anuais. Como os nomes dos arquivos PDF variam por cidade, o scraper deve localizar o link no HTML em vez de montar a URL por padrao de nome.
+
+Detalhe: para esta fonte, as categorias do projeto representam as cidades descobertas na pagina anual. O parser usa `pypdf` para extrair o texto dos PDFs e mapear produto, tipo, unidade, situacao de mercado, precos e procedencia para o modelo normalizado.

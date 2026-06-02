@@ -15,41 +15,80 @@ class RawArchiveResult:
 
 @dataclass(frozen=True)
 class RawHtmlStorage:
-    """Salva paginas HTML brutas para tratamento posterior."""
+    """Salva arquivos brutos para tratamento posterior."""
 
     base_dir: Path
 
     def save(self, source: str, category: str, html: str) -> Path:
         """Salva o HTML em um arquivo identificado por fonte, categoria e horario."""
+        return self.save_text(source, category, html, "html")
+
+    def save_text(
+        self,
+        source: str,
+        category: str,
+        content: str,
+        extension: str,
+    ) -> Path:
+        """Salva conteudo textual bruto com a extensao informada."""
         directory = self.base_dir / source
         directory.mkdir(parents=True, exist_ok=True)
 
         now = datetime.now()
-        self._archive_current_day_files(directory, category, now.date())
+        self._archive_current_day_files(directory, category, now.date(), extension)
 
         timestamp = now.strftime("%Y%m%d_%H%M%S")
-        file_path = directory / f"{category}_{timestamp}.html"
-        file_path.write_text(html, encoding="utf-8")
+        file_path = directory / f"{category}_{timestamp}.{extension}"
+        file_path.write_text(content, encoding="utf-8")
+
+        return file_path
+
+    def save_bytes(
+        self,
+        source: str,
+        category: str,
+        content: bytes,
+        extension: str,
+    ) -> Path:
+        """Salva conteudo binario bruto com a extensao informada."""
+        directory = self.base_dir / source
+        directory.mkdir(parents=True, exist_ok=True)
+
+        now = datetime.now()
+        self._archive_current_day_files(directory, category, now.date(), extension)
+
+        timestamp = now.strftime("%Y%m%d_%H%M%S")
+        file_path = directory / f"{category}_{timestamp}.{extension}"
+        file_path.write_bytes(content)
 
         return file_path
 
     def find_latest(self, source: str, category: str) -> Path | None:
         """Busca o HTML ativo mais recente da fonte e categoria."""
+        return self.find_latest_file(source, category, "html")
+
+    def find_latest_file(
+        self,
+        source: str,
+        category: str,
+        extension: str,
+    ) -> Path | None:
+        """Busca o arquivo ativo mais recente da fonte, categoria e extensao."""
         directory = self.base_dir / source
 
         if not directory.exists():
             return None
 
-        html_files = sorted(
+        raw_files = sorted(
             file_path
-            for file_path in directory.glob(f"{category}_*.html")
+            for file_path in directory.glob(f"{category}_*.{extension}")
             if file_path.is_file()
         )
 
-        if not html_files:
+        if not raw_files:
             return None
 
-        return html_files[-1]
+        return raw_files[-1]
 
     def archive_old_html_files(self) -> list[RawArchiveResult]:
         """Compacta HTMLs soltos de `old` por fonte e remove os originais."""
@@ -95,12 +134,13 @@ class RawHtmlStorage:
         directory: Path,
         category: str,
         current_date: date,
+        extension: str,
     ) -> None:
         """Move raws anteriores do mesmo dia para a pasta `old`."""
         day_prefix = current_date.strftime("%Y%m%d")
         old_directory = directory / "old"
 
-        for file_path in directory.glob(f"{category}_{day_prefix}_*.html"):
+        for file_path in directory.glob(f"{category}_{day_prefix}_*.{extension}"):
             old_directory.mkdir(parents=True, exist_ok=True)
             file_path.rename(self._build_old_path(old_directory, file_path.name))
 

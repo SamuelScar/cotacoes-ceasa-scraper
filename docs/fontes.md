@@ -20,7 +20,7 @@ Fontes em PDF, arquivos baixados manualmente, paginas muito dinamicas ou com cap
 | --- | --- | --- | --- | --- | --- |
 | CEASA-PE | PE | https://www.ceasape.org.br/cotacao | HTML | Alta | Implementado |
 | CEASA-MG | MG | https://minas1.ceasa.mg.gov.br/ceasainternet/cst_precosmaiscomumMG/cst_precosmaiscomumMG.php | HTML | Alta | Implementado para ultima cotacao |
-| CEASA-PR | PR | https://www.ceasa.pr.gov.br/Pagina/Cotacao-Diaria-de-Precos | HTML ou arquivo | Media | Pendente |
+| CEASA-PR | PR | https://www.ceasa.pr.gov.br/Pagina/Cotacao-Diaria-de-Precos | HTML + PDF | Media | Implementado para estrutura unificada desde 2022 |
 | CEAGESP-SP | SP | https://ceagesp.gov.br/cotacoes/ | HTML | Media | Pendente |
 | CEASA-RJ | RJ | https://www.rj.gov.br/ceasa/Cotação | HTML | Media | Pendente |
 | CEASA-DF | DF | https://www.portal.ceasadf.com.br/precos | HTML | Media | Pendente |
