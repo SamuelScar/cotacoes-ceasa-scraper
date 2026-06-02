@@ -46,6 +46,22 @@ Esse comando compacta os `.html` soltos de `data/raw/<fonte>/old/` em um novo `.
 
 Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
 
+## Flags da CLI
+
+- `--source`: escolhe qual fonte sera coletada, como `ceasa-pe`, `ceasa-mg` ou `ceasa-pr`.
+- `--list-categories`: lista as categorias disponiveis da fonte sem baixar nem salvar cotacoes.
+- `--parse`: baixa os dados brutos e extrai as cotacoes, mas nao salva no banco.
+- `--save`: baixa os dados, extrai as cotacoes e salva no SQLite.
+- `--target-date`: define uma data especifica de cotacao; se nao for usada, o sistema usa a data atual.
+- `--quotes-back`: coleta tambem datas anteriores a data alvo, quando a fonte suporta historico.
+- `--process-raw`: processa arquivos brutos ja salvos em `data/raw`, sem acessar a internet.
+- `--raw-dir`: define outra pasta para ler ou salvar arquivos brutos.
+- `--database-path`: define outro arquivo SQLite para salvar os registros.
+- `--base-url`: sobrescreve temporariamente a URL base da fonte configurada.
+- `--http-timeout-seconds`: define o tempo maximo de espera para cada requisicao HTTP.
+- `--request-delay-seconds`: define o intervalo minimo entre uma requisicao e outra.
+- `--archive-raw-old`: compacta arquivos brutos antigos da pasta `old`.
+
 ## Alterar fonte
 
 Os comandos principais usam a fonte configurada em `COTACOES_SOURCE`.
@@ -67,6 +83,15 @@ docker compose run --rm app --source ceasa-pr --target-date 02/06/2026 --save
 ```
 
 Na CEASA-PR, as categorias representam as cidades descobertas na pagina anual da fonte.
+
+Exemplo para CEASA Campinas:
+
+```bash
+docker compose run --rm app --source ceasa-campinas --save
+```
+
+Na CEASA Campinas, o scraper descobre os PDFs pela lista de datas da pagina de cotacoes anteriores.
+O `--list-categories` mostra a pagina de cotacoes da fonte; os grupos de produtos sao descobertos dentro do PDF durante `--parse` ou `--save`.
 
 ## Verificar CLI
 

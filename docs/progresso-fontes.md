@@ -12,7 +12,7 @@ Este documento acompanha o avanco dos scrapers por fonte.
 | CEAGESP-SP | SP | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Pode exigir formulario por categoria, produto ou data. |
 | CEASA-RJ | RJ | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa reavaliar URL e estrutura da pagina. |
 | CEASA-DF | DF | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa avaliar estrutura da pagina de precos. |
-| CEASA Campinas | SP | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Fonte aparenta ter cotacoes anteriores, mas ainda nao foi avaliada. |
+| CEASA Campinas | SP | <span style="color: #b08800;">Parcial</span> | <span style="color: #b08800;">Parcial</span> | Scraper implementado para PDFs descobertos dinamicamente; pendente de validacao local. |
 | CEASA-GO | GO | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa avaliar se entrega HTML direto ou arquivo. |
 | CEASA-BA | BA | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Baixa prioridade por aparentar boletim ou pagina institucional. |
 | CEASA-CE | CE | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa avaliar HTML ou boletim diario. |

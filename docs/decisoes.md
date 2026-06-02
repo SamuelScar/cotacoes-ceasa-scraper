@@ -135,3 +135,11 @@ Decisao: implementar a CEASA-PR pela pagina anual unificada, onde cada cidade, m
 Motivo: a estrutura a partir de 2022 concentra as cidades em paginas anuais. Como os nomes dos arquivos PDF variam por cidade, o scraper deve localizar o link no HTML em vez de montar a URL por padrao de nome.
 
 Detalhe: para esta fonte, as categorias do projeto representam as cidades descobertas na pagina anual. O parser usa `pypdf` para extrair o texto dos PDFs e mapear produto, tipo, unidade, situacao de mercado, precos e procedencia para o modelo normalizado.
+
+### Implementar CEASA Campinas por links de PDF
+
+Decisao: implementar a CEASA Campinas a partir da pagina de cotacoes anteriores, onde cada data aponta para um PDF.
+
+Motivo: a fonte publica as cotacoes em uma lista paginada de datas. Como os links estao no HTML e podem mudar ao longo do tempo, o scraper deve descobrir os PDFs pela propria pagina em vez de montar URLs manualmente.
+
+Detalhe: o coletor busca o PDF mais recente ate a data alvo. O parser usa as secoes encontradas dentro do PDF como categorias dos registros, sem manter lista fixa de grupos de produtos.

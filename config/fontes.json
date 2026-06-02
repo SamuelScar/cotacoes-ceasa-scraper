@@ -19,5 +19,12 @@
     "uf": "PR",
     "city": "Varias cidades",
     "base_url": "https://www.ceasa.pr.gov.br/Pagina/Cotacao-Diaria-de-Precos"
+  },
+  "ceasa-campinas": {
+    "name": "CEASA Campinas",
+    "state": "Sao Paulo",
+    "uf": "SP",
+    "city": "Campinas",
+    "base_url": "https://www.ceasacampinas.com.br/cotacoes-anteriores"
   }
 }

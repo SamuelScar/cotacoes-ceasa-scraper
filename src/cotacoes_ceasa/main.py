@@ -4,12 +4,17 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
+from cotacoes_ceasa.collectors.ceasa_campinas import (
+    CEASA_CAMPINAS_HEADERS,
+    CeasaCampinasCollector,
+)
 from cotacoes_ceasa.collectors.ceasa_mg import CeasaMgCollector
 from cotacoes_ceasa.collectors.ceasa_pe import CeasaPeCollector
 from cotacoes_ceasa.collectors.ceasa_pr import CEASA_PR_HEADERS, CeasaPrCollector
 from cotacoes_ceasa.config import AppConfig, SourceConfig, load_config
 from cotacoes_ceasa.http.client import HttpClient
 from cotacoes_ceasa.models import Cotacao
+from cotacoes_ceasa.parsers.ceasa_campinas import CeasaCampinasParser
 from cotacoes_ceasa.parsers.ceasa_mg import CeasaMgParser
 from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
 from cotacoes_ceasa.parsers.ceasa_pr import CeasaPrParser
@@ -145,6 +150,21 @@ def build_collector(args, config: AppConfig, source_config: SourceConfig):
             reuse_raw_before_request=config.reuse_raw_before_request,
         )
 
+    if args.source == "ceasa-campinas":
+        ceasa_campinas_http_client = HttpClient(
+            timeout_seconds=args.http_timeout_seconds,
+            request_delay_seconds=args.request_delay_seconds,
+            headers=CEASA_CAMPINAS_HEADERS,
+        )
+
+        return CeasaCampinasCollector(
+            http_client=ceasa_campinas_http_client,
+            raw_storage=raw_storage,
+            parser=CeasaCampinasParser(),
+            base_url=base_url,
+            reuse_raw_before_request=config.reuse_raw_before_request,
+        )
+
     raise ValueError(f"Fonte nao suportada: {args.source}")
 
 
@@ -157,6 +177,9 @@ def build_source_parser(source_slug: str):
 
     if source_slug == "ceasa-pr":
         return CeasaPrParser()
+
+    if source_slug == "ceasa-campinas":
+        return CeasaCampinasParser()
 
     raise ValueError(f"Fonte nao suportada: {source_slug}")
 
