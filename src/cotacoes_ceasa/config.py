@@ -13,12 +13,12 @@ class AppConfig:
     """Configuracoes padrao usadas pela CLI do projeto."""
 
     source: str
-    category: str
     sources_file: str
     raw_dir: str
     database_path: str
     http_timeout_seconds: int
     request_delay_seconds: float
+    reuse_raw_before_request: bool
     target_date: str | None
     quotes_back: int
     sources: dict[str, "SourceConfig"]
@@ -42,12 +42,15 @@ def load_config(env_file: Path = ENV_FILE) -> AppConfig:
 
     return AppConfig(
         source=os.getenv("COTACOES_SOURCE", "ceasa-pe"),
-        category=os.getenv("COTACOES_CATEGORY", "todas"),
         sources_file=sources_file,
         raw_dir=os.getenv("COTACOES_RAW_DIR", "data/raw"),
         database_path=os.getenv("COTACOES_DATABASE_PATH", "data/cotacoes.sqlite"),
         http_timeout_seconds=_get_int_env("COTACOES_HTTP_TIMEOUT_SECONDS", 30),
         request_delay_seconds=_get_float_env("COTACOES_REQUEST_DELAY_SECONDS", 2.0),
+        reuse_raw_before_request=_get_bool_env(
+            "COTACOES_REUSE_RAW_BEFORE_REQUEST",
+            False,
+        ),
         target_date=_get_optional_env("COTACOES_TARGET_DATE"),
         quotes_back=_get_int_env("COTACOES_QUOTES_BACK", 0),
         sources=load_sources(Path(sources_file)),
@@ -121,6 +124,23 @@ def _get_float_env(name: str, default: float) -> float:
         return float(value)
     except ValueError as error:
         raise ValueError(f"Valor invalido para {name}: {value}") from error
+
+
+def _get_bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    normalized_value = value.strip().lower()
+
+    if normalized_value in {"1", "true", "yes", "y", "sim", "s"}:
+        return True
+
+    if normalized_value in {"0", "false", "no", "n", "nao", "não"}:
+        return False
+
+    raise ValueError(f"Valor invalido para {name}: {value}")
 
 
 def _get_optional_env(name: str) -> str | None:

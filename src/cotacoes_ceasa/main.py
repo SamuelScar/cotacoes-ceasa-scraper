@@ -1,14 +1,22 @@
 import argparse
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlencode
 
 from cotacoes_ceasa.collectors.ceasa_pe import CeasaPeCollector
 from cotacoes_ceasa.config import AppConfig, load_config
 from cotacoes_ceasa.http.client import HttpClient
-from cotacoes_ceasa.models import Category, Cotacao
+from cotacoes_ceasa.models import Cotacao
 from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
-from cotacoes_ceasa.storage.raw_html import RawHtmlStorage
+from cotacoes_ceasa.storage.raw_html import RawArchiveResult, RawHtmlStorage
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
+
+
+RAW_FILE_PATTERN = re.compile(
+    r"^(?P<storage_category>.+)_(?P<downloaded_at>\d{8}_\d{6})\.html$"
+)
+RAW_CATEGORY_DATE_PATTERN = re.compile(r"_(?P<target_date>\d{4}-\d{2}-\d{2})$")
 
 
 def main() -> None:
@@ -16,6 +24,10 @@ def main() -> None:
     config = load_config()
     parser = build_parser(config)
     args = parser.parse_args()
+
+    if args.archive_raw_old:
+        archive_raw_old_and_report(RawHtmlStorage(Path(args.raw_dir)))
+        return
 
     if args.source == "ceasa-pe":
         source_config = config.sources[args.source]
@@ -27,6 +39,7 @@ def main() -> None:
             raw_storage=RawHtmlStorage(Path(args.raw_dir)),
             parser=CeasaPeParser(),
             base_url=args.base_url or source_config.base_url,
+            reuse_raw_before_request=config.reuse_raw_before_request,
         )
 
         if args.list_categories:
@@ -34,10 +47,32 @@ def main() -> None:
                 print(f"{category.slug}\t{category.name}")
             return
 
+        if args.process_raw:
+            cotacoes = process_raw_and_report(
+                parser=CeasaPeParser(),
+                raw_dir=Path(args.raw_dir),
+                source_slug=args.source,
+                base_url=args.base_url or source_config.base_url,
+            )
+            storage = SQLiteStorage(Path(args.database_path))
+            inserted_count = storage.save_cotacoes(
+                cotacoes=cotacoes,
+                source_slug=args.source,
+                source_name=source_config.name,
+                state_name=source_config.state,
+                uf=source_config.uf,
+                city=source_config.city,
+                source_url=source_config.base_url,
+            )
+            print(
+                f"total: {len(cotacoes)} cotacoes processadas. "
+                f"{inserted_count} registros novos salvos em {args.database_path}."
+            )
+            return
+
         if args.save:
             cotacoes = collect_and_report(
                 collector=collector,
-                category_slug=args.category,
                 target_date=parse_target_date(args.target_date),
                 quotes_back=args.quotes_back,
             )
@@ -60,7 +95,6 @@ def main() -> None:
         if args.parse:
             cotacoes = collect_and_report(
                 collector=collector,
-                category_slug=args.category,
                 target_date=parse_target_date(args.target_date),
                 quotes_back=args.quotes_back,
             )
@@ -69,7 +103,6 @@ def main() -> None:
 
         saved_files = download_and_report(
             collector=collector,
-            category_slug=args.category,
             target_date=parse_target_date(args.target_date),
             quotes_back=args.quotes_back,
         )
@@ -80,12 +113,11 @@ def main() -> None:
 
 def collect_and_report(
     collector: CeasaPeCollector,
-    category_slug: str,
     target_date: date,
     quotes_back: int,
 ) -> list[Cotacao]:
     """Coleta cotacoes e imprime um resumo por categoria."""
-    categories = resolve_categories(collector, category_slug)
+    categories = collector.discover_categories()
     target_dates = resolve_quotation_dates(
         collector=collector,
         probe_category_slug=categories[0].slug,
@@ -101,7 +133,7 @@ def collect_and_report(
 
         for target_date in target_dates:
             try:
-                category_cotacoes = collector.collect_category(category.slug, target_date)
+                category_cotacoes = collector._collect_category(category.slug, target_date)
             except Exception as error:
                 print(f"{category.slug} {target_date.isoformat()}: erro - {error}")
                 continue
@@ -116,12 +148,11 @@ def collect_and_report(
 
 def download_and_report(
     collector: CeasaPeCollector,
-    category_slug: str,
     target_date: date,
     quotes_back: int,
 ) -> list[Path]:
     """Baixa HTML bruto para a janela de datas configurada."""
-    categories = resolve_categories(collector, category_slug)
+    categories = collector.discover_categories()
     target_dates = resolve_quotation_dates(
         collector=collector,
         probe_category_slug=categories[0].slug,
@@ -132,20 +163,109 @@ def download_and_report(
 
     for category in categories:
         for target_date in target_dates:
-            saved_files.append(collector.download_category(category.slug, target_date))
+            saved_files.append(collector._download_category(category.slug, target_date))
 
     return saved_files
 
 
-def resolve_categories(
-    collector: CeasaPeCollector,
-    category_slug: str,
-) -> tuple[Category, ...]:
-    """Resolve uma categoria especifica ou todas as categorias descobertas."""
-    if category_slug == "todas":
-        return collector.discover_categories()
+def archive_raw_old_and_report(raw_storage: RawHtmlStorage) -> None:
+    results = raw_storage.archive_old_html_files()
 
-    return (Category(slug=category_slug, name=category_slug),)
+    if not results:
+        print("Nenhum HTML antigo encontrado para compactar.")
+        return
+
+    for result in results:
+        print(format_archive_result(result))
+
+
+def format_archive_result(result: RawArchiveResult) -> str:
+    return (
+        f"{result.source}: {result.archived_count} HTMLs compactados em "
+        f"{result.archive_path}"
+    )
+
+
+def process_raw_and_report(
+    parser: CeasaPeParser,
+    raw_dir: Path,
+    source_slug: str,
+    base_url: str,
+) -> list[Cotacao]:
+    """Processa HTMLs brutos salvos em disco e retorna cotacoes normalizadas."""
+    raw_files = list_raw_files(raw_dir, source_slug)
+
+    if not raw_files:
+        raise RuntimeError(f"Nenhum HTML bruto encontrado em {raw_dir / source_slug}.")
+
+    cotacoes: list[Cotacao] = []
+
+    for file_path in raw_files:
+        try:
+            category_slug, target_date = parse_raw_file_metadata(file_path)
+            url_origem = build_category_url(base_url, category_slug, target_date)
+            parsed_cotacoes = parser.parse_category(
+                file_path.read_text(encoding="utf-8"),
+                category_slug,
+                url_origem,
+            )
+        except Exception as error:
+            print(f"{file_path}: erro - {error}")
+            continue
+
+        cotacoes.extend(parsed_cotacoes)
+        print(f"{file_path}: {len(parsed_cotacoes)} cotacoes")
+
+    return cotacoes
+
+
+def list_raw_files(raw_dir: Path, source_slug: str) -> list[Path]:
+    """Lista os HTMLs ativos da fonte, ignorando arquivos arquivados em `old`."""
+    source_raw_dir = raw_dir / source_slug
+
+    if not source_raw_dir.exists():
+        return []
+
+    return sorted(
+        file_path
+        for file_path in source_raw_dir.glob("*.html")
+        if file_path.is_file()
+    )
+
+
+def parse_raw_file_metadata(file_path: Path) -> tuple[str, date | None]:
+    """Extrai categoria e data alvo a partir do nome do HTML bruto."""
+    match = RAW_FILE_PATTERN.match(file_path.name)
+
+    if match is None:
+        raise ValueError("Nome de arquivo bruto fora do padrao esperado.")
+
+    storage_category = match.group("storage_category")
+    date_match = RAW_CATEGORY_DATE_PATTERN.search(storage_category)
+
+    if date_match is None:
+        return storage_category, None
+
+    category_slug = storage_category[: date_match.start()]
+    target_date = datetime.strptime(date_match.group("target_date"), "%Y-%m-%d").date()
+
+    return category_slug, target_date
+
+
+def build_category_url(
+    base_url: str,
+    category_slug: str,
+    target_date: date | None,
+) -> str:
+    """Monta a URL original da categoria usada na coleta."""
+    url = f"{base_url.rstrip('/')}/{category_slug}"
+
+    if target_date is None:
+        return url
+
+    params = urlencode({"data": target_date.strftime("%d/%m/%Y")})
+
+    return f"{url}?{params}"
 
 
 def resolve_quotation_dates(
@@ -168,7 +288,7 @@ def resolve_quotation_dates(
 
     for _ in range(max_calendar_days):
         try:
-            cotacoes = collector.collect_category(
+            cotacoes = collector._collect_category(
                 probe_category_slug,
                 candidate_date,
                 save_raw=False,
@@ -224,11 +344,6 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         help="Fonte que sera coletada.",
     )
     parser.add_argument(
-        "--category",
-        default=config.category,
-        help="Categoria da CEASA-PE ou 'todas'.",
-    )
-    parser.add_argument(
         "--raw-dir",
         default=config.raw_dir,
         help="Diretorio onde o HTML bruto sera salvo.",
@@ -275,6 +390,16 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         "--save",
         action="store_true",
         help="Extrai cotacoes e salva os registros no SQLite.",
+    )
+    parser.add_argument(
+        "--process-raw",
+        action="store_true",
+        help="Processa HTML bruto salvo em disco e salva os registros no SQLite.",
+    )
+    parser.add_argument(
+        "--archive-raw-old",
+        action="store_true",
+        help="Compacta HTMLs da pasta old de cada fonte e remove os originais.",
     )
     parser.add_argument(
         "--list-categories",

@@ -88,7 +88,6 @@ Detalhes em [Modelo de dados](docs/modelo-dados.md).
 - [Plano de implementacao](docs/plano-implementacao.md)
 - [Decisoes tecnicas](docs/decisoes.md)
 - [Arquitetura](docs/arquitetura.md)
-- [CEASA-PE](docs/ceasa-pe.md)
 
 ## Estrategia inicial
 
@@ -106,19 +105,9 @@ Detalhes em [Modelo de dados](docs/modelo-dados.md).
 - Priorizar fontes estaveis antes de lidar com casos complexos.
 - Evitar refatoracoes grandes sem necessidade.
 
-## Ambiente local
+## Ambiente com Docker
 
-Criar o ambiente virtual:
-
-```bash
-python3 -m venv .venv
-```
-
-Ativar o ambiente:
-
-```bash
-source .venv/bin/activate
-```
+O projeto roda via Docker para manter os mesmos comandos no Windows e no Linux.
 
 Copiar o arquivo de exemplo de variaveis locais:
 
@@ -126,29 +115,51 @@ Copiar o arquivo de exemplo de variaveis locais:
 cp .env.example .env
 ```
 
-Instalar dependencias:
+Buildar a imagem:
 
 ```bash
-pip install -r requirements.txt
+docker compose build
 ```
 
-Executar a coleta inicial:
+Baixar os HTMLs de todas as categorias:
 
 ```bash
-PYTHONPATH=src python -m cotacoes_ceasa.main
+docker compose run --rm baixar
 ```
 
-Baixar e extrair a categoria configurada no `.env`:
+Processar os HTMLs baixados e salvar no SQLite:
 
 ```bash
-PYTHONPATH=src python -m cotacoes_ceasa.main --parse
+docker compose run --rm banco
 ```
 
-Baixar, extrair e salvar no SQLite:
+Baixar, processar e salvar no SQLite em um unico comando:
 
 ```bash
-PYTHONPATH=src python -m cotacoes_ceasa.main --category aves-e-ovos --save
+docker compose run --rm tudo
 ```
+
+Compactar HTMLs antigos da pasta `old`:
+
+```bash
+docker compose run --rm compactar-old
+```
+
+Esse comando gera um novo `.zip` em `data/raw/<fonte>/old/` e remove os `.html` que entraram no arquivo compactado.
+
+Para evitar downloads repetidos quando o HTML ja existe na pasta raw principal:
+
+```env
+COTACOES_REUSE_RAW_BEFORE_REQUEST=true
+```
+
+Executar a ajuda da CLI:
+
+```bash
+docker compose run --rm app --help
+```
+
+O diretorio do projeto e montado em `/app`, entao arquivos gerados em `data/` ficam salvos na maquina.
 
 As dependencias externas ficam registradas no `requirements.txt` e no `pyproject.toml`.
 

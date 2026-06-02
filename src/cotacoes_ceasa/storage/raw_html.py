@@ -1,6 +1,16 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
+
+
+@dataclass(frozen=True)
+class RawArchiveResult:
+    """Resultado de uma compactacao de HTMLs antigos."""
+
+    source: str
+    archive_path: Path
+    archived_count: int
 
 
 @dataclass(frozen=True)
@@ -22,6 +32,63 @@ class RawHtmlStorage:
         file_path.write_text(html, encoding="utf-8")
 
         return file_path
+
+    def find_latest(self, source: str, category: str) -> Path | None:
+        """Busca o HTML ativo mais recente da fonte e categoria."""
+        directory = self.base_dir / source
+
+        if not directory.exists():
+            return None
+
+        html_files = sorted(
+            file_path
+            for file_path in directory.glob(f"{category}_*.html")
+            if file_path.is_file()
+        )
+
+        if not html_files:
+            return None
+
+        return html_files[-1]
+
+    def archive_old_html_files(self) -> list[RawArchiveResult]:
+        """Compacta HTMLs soltos de `old` por fonte e remove os originais."""
+        results: list[RawArchiveResult] = []
+
+        if not self.base_dir.exists():
+            return results
+
+        for old_directory in sorted(self.base_dir.glob("*/old")):
+            if not old_directory.is_dir():
+                continue
+
+            html_files = sorted(
+                file_path
+                for file_path in old_directory.glob("*.html")
+                if file_path.is_file()
+            )
+
+            if not html_files:
+                continue
+
+            archive_path = self._build_archive_path(old_directory)
+
+            with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as archive:
+                for file_path in html_files:
+                    archive.write(file_path, arcname=file_path.name)
+
+            for file_path in html_files:
+                file_path.unlink()
+
+            results.append(
+                RawArchiveResult(
+                    source=old_directory.parent.name,
+                    archive_path=archive_path,
+                    archived_count=len(html_files),
+                )
+            )
+
+        return results
 
     def _archive_current_day_files(
         self,
@@ -49,6 +116,23 @@ class RawHtmlStorage:
 
         while True:
             candidate_path = old_directory / f"{stem}_{counter}{suffix}"
+
+            if not candidate_path.exists():
+                return candidate_path
+
+            counter += 1
+
+    def _build_archive_path(self, old_directory: Path) -> Path:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        archive_path = old_directory / f"htmls_{timestamp}.zip"
+
+        if not archive_path.exists():
+            return archive_path
+
+        counter = 1
+
+        while True:
+            candidate_path = old_directory / f"htmls_{timestamp}_{counter}.zip"
 
             if not candidate_path.exists():
                 return candidate_path

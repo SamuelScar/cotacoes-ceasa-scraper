@@ -4,26 +4,10 @@ Este documento registra como preparar o ambiente local do projeto.
 
 ## Requisitos
 
-- Python 3.11 ou superior.
-- `venv`, disponivel na biblioteca padrao do Python.
+- Docker.
+- Docker Compose.
 
-O ambiente criado neste projeto foi validado com Python 3.12.3.
-
-## Criar ambiente virtual
-
-Na raiz do projeto:
-
-```bash
-python3 -m venv .venv
-```
-
-## Ativar ambiente
-
-```bash
-source .venv/bin/activate
-```
-
-Depois de ativado, o comando `python` deve apontar para o Python do `.venv`.
+O container usa Python 3.12 e instala as dependencias registradas em `requirements.txt`.
 
 ## Variaveis locais
 
@@ -38,12 +22,12 @@ cp .env.example .env
 Variaveis disponiveis:
 
 - `COTACOES_SOURCE`: fonte padrao da coleta.
-- `COTACOES_CATEGORY`: categoria padrao da fonte. Use `todas` para descobrir categorias automaticamente.
 - `COTACOES_SOURCES_FILE`: arquivo com as fontes disponiveis.
 - `COTACOES_RAW_DIR`: diretorio para salvar HTML bruto.
 - `COTACOES_DATABASE_PATH`: caminho do arquivo SQLite.
 - `COTACOES_HTTP_TIMEOUT_SECONDS`: timeout das requisicoes HTTP.
 - `COTACOES_REQUEST_DELAY_SECONDS`: intervalo minimo entre requisicoes HTTP.
+- `COTACOES_REUSE_RAW_BEFORE_REQUEST`: quando `true`, usa HTML ja salvo na pasta raw principal antes de fazer nova requisicao.
 - `COTACOES_TARGET_DATE`: data alvo da coleta. Se vazio, usa a data atual do sistema. Aceita `DD/MM/YYYY` ou `YYYY-MM-DD`.
 - `COTACOES_QUOTES_BACK`: quantidade de datas de cotacao anteriores para coletar a partir da data alvo.
 
@@ -70,16 +54,22 @@ COTACOES_QUOTES_BACK=30
 
 Coleta a data atual e mais 30 datas de cotacao anteriores encontradas. Isso nao significa 30 dias corridos.
 
+```env
+COTACOES_REUSE_RAW_BEFORE_REQUEST=true
+```
+
+Antes de baixar uma pagina de cotacao, tenta reutilizar o HTML correspondente em `data/raw/<fonte>/`. A busca nao considera `old/` nem arquivos compactados.
+
 O `.env` nao deve ser versionado. O arquivo versionavel e o `.env.example`.
 
 ## Dependencias
 
 O projeto usa dependencias externas para leitura e parsing de HTML.
 
-Instalar dependencias:
+As dependencias sao instaladas dentro da imagem Docker durante o build:
 
 ```bash
-pip install -r requirements.txt
+docker compose build
 ```
 
 Dependencias principais:
@@ -91,8 +81,30 @@ Dependencias principais:
 
 Ver comandos de execucao em [Comandos](comandos.md).
 
-Com o ambiente ativado, um teste simples da CLI e:
+Baixar os HTMLs de todas as categorias:
 
 ```bash
-PYTHONPATH=src python -m cotacoes_ceasa.main --help
+docker compose run --rm baixar
 ```
+
+Processar os HTMLs baixados e salvar no SQLite:
+
+```bash
+docker compose run --rm banco
+```
+
+Baixar, processar e salvar no SQLite em um unico comando:
+
+```bash
+docker compose run --rm tudo
+```
+
+Compactar HTMLs antigos da pasta `old`:
+
+```bash
+docker compose run --rm compactar-old
+```
+
+Esse comando gera um novo `.zip` dentro de `data/raw/<fonte>/old/` e remove os `.html` compactados.
+
+O compose monta a raiz do projeto em `/app`. Com isso, o `.env`, `config/` e os arquivos gerados em `data/` ficam no mesmo diretorio do projeto.

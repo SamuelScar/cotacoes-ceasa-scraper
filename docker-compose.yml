@@ -1,0 +1,29 @@
+x-app: &app
+  image: cotacoes-ceasa-scraper:dev
+  build:
+    context: .
+  working_dir: /app
+  environment:
+    PYTHONPATH: /app/src
+    PYTHONUNBUFFERED: "1"
+  volumes:
+    - .:/app
+
+services:
+  app:
+    <<: *app
+
+  baixar:
+    <<: *app
+
+  banco:
+    <<: *app
+    command: ["--process-raw"]
+
+  tudo:
+    <<: *app
+    command: ["--save"]
+
+  compactar-old:
+    <<: *app
+    command: ["--archive-raw-old"]

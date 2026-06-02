@@ -17,20 +17,26 @@ class CeasaPeCollector:
     raw_storage: RawHtmlStorage
     parser: CeasaPeParser
     base_url: str
+    reuse_raw_before_request: bool = False
 
-    def download_category(
+    def _download_category(
         self,
         category_slug: str,
         cotacao_date: date | None = None,
     ) -> Path:
         """Baixa uma categoria da CEASA-PE e salva o HTML bruto em disco."""
+        storage_category = self._build_storage_category(category_slug, cotacao_date)
+        raw_file = self._find_reusable_raw(storage_category)
+
+        if raw_file is not None:
+            return raw_file
+
         url = self._build_category_url(category_slug, cotacao_date)
         html = self.http_client.get_text(url)
-        storage_category = self._build_storage_category(category_slug, cotacao_date)
 
         return self.raw_storage.save("ceasa-pe", storage_category, html)
 
-    def collect_category(
+    def _collect_category(
         self,
         category_slug: str,
         cotacao_date: date | None = None,
@@ -38,11 +44,16 @@ class CeasaPeCollector:
     ) -> list[Cotacao]:
         """Baixa uma categoria da CEASA-PE e retorna cotacoes normalizadas."""
         url = self._build_category_url(category_slug, cotacao_date)
-        html = self.http_client.get_text(url)
+        storage_category = self._build_storage_category(category_slug, cotacao_date)
+        raw_file = self._find_reusable_raw(storage_category)
 
-        if save_raw:
-            storage_category = self._build_storage_category(category_slug, cotacao_date)
-            self.raw_storage.save("ceasa-pe", storage_category, html)
+        if raw_file is None:
+            html = self.http_client.get_text(url)
+
+            if save_raw:
+                self.raw_storage.save("ceasa-pe", storage_category, html)
+        else:
+            html = raw_file.read_text(encoding="utf-8")
 
         return self.parser.parse_category(html, category_slug, url)
 
@@ -55,22 +66,6 @@ class CeasaPeCollector:
             raise ValueError("Nenhuma categoria da CEASA-PE foi encontrada.")
 
         return categories
-
-    def download_all_categories(self) -> list[Path]:
-        """Descobre e baixa todas as categorias disponiveis da CEASA-PE."""
-        return [
-            self.download_category(category.slug)
-            for category in self.discover_categories()
-        ]
-
-    def collect_all_categories(self) -> list[Cotacao]:
-        """Descobre e coleta todas as categorias disponiveis da CEASA-PE."""
-        cotacoes: list[Cotacao] = []
-
-        for category in self.discover_categories():
-            cotacoes.extend(self.collect_category(category.slug))
-
-        return cotacoes
 
     def _build_category_url(
         self,
@@ -95,3 +90,9 @@ class CeasaPeCollector:
             return category_slug
 
         return f"{category_slug}_{cotacao_date.isoformat()}"
+
+    def _find_reusable_raw(self, storage_category: str) -> Path | None:
+        if not self.reuse_raw_before_request:
+            return None
+
+        return self.raw_storage.find_latest("ceasa-pe", storage_category)

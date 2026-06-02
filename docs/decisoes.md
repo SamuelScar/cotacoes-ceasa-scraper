@@ -46,7 +46,7 @@ Motivo: a fonte possui paginas de cotacao separadas por categoria e tabelas prox
 
 Decisao: manter um `.env` local para os valores padrao da CLI e um `.env.example` versionavel.
 
-Motivo: a coleta precisa de configuracoes locais, como fonte, categoria, diretorio de HTML bruto e timeout HTTP. O `.env.example` documenta esses valores sem versionar configuracoes locais.
+Motivo: a coleta precisa de configuracoes locais, como fonte, diretorio de HTML bruto e timeout HTTP. O `.env.example` documenta esses valores sem versionar configuracoes locais.
 
 ### Limitar ritmo de requisicoes
 
@@ -99,6 +99,18 @@ Motivo: em 29/05/2026, `flores` e `organicos` nao retornaram tabela, mas as dema
 Decisao: ao salvar HTML bruto, manter em `data/raw/<fonte>/` somente o arquivo mais recente por fonte, categoria, data de cotacao consultada e dia de execucao. Arquivos anteriores do mesmo grupo sao movidos para `data/raw/<fonte>/old/`.
 
 Motivo: a pasta principal deve ficar facil de inspecionar durante o desenvolvimento, sem perder totalmente os arquivos antigos gerados no mesmo dia.
+
+### Compactar raws antigos sob demanda
+
+Decisao: disponibilizar um comando para compactar os `.html` soltos de `data/raw/<fonte>/old/` em um novo `.zip` dentro da propria pasta `old`, removendo os `.html` originais depois da compactacao.
+
+Motivo: a pasta `old` tende a crescer com o tempo. A compactacao sob demanda preserva o historico bruto sem deixar muitos arquivos HTML soltos acumulados no diretorio.
+
+### Reutilizar raw ativo antes de requisitar
+
+Decisao: permitir que `COTACOES_REUSE_RAW_BEFORE_REQUEST=true` faca a coleta reutilizar o HTML correspondente em `data/raw/<fonte>/` antes de abrir uma nova requisicao HTTP.
+
+Motivo: a opcao reduz requests repetidas durante desenvolvimento e reprocessamento. A busca fica limitada a pasta raw principal para evitar misturar historico antigo ou arquivos compactados no fluxo normal de coleta.
 
 ### Normalizar unidades sem perder o valor original
 
