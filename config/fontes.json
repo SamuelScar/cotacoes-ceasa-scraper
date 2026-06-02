@@ -5,5 +5,12 @@
     "uf": "PE",
     "city": "Recife",
     "base_url": "https://www.ceasape.org.br/cotacao"
+  },
+  "ceasa-mg": {
+    "name": "CEASA-MG",
+    "state": "Minas Gerais",
+    "uf": "MG",
+    "city": "Varias cidades",
+    "base_url": "https://minas1.ceasa.mg.gov.br/ceasainternet/cst_precosmaiscomumMG/cst_precosmaiscomumMG.php"
   }
 }

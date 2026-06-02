@@ -18,6 +18,7 @@ class CeasaPeCollector:
     parser: CeasaPeParser
     base_url: str
     reuse_raw_before_request: bool = False
+    supports_target_dates: bool = True
 
     def _download_category(
         self,

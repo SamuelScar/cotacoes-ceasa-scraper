@@ -46,6 +46,20 @@ Esse comando compacta os `.html` soltos de `data/raw/<fonte>/old/` em um novo `.
 
 Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
 
+## Alterar fonte
+
+Os comandos principais usam a fonte configurada em `COTACOES_SOURCE`.
+
+```env
+COTACOES_SOURCE=ceasa-mg
+```
+
+Tambem e possivel passar a fonte direto no comando:
+
+```bash
+docker compose run --rm app --source ceasa-mg --parse
+```
+
 ## Verificar CLI
 
 Mostra os parametros disponiveis sem acessar a internet:

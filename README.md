@@ -84,6 +84,7 @@ Detalhes em [Modelo de dados](docs/modelo-dados.md).
 - [Ambiente de desenvolvimento](docs/ambiente.md)
 - [Comandos](docs/comandos.md)
 - [Fontes de dados](docs/fontes.md)
+- [Progresso das fontes](docs/progresso-fontes.md)
 - [Modelo de dados](docs/modelo-dados.md)
 - [Plano de implementacao](docs/plano-implementacao.md)
 - [Decisoes tecnicas](docs/decisoes.md)

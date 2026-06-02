@@ -18,8 +18,8 @@ Fontes em PDF, arquivos baixados manualmente, paginas muito dinamicas ou com cap
 
 | Fonte | UF | URL | Tipo esperado | Prioridade | Status |
 | --- | --- | --- | --- | --- | --- |
-| CEASA-PE | PE | https://www.ceasape.org.br/cotacao | HTML | Alta | Pendente |
-| CEASA-MG | MG | https://minas1.ceasa.mg.gov.br/ceasainternet/cst_precosmaiscomumMG/cst_precosmaiscomumMG.php | HTML | Alta | Pendente |
+| CEASA-PE | PE | https://www.ceasape.org.br/cotacao | HTML | Alta | Implementado |
+| CEASA-MG | MG | https://minas1.ceasa.mg.gov.br/ceasainternet/cst_precosmaiscomumMG/cst_precosmaiscomumMG.php | HTML | Alta | Implementado para ultima cotacao |
 | CEASA-PR | PR | https://www.ceasa.pr.gov.br/Pagina/Cotacao-Diaria-de-Precos | HTML ou arquivo | Media | Pendente |
 | CEAGESP-SP | SP | https://ceagesp.gov.br/cotacoes/ | HTML | Media | Pendente |
 | CEASA-RJ | RJ | https://www.rj.gov.br/ceasa/Cotação | HTML | Media | Pendente |

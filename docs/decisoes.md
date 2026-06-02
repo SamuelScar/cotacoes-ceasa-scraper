@@ -112,6 +112,12 @@ Decisao: permitir que `COTACOES_REUSE_RAW_BEFORE_REQUEST=true` faca a coleta reu
 
 Motivo: a opcao reduz requests repetidas durante desenvolvimento e reprocessamento. A busca fica limitada a pasta raw principal para evitar misturar historico antigo ou arquivos compactados no fluxo normal de coleta.
 
+### Implementar CEASA-MG pela ultima cotacao
+
+Decisao: implementar a CEASA-MG a partir da tabela de preco mais comum da ultima cotacao. Cada coluna de cidade vira uma cotacao separada, registrando a cidade em `procedencia`.
+
+Motivo: a fonte nao expoe categorias nem acesso confiavel a cotacoes anteriores. Como a tabela publica traz uma cidade por coluna, usar `procedencia` preserva a cidade sem alterar o schema relacional neste momento.
+
 ### Normalizar unidades sem perder o valor original
 
 Decisao: a normalizacao de unidades deve preservar a unidade original da fonte e gerar campos derivados para analise.

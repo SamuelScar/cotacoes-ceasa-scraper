@@ -4,10 +4,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
+from cotacoes_ceasa.collectors.ceasa_mg import CeasaMgCollector
 from cotacoes_ceasa.collectors.ceasa_pe import CeasaPeCollector
-from cotacoes_ceasa.config import AppConfig, load_config
+from cotacoes_ceasa.config import AppConfig, SourceConfig, load_config
 from cotacoes_ceasa.http.client import HttpClient
 from cotacoes_ceasa.models import Cotacao
+from cotacoes_ceasa.parsers.ceasa_mg import CeasaMgParser
 from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
 from cotacoes_ceasa.storage.raw_html import RawArchiveResult, RawHtmlStorage
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
@@ -29,90 +31,131 @@ def main() -> None:
         archive_raw_old_and_report(RawHtmlStorage(Path(args.raw_dir)))
         return
 
-    if args.source == "ceasa-pe":
-        source_config = config.sources[args.source]
-        collector = CeasaPeCollector(
-            http_client=HttpClient(
-                timeout_seconds=args.http_timeout_seconds,
-                request_delay_seconds=args.request_delay_seconds,
-            ),
-            raw_storage=RawHtmlStorage(Path(args.raw_dir)),
-            parser=CeasaPeParser(),
+    source_config = config.sources[args.source]
+    collector = build_collector(
+        args=args,
+        config=config,
+        source_config=source_config,
+    )
+    parser = build_source_parser(args.source)
+
+    if args.list_categories:
+        for category in collector.discover_categories():
+            print(f"{category.slug}\t{category.name}")
+        return
+
+    if args.process_raw:
+        cotacoes = process_raw_and_report(
+            parser=parser,
+            raw_dir=Path(args.raw_dir),
+            source_slug=args.source,
             base_url=args.base_url or source_config.base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
         )
+        inserted_count = save_cotacoes(
+            args=args,
+            cotacoes=cotacoes,
+            source_config=source_config,
+        )
+        print(
+            f"total: {len(cotacoes)} cotacoes processadas. "
+            f"{inserted_count} registros novos salvos em {args.database_path}."
+        )
+        return
 
-        if args.list_categories:
-            for category in collector.discover_categories():
-                print(f"{category.slug}\t{category.name}")
-            return
-
-        if args.process_raw:
-            cotacoes = process_raw_and_report(
-                parser=CeasaPeParser(),
-                raw_dir=Path(args.raw_dir),
-                source_slug=args.source,
-                base_url=args.base_url or source_config.base_url,
-            )
-            storage = SQLiteStorage(Path(args.database_path))
-            inserted_count = storage.save_cotacoes(
-                cotacoes=cotacoes,
-                source_slug=args.source,
-                source_name=source_config.name,
-                state_name=source_config.state,
-                uf=source_config.uf,
-                city=source_config.city,
-                source_url=source_config.base_url,
-            )
-            print(
-                f"total: {len(cotacoes)} cotacoes processadas. "
-                f"{inserted_count} registros novos salvos em {args.database_path}."
-            )
-            return
-
-        if args.save:
-            cotacoes = collect_and_report(
-                collector=collector,
-                target_date=parse_target_date(args.target_date),
-                quotes_back=args.quotes_back,
-            )
-            storage = SQLiteStorage(Path(args.database_path))
-            inserted_count = storage.save_cotacoes(
-                cotacoes=cotacoes,
-                source_slug=args.source,
-                source_name=source_config.name,
-                state_name=source_config.state,
-                uf=source_config.uf,
-                city=source_config.city,
-                source_url=source_config.base_url,
-            )
-            print(
-                f"total: {len(cotacoes)} cotacoes extraidas. "
-                f"{inserted_count} registros novos salvos em {args.database_path}."
-            )
-            return
-
-        if args.parse:
-            cotacoes = collect_and_report(
-                collector=collector,
-                target_date=parse_target_date(args.target_date),
-                quotes_back=args.quotes_back,
-            )
-            print(f"total: {len(cotacoes)} cotacoes extraidas.")
-            return
-
-        saved_files = download_and_report(
+    if args.save:
+        cotacoes = collect_and_report(
             collector=collector,
             target_date=parse_target_date(args.target_date),
             quotes_back=args.quotes_back,
         )
+        inserted_count = save_cotacoes(
+            args=args,
+            cotacoes=cotacoes,
+            source_config=source_config,
+        )
+        print(
+            f"total: {len(cotacoes)} cotacoes extraidas. "
+            f"{inserted_count} registros novos salvos em {args.database_path}."
+        )
+        return
 
-        for file_path in saved_files:
-            print(file_path)
+    if args.parse:
+        cotacoes = collect_and_report(
+            collector=collector,
+            target_date=parse_target_date(args.target_date),
+            quotes_back=args.quotes_back,
+        )
+        print(f"total: {len(cotacoes)} cotacoes extraidas.")
+        return
+
+    saved_files = download_and_report(
+        collector=collector,
+        target_date=parse_target_date(args.target_date),
+        quotes_back=args.quotes_back,
+    )
+
+    for file_path in saved_files:
+        print(file_path)
+
+
+def build_collector(args, config: AppConfig, source_config: SourceConfig):
+    http_client = HttpClient(
+        timeout_seconds=args.http_timeout_seconds,
+        request_delay_seconds=args.request_delay_seconds,
+    )
+    raw_storage = RawHtmlStorage(Path(args.raw_dir))
+    base_url = args.base_url or source_config.base_url
+
+    if args.source == "ceasa-pe":
+        return CeasaPeCollector(
+            http_client=http_client,
+            raw_storage=raw_storage,
+            parser=CeasaPeParser(),
+            base_url=base_url,
+            reuse_raw_before_request=config.reuse_raw_before_request,
+        )
+
+    if args.source == "ceasa-mg":
+        if args.quotes_back:
+            raise ValueError("CEASA-MG nao suporta cotacoes anteriores.")
+
+        return CeasaMgCollector(
+            http_client=http_client,
+            raw_storage=raw_storage,
+            parser=CeasaMgParser(),
+            base_url=base_url,
+            reuse_raw_before_request=config.reuse_raw_before_request,
+        )
+
+    raise ValueError(f"Fonte nao suportada: {args.source}")
+
+
+def build_source_parser(source_slug: str):
+    if source_slug == "ceasa-pe":
+        return CeasaPeParser()
+
+    if source_slug == "ceasa-mg":
+        return CeasaMgParser()
+
+    raise ValueError(f"Fonte nao suportada: {source_slug}")
+
+
+def save_cotacoes(args, cotacoes: list[Cotacao], source_config: SourceConfig) -> int:
+    storage = SQLiteStorage(Path(args.database_path))
+
+    return storage.save_cotacoes(
+        cotacoes=cotacoes,
+        source_slug=args.source,
+        source_name=source_config.name,
+        state_name=source_config.state,
+        uf=source_config.uf,
+        city=source_config.city,
+        source_url=source_config.base_url,
+    )
 
 
 def collect_and_report(
-    collector: CeasaPeCollector,
+    collector,
     target_date: date,
     quotes_back: int,
 ) -> list[Cotacao]:
@@ -126,7 +169,8 @@ def collect_and_report(
     )
     cotacoes: list[Cotacao] = []
 
-    print(f"datas: {', '.join(day.isoformat() for day in target_dates)}")
+    if collector.supports_target_dates:
+        print(f"datas: {', '.join(day.isoformat() for day in target_dates)}")
 
     for category in categories:
         category_total = 0
@@ -147,7 +191,7 @@ def collect_and_report(
 
 
 def download_and_report(
-    collector: CeasaPeCollector,
+    collector,
     target_date: date,
     quotes_back: int,
 ) -> list[Path]:
@@ -187,7 +231,7 @@ def format_archive_result(result: RawArchiveResult) -> str:
 
 
 def process_raw_and_report(
-    parser: CeasaPeParser,
+    parser,
     raw_dir: Path,
     source_slug: str,
     base_url: str,
@@ -203,7 +247,12 @@ def process_raw_and_report(
     for file_path in raw_files:
         try:
             category_slug, target_date = parse_raw_file_metadata(file_path)
-            url_origem = build_category_url(base_url, category_slug, target_date)
+            url_origem = build_raw_source_url(
+                source_slug,
+                base_url,
+                category_slug,
+                target_date,
+            )
             parsed_cotacoes = parser.parse_category(
                 file_path.read_text(encoding="utf-8"),
                 category_slug,
@@ -268,8 +317,20 @@ def build_category_url(
     return f"{url}?{params}"
 
 
+def build_raw_source_url(
+    source_slug: str,
+    base_url: str,
+    category_slug: str,
+    target_date: date | None,
+) -> str:
+    if source_slug == "ceasa-pe":
+        return build_category_url(base_url, category_slug, target_date)
+
+    return base_url
+
+
 def resolve_quotation_dates(
-    collector: CeasaPeCollector,
+    collector,
     probe_category_slug: str,
     target_date: date,
     quotes_back: int,
@@ -339,7 +400,7 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--source",
-        choices=["ceasa-pe"],
+        choices=sorted(config.sources),
         default=config.source,
         help="Fonte que sera coletada.",
     )
