@@ -19,6 +19,7 @@ class AppConfig:
     http_timeout_seconds: int
     request_delay_seconds: float
     reuse_raw_before_request: bool
+    prohort_url: str
     target_date: str | None
     quotes_back: int
     sources: dict[str, "SourceConfig"]
@@ -50,6 +51,11 @@ def load_config(env_file: Path = ENV_FILE) -> AppConfig:
         reuse_raw_before_request=_get_bool_env(
             "COTACOES_REUSE_RAW_BEFORE_REQUEST",
             False,
+        ),
+        prohort_url=os.getenv(
+            "COTACOES_PROHORT_URL",
+            "https://portaldeinformacoes.conab.gov.br/downloads/arquivos/"
+            "ProhortDiario.txt",
         ),
         target_date=_get_optional_env("COTACOES_TARGET_DATE"),
         quotes_back=_get_int_env("COTACOES_QUOTES_BACK", 0),

@@ -42,6 +42,14 @@ docker compose run --rm compactar-old
 
 Esse comando compacta os `.html` soltos de `data/raw/<fonte>/old/` em um novo `.zip` dentro da propria pasta `old` e remove os `.html` originais depois que o arquivo compactado e criado. Arquivos `.zip` anteriores permanecem na pasta.
 
+Complementar cotacoes salvas com dados do PROHORT:
+
+```bash
+docker compose run --rm complementar-prohort
+```
+
+Esse comando deve ser executado depois dos scrapers individuais. Ele le o banco SQLite, baixa o `ProhortDiario.txt` e preenche `preco_comum` vazio quando encontra correspondencia confiavel por CEASA, data, produto e unidade. Dados ja preenchidos nao sao sobrescritos. Se o PROHORT tiver um produto do mesmo dia e da mesma CEASA que a fonte principal nao trouxe, o comando insere uma cotacao complementar marcada com `fonte_complemento = prohort`. Quando a categoria da fonte principal nao for conhecida, a cotacao entra na categoria `prohort-complemento`.
+
 ## Comandos avancados
 
 Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
@@ -55,9 +63,11 @@ Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
 - `--target-date`: define uma data especifica de cotacao; se nao for usada, o sistema usa a data atual.
 - `--quotes-back`: coleta tambem datas anteriores a data alvo, quando a fonte suporta historico.
 - `--process-raw`: processa arquivos brutos ja salvos em `data/raw`, sem acessar a internet.
+- `--complement-prohort`: complementa cotacoes ja salvas usando o PROHORT, sem sobrescrever campos preenchidos.
 - `--raw-dir`: define outra pasta para ler ou salvar arquivos brutos.
 - `--database-path`: define outro arquivo SQLite para salvar os registros.
 - `--base-url`: sobrescreve temporariamente a URL base da fonte configurada.
+- `--prohort-url`: sobrescreve temporariamente a URL do arquivo `ProhortDiario.txt`.
 - `--http-timeout-seconds`: define o tempo maximo de espera para cada requisicao HTTP.
 - `--request-delay-seconds`: define o intervalo minimo entre uma requisicao e outra.
 - `--archive-raw-old`: compacta arquivos brutos antigos da pasta `old`.
@@ -92,6 +102,14 @@ docker compose run --rm app --source ceasa-campinas --save
 
 Na CEASA Campinas, o scraper descobre os PDFs pela lista de datas da pagina de cotacoes anteriores.
 O `--list-categories` mostra a pagina de cotacoes da fonte; os grupos de produtos sao descobertos dentro do PDF durante `--parse` ou `--save`.
+
+Exemplo para CEASA-CE:
+
+```bash
+docker compose run --rm app --source ceasa-ce --save
+```
+
+Na CEASA-CE, as categorias representam boletins atuais por entreposto e tipo de produto descobertos na pagina oficial. A fonte nao suporta `--quotes-back`.
 
 ## Verificar CLI
 

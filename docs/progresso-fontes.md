@@ -15,7 +15,7 @@ Este documento acompanha o avanco dos scrapers por fonte.
 | CEASA Campinas | SP | <span style="color: #b08800;">Parcial</span> | <span style="color: #b08800;">Parcial</span> | Scraper implementado para PDFs descobertos dinamicamente; pendente de validacao local. |
 | CEASA-GO | GO | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa avaliar se entrega HTML direto ou arquivo. |
 | CEASA-BA | BA | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Baixa prioridade por aparentar boletim ou pagina institucional. |
-| CEASA-CE | CE | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa avaliar HTML ou boletim diario. |
+| CEASA-CE | CE | <span style="color: #b08800;">Parcial</span> | <span style="color: #d73a49;">Nao concluido</span> | Scraper implementado para boletins atuais em PDF descobertos pela pagina oficial; pendente de validacao local. |
 | CEASA-ES | ES | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa avaliar HTML ou arquivo. |
 
 ## Legenda

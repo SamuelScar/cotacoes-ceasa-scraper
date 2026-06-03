@@ -26,5 +26,12 @@
     "uf": "SP",
     "city": "Campinas",
     "base_url": "https://www.ceasacampinas.com.br/cotacoes-anteriores"
+  },
+  "ceasa-ce": {
+    "name": "CEASA-CE",
+    "state": "Ceara",
+    "uf": "CE",
+    "city": "Varias cidades",
+    "base_url": "https://files.ceasa-ce.com.br/unsima/boletim_diario/boletim.php"
   }
 }

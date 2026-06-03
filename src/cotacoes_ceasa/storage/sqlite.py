@@ -14,6 +14,14 @@ class SQLiteStorage:
 
     database_path: Path
 
+    def ensure_schema(self) -> None:
+        """Garante que o banco exista com o schema atual."""
+        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            self._create_schema(connection)
+
     def save_cotacoes(
         self,
         cotacoes: list[Cotacao],
@@ -112,6 +120,9 @@ class SQLiteStorage:
                 procedencia TEXT,
                 classificacao TEXT,
                 situacao_mercado TEXT,
+                fonte_complemento TEXT,
+                url_complemento TEXT,
+                data_complemento TEXT,
                 data_coleta TEXT NOT NULL,
                 url_origem TEXT NOT NULL,
                 FOREIGN KEY (ceasa_id) REFERENCES ceasas (id),
@@ -121,6 +132,7 @@ class SQLiteStorage:
             )
             """
         )
+        self._ensure_complement_columns(connection)
 
     def _insert_cotacoes(
         self,
@@ -187,6 +199,20 @@ class SQLiteStorage:
             "Exclua o arquivo configurado em COTACOES_DATABASE_PATH para recriar "
             "o banco com o schema relacional."
         )
+
+    def _ensure_complement_columns(self, connection: sqlite3.Connection) -> None:
+        columns = self._get_table_columns(connection, "cotacoes")
+
+        if not columns:
+            return
+
+        for column_name in (
+            "fonte_complemento",
+            "url_complemento",
+            "data_complemento",
+        ):
+            if column_name not in columns:
+                connection.execute(f"ALTER TABLE cotacoes ADD COLUMN {column_name} TEXT")
 
     def _get_table_columns(
         self,

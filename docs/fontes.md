@@ -2,6 +2,8 @@
 
 Este documento registra as fontes previstas para coleta, o tipo esperado de acesso e o status de avaliacao.
 
+Para comparar fontes individuais com o PROHORT/CONAB, ver [Avaliacao de fontes](avaliacao-fontes.md).
+
 ## Criterios de prioridade
 
 As primeiras fontes devem atender ao maior numero possivel destes criterios:
@@ -27,7 +29,7 @@ Fontes em PDF, arquivos baixados manualmente, paginas muito dinamicas ou com cap
 | CEASA Campinas | SP | https://www.ceasacampinas.com.br/cotacoes-anteriores | HTML + PDF | Media | Implementado, pendente de validacao |
 | CEASA-GO | GO | https://goias.gov.br/ceasa/cotacoes-diarias/ | HTML ou arquivo | Media | Pendente |
 | CEASA-BA | BA | https://www.ba.gov.br/sde/boletim-informativo-ceasa | Arquivo ou pagina institucional | Baixa | Pendente |
-| CEASA-CE | CE | https://files.ceasa-ce.com.br/unsima/boletim_diario/boletim.php | HTML ou boletim | Media | Pendente |
+| CEASA-CE | CE | https://files.ceasa-ce.com.br/unsima/boletim_diario/boletim.php | HTML + PDF | Media | Implementado para boletins atuais |
 | CEASA-ES | ES | https://ceasa.es.gov.br/boletim | HTML ou arquivo | Media | Pendente |
 
 ## Campos para avaliacao de cada fonte

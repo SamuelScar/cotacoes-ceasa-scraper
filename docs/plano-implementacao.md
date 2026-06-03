@@ -92,6 +92,8 @@ Tarefas futuras:
 
 - Normalizar nomes de produtos.
 - Padronizar unidades.
+- Relatar exemplos nao combinados no complemento PROHORT antes de criar equivalencias.
+- Criar equivalencias de produtos entre fontes somente a partir de falhas reais de match.
 - Detectar registros duplicados.
 - Registrar falhas de coleta.
 - Manter historico por data de cotacao.

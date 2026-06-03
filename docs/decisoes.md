@@ -143,3 +143,29 @@ Decisao: implementar a CEASA Campinas a partir da pagina de cotacoes anteriores,
 Motivo: a fonte publica as cotacoes em uma lista paginada de datas. Como os links estao no HTML e podem mudar ao longo do tempo, o scraper deve descobrir os PDFs pela propria pagina em vez de montar URLs manualmente.
 
 Detalhe: o coletor busca o PDF mais recente ate a data alvo. O parser usa as secoes encontradas dentro do PDF como categorias dos registros, sem manter lista fixa de grupos de produtos.
+
+### Avaliar PROHORT antes de novos scrapers individuais
+
+Decisao: antes de implementar novas fontes individuais, comparar a fonte local com o `ProhortDiario.txt` da CONAB usando criterios de longevidade, detalhes uteis e velocidade de atualizacao.
+
+Motivo: o PROHORT cobre muitas CEASAs em formato padronizado desde 2022, mas nao substitui automaticamente as fontes individuais. Algumas fontes locais podem ter historico mais antigo, campos mais detalhados ou atualizacao mais rapida.
+
+Detalhe: quando PROHORT e fonte individual cobrirem a mesma CEASA/data, as fontes podem ser combinadas. O PROHORT pode servir como base nacional padronizada, enquanto a fonte individual complementa com detalhes como minimo, maximo, classificacao, procedencia ou situacao de mercado.
+
+## 2026-06-03
+
+### Complementar dados com PROHORT em comando separado
+
+Decisao: manter os scrapers individuais como fonte principal e adicionar um comando separado para complementar registros ja salvos com o PROHORT.
+
+Motivo: o fluxo diario nao deve gerar dois resultados diferentes para a mesma cotacao. A fonte individual continua mandando no registro; o PROHORT entra depois apenas para preencher campos vazios quando houver correspondencia confiavel.
+
+Detalhe: o complemento nao sobrescreve valores preenchidos. O comando compara CEASA, data, produto e unidade, e registra `fonte_complemento`, `url_complemento` e `data_complemento` quando algum campo e preenchido. Quando o PROHORT tem um produto do mesmo dia e da mesma CEASA que ainda nao existe na fonte principal, ele insere uma cotacao complementar sem minimo, maximo, classificacao ou situacao de mercado. Quando a categoria da fonte principal nao for conhecida, usa a categoria `prohort-complemento`.
+
+### Implementar CEASA-CE antes de novas fontes pendentes
+
+Decisao: escolher a CEASA-CE como proxima fonte individual.
+
+Motivo: a pagina oficial de boletins lista links diretos para PDFs por entreposto e categoria, sem formulario por produto. Os PDFs trazem data, unidade, preco minimo, comum, maximo, procedencia e situacao de mercado, oferecendo mais detalhe que o PROHORT para uso como fonte principal.
+
+Detalhe: a primeira versao coleta boletins atuais descobertos em `boletim.php`. Nao foi implementado historico por data para esta fonte.

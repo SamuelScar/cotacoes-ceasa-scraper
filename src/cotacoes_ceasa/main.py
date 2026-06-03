@@ -8,6 +8,7 @@ from cotacoes_ceasa.collectors.ceasa_campinas import (
     CEASA_CAMPINAS_HEADERS,
     CeasaCampinasCollector,
 )
+from cotacoes_ceasa.collectors.ceasa_ce import CEASA_CE_HEADERS, CeasaCeCollector
 from cotacoes_ceasa.collectors.ceasa_mg import CeasaMgCollector
 from cotacoes_ceasa.collectors.ceasa_pe import CeasaPeCollector
 from cotacoes_ceasa.collectors.ceasa_pr import CEASA_PR_HEADERS, CeasaPrCollector
@@ -15,9 +16,11 @@ from cotacoes_ceasa.config import AppConfig, SourceConfig, load_config
 from cotacoes_ceasa.http.client import HttpClient
 from cotacoes_ceasa.models import Cotacao
 from cotacoes_ceasa.parsers.ceasa_campinas import CeasaCampinasParser
+from cotacoes_ceasa.parsers.ceasa_ce import CeasaCeParser
 from cotacoes_ceasa.parsers.ceasa_mg import CeasaMgParser
 from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
 from cotacoes_ceasa.parsers.ceasa_pr import CeasaPrParser
+from cotacoes_ceasa.prohort import ProhortComplementer, ProhortComplementResult
 from cotacoes_ceasa.storage.raw_html import RawArchiveResult, RawHtmlStorage
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 
@@ -36,6 +39,10 @@ def main() -> None:
 
     if args.archive_raw_old:
         archive_raw_old_and_report(RawHtmlStorage(Path(args.raw_dir)))
+        return
+
+    if args.complement_prohort:
+        complement_prohort_and_report(args)
         return
 
     source_config = config.sources[args.source]
@@ -165,6 +172,24 @@ def build_collector(args, config: AppConfig, source_config: SourceConfig):
             reuse_raw_before_request=config.reuse_raw_before_request,
         )
 
+    if args.source == "ceasa-ce":
+        if args.quotes_back:
+            raise ValueError("CEASA-CE nao suporta cotacoes anteriores.")
+
+        ceasa_ce_http_client = HttpClient(
+            timeout_seconds=args.http_timeout_seconds,
+            request_delay_seconds=args.request_delay_seconds,
+            headers=CEASA_CE_HEADERS,
+        )
+
+        return CeasaCeCollector(
+            http_client=ceasa_ce_http_client,
+            raw_storage=raw_storage,
+            parser=CeasaCeParser(),
+            base_url=base_url,
+            reuse_raw_before_request=config.reuse_raw_before_request,
+        )
+
     raise ValueError(f"Fonte nao suportada: {args.source}")
 
 
@@ -180,6 +205,9 @@ def build_source_parser(source_slug: str):
 
     if source_slug == "ceasa-campinas":
         return CeasaCampinasParser()
+
+    if source_slug == "ceasa-ce":
+        return CeasaCeParser()
 
     raise ValueError(f"Fonte nao suportada: {source_slug}")
 
@@ -271,6 +299,38 @@ def format_archive_result(result: RawArchiveResult) -> str:
     return (
         f"{result.source}: {result.archived_count} HTMLs compactados em "
         f"{result.archive_path}"
+    )
+
+
+def complement_prohort_and_report(args) -> None:
+    result = ProhortComplementer(
+        database_path=Path(args.database_path),
+        prohort_url=args.prohort_url,
+        timeout_seconds=args.http_timeout_seconds,
+    ).complement()
+
+    print(format_prohort_complement_result(result, args.database_path))
+
+
+def format_prohort_complement_result(
+    result: ProhortComplementResult,
+    database_path: str,
+) -> str:
+    if not result.database_found:
+        return f"Banco SQLite nao encontrado em {database_path}."
+
+    if result.candidate_count == 0 and result.fallback_scope_count == 0:
+        return "Nenhuma cotacao com preco comum vazio encontrada para complementar."
+
+    return (
+        f"prohort: {result.scanned_rows} linhas lidas, "
+        f"{result.candidate_count} cotacoes candidatas, "
+        f"{result.fallback_scope_count} datas/CEASAs com fallback, "
+        f"{result.matched_rows} correspondencias confiaveis, "
+        f"{result.updated_count} cotacoes complementadas, "
+        f"{result.inserted_count} cotacoes faltantes inseridas, "
+        f"{result.unmapped_count} sem mapeamento e "
+        f"{result.ambiguous_count} ambiguas."
     )
 
 
@@ -487,6 +547,11 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         help="Intervalo minimo entre requisicoes HTTP.",
     )
     parser.add_argument(
+        "--prohort-url",
+        default=config.prohort_url,
+        help="URL do arquivo ProhortDiario.txt usado no complemento.",
+    )
+    parser.add_argument(
         "--target-date",
         default=config.target_date,
         help="Data alvo da coleta em DD/MM/YYYY ou YYYY-MM-DD.",
@@ -516,6 +581,14 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         "--archive-raw-old",
         action="store_true",
         help="Compacta HTMLs da pasta old de cada fonte e remove os originais.",
+    )
+    parser.add_argument(
+        "--complement-prohort",
+        action="store_true",
+        help=(
+            "Complementa cotacoes ja salvas usando o PROHORT, "
+            "sem sobrescrever campos preenchidos."
+        ),
     )
     parser.add_argument(
         "--list-categories",

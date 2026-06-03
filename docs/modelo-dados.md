@@ -111,6 +111,9 @@ Representa cada registro de preco coletado.
 | procedencia | TEXT | Nao | Procedencia informada pela fonte |
 | classificacao | TEXT | Nao | Tipo, classificacao ou variedade |
 | situacao_mercado | TEXT | Nao | Situacao do mercado informada pela fonte |
+| fonte_complemento | TEXT | Nao | Fonte secundaria usada para preencher campos vazios, quando houver |
+| url_complemento | TEXT | Nao | URL da fonte secundaria usada no complemento |
+| data_complemento | TEXT | Nao | Data e hora em que o complemento foi aplicado |
 | data_coleta | TEXT | Sim | Data e hora em que o scraper salvou o registro |
 | url_origem | TEXT | Sim | URL exata usada na coleta |
 

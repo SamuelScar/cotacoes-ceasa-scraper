@@ -27,3 +27,7 @@ services:
   compactar-old:
     <<: *app
     command: ["--archive-raw-old"]
+
+  complementar-prohort:
+    <<: *app
+    command: ["--complement-prohort"]

@@ -84,6 +84,7 @@ Detalhes em [Modelo de dados](docs/modelo-dados.md).
 - [Ambiente de desenvolvimento](docs/ambiente.md)
 - [Comandos](docs/comandos.md)
 - [Fontes de dados](docs/fontes.md)
+- [Avaliacao de fontes](docs/avaliacao-fontes.md)
 - [Progresso das fontes](docs/progresso-fontes.md)
 - [Modelo de dados](docs/modelo-dados.md)
 - [Plano de implementacao](docs/plano-implementacao.md)
@@ -147,6 +148,14 @@ docker compose run --rm compactar-old
 ```
 
 Esse comando gera um novo `.zip` em `data/raw/<fonte>/old/` e remove os `.html` que entraram no arquivo compactado.
+
+Complementar cotacoes ja salvas com o PROHORT:
+
+```bash
+docker compose run --rm complementar-prohort
+```
+
+Esse comando nao substitui o fluxo principal. Ele deve ser executado depois dos scrapers individuais. Quando encontra uma correspondencia confiavel no PROHORT, preenche campos vazios; quando o PROHORT tem produto do mesmo dia e da mesma CEASA que a fonte principal nao trouxe, insere uma cotacao complementar.
 
 Para evitar downloads repetidos quando o raw ja existe na pasta principal:
 
