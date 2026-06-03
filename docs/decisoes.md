@@ -84,9 +84,9 @@ Atualizacao: backup automatico foi removido. Se existir banco antigo com tabela 
 
 Decisao: adicionar `COTACOES_TARGET_DATE`, `COTACOES_QUOTES_BACK`, `--target-date` e `--quotes-back`.
 
-Motivo: a CEASA-PE permite consultar cotacoes antigas pelo parametro `data`. A configuracao deve representar datas de cotacao disponiveis, nao dias corridos. Exemplo: `--quotes-back 30` coleta a data alvo e mais 30 datas anteriores que realmente tenham cotacao.
+Motivo: a CEASA-PE permite consultar cotacoes antigas pelo parametro `data`. A configuracao deve representar datas de cotacao disponiveis, nao dias corridos. Exemplo: `--quotes-back 30` coleta a data limite e mais 30 datas anteriores que realmente tenham cotacao.
 
-Detalhe: quando `COTACOES_TARGET_DATE` fica vazio, a data alvo e a data atual do sistema. Informar `COTACOES_TARGET_DATE=01/02/2026` nao significa coletar de fevereiro ate hoje; significa usar `01/02/2026` como ponto de partida.
+Detalhe: quando `COTACOES_TARGET_DATE` fica vazio, o scraper deve buscar a ultima cotacao disponivel. Informar `COTACOES_TARGET_DATE=01/02/2026` nao significa coletar de fevereiro ate hoje; significa usar `01/02/2026` como data limite.
 
 ### Continuar em falha parcial por categoria
 
@@ -142,7 +142,7 @@ Decisao: implementar a CEASA Campinas a partir da pagina de cotacoes anteriores,
 
 Motivo: a fonte publica as cotacoes em uma lista paginada de datas. Como os links estao no HTML e podem mudar ao longo do tempo, o scraper deve descobrir os PDFs pela propria pagina em vez de montar URLs manualmente.
 
-Detalhe: o coletor busca o PDF mais recente ate a data alvo. O parser usa as secoes encontradas dentro do PDF como categorias dos registros, sem manter lista fixa de grupos de produtos.
+Detalhe: o coletor busca o PDF mais recente ate a data limite. O parser usa as secoes encontradas dentro do PDF como categorias dos registros, sem manter lista fixa de grupos de produtos.
 
 ### Avaliar PROHORT antes de novos scrapers individuais
 
@@ -162,10 +162,18 @@ Motivo: o fluxo diario nao deve gerar dois resultados diferentes para a mesma co
 
 Detalhe: o complemento nao sobrescreve valores preenchidos. O comando compara CEASA, data, produto e unidade, e registra `fonte_complemento`, `url_complemento` e `data_complemento` quando algum campo e preenchido. Quando o PROHORT tem um produto do mesmo dia e da mesma CEASA que ainda nao existe na fonte principal, ele insere uma cotacao complementar sem minimo, maximo, classificacao ou situacao de mercado. Quando a categoria da fonte principal nao for conhecida, usa a categoria `prohort-complemento`.
 
-### Implementar CEASA-CE antes de novas fontes pendentes
+### Implementar CEASA-CE por boletins atuais
 
 Decisao: escolher a CEASA-CE como proxima fonte individual.
 
 Motivo: a pagina oficial de boletins lista links diretos para PDFs por entreposto e categoria, sem formulario por produto. Os PDFs trazem data, unidade, preco minimo, comum, maximo, procedencia e situacao de mercado, oferecendo mais detalhe que o PROHORT para uso como fonte principal.
 
 Detalhe: a primeira versao coleta boletins atuais descobertos em `boletim.php`. Nao foi implementado historico por data para esta fonte.
+
+### Implementar CEASA-GO por PDFs diarios
+
+Decisao: adicionar a CEASA-GO como nova fonte individual ainda pendente.
+
+Motivo: a pagina oficial organiza cotacoes por ano, mes e PDF diario. O boletim informa preco mais comum, maximo e minimo, permitindo complementar a cobertura de fontes estaduais sem depender apenas do PROHORT.
+
+Detalhe: a primeira versao encontra o PDF mais recente ate a data limite, salva o bruto em `data/raw/ceasa-go/` e usa as secoes internas do PDF como categorias dos registros.

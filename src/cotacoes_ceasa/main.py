@@ -9,6 +9,7 @@ from cotacoes_ceasa.collectors.ceasa_campinas import (
     CeasaCampinasCollector,
 )
 from cotacoes_ceasa.collectors.ceasa_ce import CEASA_CE_HEADERS, CeasaCeCollector
+from cotacoes_ceasa.collectors.ceasa_go import CEASA_GO_HEADERS, CeasaGoCollector
 from cotacoes_ceasa.collectors.ceasa_mg import CeasaMgCollector
 from cotacoes_ceasa.collectors.ceasa_pe import CeasaPeCollector
 from cotacoes_ceasa.collectors.ceasa_pr import CEASA_PR_HEADERS, CeasaPrCollector
@@ -17,6 +18,7 @@ from cotacoes_ceasa.http.client import HttpClient
 from cotacoes_ceasa.models import Cotacao
 from cotacoes_ceasa.parsers.ceasa_campinas import CeasaCampinasParser
 from cotacoes_ceasa.parsers.ceasa_ce import CeasaCeParser
+from cotacoes_ceasa.parsers.ceasa_go import CeasaGoParser
 from cotacoes_ceasa.parsers.ceasa_mg import CeasaMgParser
 from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
 from cotacoes_ceasa.parsers.ceasa_pr import CeasaPrParser
@@ -172,6 +174,21 @@ def build_collector(args, config: AppConfig, source_config: SourceConfig):
             reuse_raw_before_request=config.reuse_raw_before_request,
         )
 
+    if args.source == "ceasa-go":
+        ceasa_go_http_client = HttpClient(
+            timeout_seconds=args.http_timeout_seconds,
+            request_delay_seconds=args.request_delay_seconds,
+            headers=CEASA_GO_HEADERS,
+        )
+
+        return CeasaGoCollector(
+            http_client=ceasa_go_http_client,
+            raw_storage=raw_storage,
+            parser=CeasaGoParser(),
+            base_url=base_url,
+            reuse_raw_before_request=config.reuse_raw_before_request,
+        )
+
     if args.source == "ceasa-ce":
         if args.quotes_back:
             raise ValueError("CEASA-CE nao suporta cotacoes anteriores.")
@@ -206,6 +223,9 @@ def build_source_parser(source_slug: str):
     if source_slug == "ceasa-campinas":
         return CeasaCampinasParser()
 
+    if source_slug == "ceasa-go":
+        return CeasaGoParser()
+
     if source_slug == "ceasa-ce":
         return CeasaCeParser()
 
@@ -228,7 +248,7 @@ def save_cotacoes(args, cotacoes: list[Cotacao], source_config: SourceConfig) ->
 
 def collect_and_report(
     collector,
-    target_date: date,
+    target_date: date | None,
     quotes_back: int,
 ) -> list[Cotacao]:
     """Coleta cotacoes e imprime um resumo por categoria."""
@@ -242,7 +262,7 @@ def collect_and_report(
     cotacoes: list[Cotacao] = []
 
     if collector.supports_target_dates:
-        print(f"datas: {', '.join(day.isoformat() for day in target_dates)}")
+        print(f"datas: {format_target_dates(target_dates)}")
 
     for category in categories:
         category_total = 0
@@ -251,7 +271,7 @@ def collect_and_report(
             try:
                 category_cotacoes = collector._collect_category(category.slug, target_date)
             except Exception as error:
-                print(f"{category.slug} {target_date.isoformat()}: erro - {error}")
+                print(f"{category.slug} {format_target_date(target_date)}: erro - {error}")
                 continue
 
             cotacoes.extend(category_cotacoes)
@@ -264,7 +284,7 @@ def collect_and_report(
 
 def download_and_report(
     collector,
-    target_date: date,
+    target_date: date | None,
     quotes_back: int,
 ) -> list[Path]:
     """Baixa arquivos brutos para a janela de datas configurada."""
@@ -395,7 +415,7 @@ def list_raw_files(raw_dir: Path, source_slug: str) -> list[Path]:
 
 
 def parse_raw_file_metadata(file_path: Path) -> tuple[str, date | None]:
-    """Extrai categoria e data alvo a partir do nome do arquivo bruto."""
+    """Extrai categoria e data limite a partir do nome do arquivo bruto."""
     match = RAW_FILE_PATTERN.match(file_path.name)
 
     if match is None:
@@ -447,12 +467,17 @@ def build_raw_source_url(
 def resolve_quotation_dates(
     collector,
     probe_category_slug: str,
-    target_date: date,
+    target_date: date | None,
     quotes_back: int,
-) -> list[date]:
-    """Descobre datas de cotacao disponiveis voltando a partir da data alvo."""
+) -> list[date | None]:
+    """Descobre datas de cotacao disponiveis voltando a partir da data limite."""
     if quotes_back < 0:
         raise ValueError("--quotes-back nao pode ser negativo.")
+
+    if target_date is None and quotes_back == 0:
+        return [None]
+
+    target_date = target_date or date.today()
 
     if quotes_back == 0:
         return [target_date]
@@ -494,10 +519,10 @@ def resolve_quotation_dates(
     )
 
 
-def parse_target_date(value: str | None) -> date:
-    """Converte data alvo da CLI para date; por padrao usa hoje."""
+def parse_target_date(value: str | None) -> date | None:
+    """Converte a data limite da CLI para date."""
     if not value:
-        return date.today()
+        return None
 
     for date_format in ("%d/%m/%Y", "%Y-%m-%d"):
         try:
@@ -506,6 +531,14 @@ def parse_target_date(value: str | None) -> date:
             continue
 
     raise ValueError("Data invalida. Use DD/MM/YYYY ou YYYY-MM-DD.")
+
+
+def format_target_dates(target_dates: list[date | None]) -> str:
+    return ", ".join(format_target_date(target_date) for target_date in target_dates)
+
+
+def format_target_date(target_date: date | None) -> str:
+    return target_date.isoformat() if target_date is not None else "ultima disponivel"
 
 
 def build_parser(config: AppConfig) -> argparse.ArgumentParser:
@@ -554,7 +587,10 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
     parser.add_argument(
         "--target-date",
         default=config.target_date,
-        help="Data alvo da coleta em DD/MM/YYYY ou YYYY-MM-DD.",
+        help=(
+            "Data limite da coleta em DD/MM/YYYY ou YYYY-MM-DD. "
+            "Quando omitida, busca a ultima cotacao disponivel."
+        ),
     )
     parser.add_argument(
         "--quotes-back",

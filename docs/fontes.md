@@ -27,7 +27,7 @@ Fontes em PDF, arquivos baixados manualmente, paginas muito dinamicas ou com cap
 | CEASA-RJ | RJ | https://www.rj.gov.br/ceasa/Cotação | HTML | Media | Pendente |
 | CEASA-DF | DF | https://www.portal.ceasadf.com.br/precos | HTML | Media | Pendente |
 | CEASA Campinas | SP | https://www.ceasacampinas.com.br/cotacoes-anteriores | HTML + PDF | Media | Implementado, pendente de validacao |
-| CEASA-GO | GO | https://goias.gov.br/ceasa/cotacoes-diarias/ | HTML ou arquivo | Media | Pendente |
+| CEASA-GO | GO | https://goias.gov.br/ceasa/cotacoes-diarias/ | HTML + PDF | Media | Implementado para PDFs diarios, pendente de validacao |
 | CEASA-BA | BA | https://www.ba.gov.br/sde/boletim-informativo-ceasa | Arquivo ou pagina institucional | Baixa | Pendente |
 | CEASA-CE | CE | https://files.ceasa-ce.com.br/unsima/boletim_diario/boletim.php | HTML + PDF | Media | Implementado para boletins atuais |
 | CEASA-ES | ES | https://ceasa.es.gov.br/boletim | HTML ou arquivo | Media | Pendente |

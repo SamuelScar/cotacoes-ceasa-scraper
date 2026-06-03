@@ -80,6 +80,7 @@ class CeasaPrParser:
         year_url: str,
         city_slug: str,
         target_date: date,
+        latest_when_missing: bool = False,
     ) -> str:
         soup = BeautifulSoup(html, "lxml")
         city_spoiler = self._find_category_spoiler(soup, city_slug)
@@ -100,6 +101,12 @@ class CeasaPrParser:
 
         if pdf_url is not None:
             return pdf_url
+
+        if latest_when_missing:
+            pdf_url = self._find_latest_pdf_link(city_spoiler, year_url, target_date)
+
+            if pdf_url is not None:
+                return pdf_url
 
         city_name = self._get_direct_spoiler_title(city_spoiler) or city_slug
 
@@ -352,6 +359,27 @@ class CeasaPrParser:
 
         return None
 
+    def _find_latest_pdf_link(
+        self,
+        city_spoiler,
+        year_url: str,
+        target_date: date,
+    ) -> str | None:
+        candidates: list[tuple[date, str]] = []
+
+        for link in city_spoiler.find_all("a", href=True):
+            link_date = self._parse_pdf_link_date(link)
+
+            if link_date is None or link_date > target_date:
+                continue
+
+            candidates.append((link_date, urljoin(year_url, link["href"])))
+
+        if not candidates:
+            return None
+
+        return max(candidates, key=lambda item: item[0])[1]
+
     def _is_pdf_link_for_day(self, link, day: int) -> bool:
         href = link["href"].split("?", 1)[0].lower()
 
@@ -362,6 +390,29 @@ class CeasaPrParser:
         day_match = re.search(r"\b(\d{1,2})\b", label)
 
         return day_match is not None and int(day_match.group(1)) == day
+
+    def _parse_pdf_link_date(self, link) -> date | None:
+        href = link["href"].split("?", 1)[0].lower()
+
+        if not href.endswith(".pdf"):
+            return None
+
+        month_match = re.search(r"/(20\d{2})-(\d{2})/", href)
+
+        if month_match is None:
+            return None
+
+        label = clean_text(link.get_text(" ", strip=True)) or ""
+        day_match = re.search(r"\b(\d{1,2})\b", label)
+
+        if day_match is None:
+            return None
+
+        return date(
+            int(month_match.group(1)),
+            int(month_match.group(2)),
+            int(day_match.group(1)),
+        )
 
     def _get_direct_spoiler_title(self, spoiler) -> str:
         for child in spoiler.children:

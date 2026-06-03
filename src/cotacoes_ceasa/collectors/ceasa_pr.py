@@ -36,6 +36,7 @@ class CeasaPrCollector:
         category_slug: str,
         cotacao_date: date | None = None,
     ) -> Path:
+        latest_when_missing = cotacao_date is None
         target_date = self._resolve_target_date(cotacao_date)
         storage_category = self._build_storage_category(category_slug, target_date)
         raw_file = self._find_reusable_raw(storage_category)
@@ -43,7 +44,7 @@ class CeasaPrCollector:
         if raw_file is not None:
             return raw_file
 
-        pdf_url = self._find_pdf_url(category_slug, target_date)
+        pdf_url = self._find_pdf_url(category_slug, target_date, latest_when_missing)
         pdf_content = self.http_client.get_bytes(pdf_url)
 
         return self.raw_storage.save_bytes(
@@ -59,12 +60,13 @@ class CeasaPrCollector:
         cotacao_date: date | None = None,
         save_raw: bool = True,
     ) -> list[Cotacao]:
+        latest_when_missing = cotacao_date is None
         target_date = self._resolve_target_date(cotacao_date)
         storage_category = self._build_storage_category(category_slug, target_date)
         raw_file = self._find_reusable_raw(storage_category)
 
         if raw_file is None:
-            pdf_url = self._find_pdf_url(category_slug, target_date)
+            pdf_url = self._find_pdf_url(category_slug, target_date, latest_when_missing)
             pdf_content = self.http_client.get_bytes(pdf_url)
 
             if save_raw:
@@ -91,11 +93,22 @@ class CeasaPrCollector:
 
         return categories
 
-    def _find_pdf_url(self, category_slug: str, target_date: date) -> str:
+    def _find_pdf_url(
+        self,
+        category_slug: str,
+        target_date: date,
+        latest_when_missing: bool = False,
+    ) -> str:
         year_url = self._build_year_url(target_date)
         html = self.http_client.get_text(year_url)
 
-        return self.parser.find_pdf_url(html, year_url, category_slug, target_date)
+        return self.parser.find_pdf_url(
+            html,
+            year_url,
+            category_slug,
+            target_date,
+            latest_when_missing=latest_when_missing,
+        )
 
     def _build_year_url(self, target_date: date) -> str:
         if target_date.year < 2022:

@@ -28,8 +28,8 @@ Variaveis disponiveis:
 - `COTACOES_HTTP_TIMEOUT_SECONDS`: timeout das requisicoes HTTP.
 - `COTACOES_REQUEST_DELAY_SECONDS`: intervalo minimo entre requisicoes HTTP.
 - `COTACOES_REUSE_RAW_BEFORE_REQUEST`: quando `true`, usa HTML ja salvo na pasta raw principal antes de fazer nova requisicao.
-- `COTACOES_TARGET_DATE`: data alvo da coleta. Se vazio, usa a data atual do sistema. Aceita `DD/MM/YYYY` ou `YYYY-MM-DD`.
-- `COTACOES_QUOTES_BACK`: quantidade de datas de cotacao anteriores para coletar a partir da data alvo.
+- `COTACOES_TARGET_DATE`: data limite da coleta. Se vazio, busca a ultima cotacao disponivel. Aceita `DD/MM/YYYY` ou `YYYY-MM-DD`.
+- `COTACOES_QUOTES_BACK`: quantidade de datas de cotacao anteriores para coletar a partir da data limite.
 
 Exemplos:
 
@@ -38,7 +38,7 @@ COTACOES_TARGET_DATE=
 COTACOES_QUOTES_BACK=0
 ```
 
-Coleta somente a cotacao da data atual.
+Coleta somente a ultima cotacao disponivel.
 
 ```env
 COTACOES_TARGET_DATE=29/05/2026
@@ -52,7 +52,7 @@ COTACOES_TARGET_DATE=
 COTACOES_QUOTES_BACK=30
 ```
 
-Coleta a data atual e mais 30 datas de cotacao anteriores encontradas. Isso nao significa 30 dias corridos.
+Coleta a ultima cotacao disponivel e mais 30 datas de cotacao anteriores encontradas. Isso nao significa 30 dias corridos.
 
 ```env
 COTACOES_REUSE_RAW_BEFORE_REQUEST=true

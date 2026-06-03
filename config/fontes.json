@@ -27,6 +27,13 @@
     "city": "Campinas",
     "base_url": "https://www.ceasacampinas.com.br/cotacoes-anteriores"
   },
+  "ceasa-go": {
+    "name": "CEASA-GO",
+    "state": "Goias",
+    "uf": "GO",
+    "city": "Goiania",
+    "base_url": "https://goias.gov.br/ceasa/cotacoes-diarias/"
+  },
   "ceasa-ce": {
     "name": "CEASA-CE",
     "state": "Ceara",

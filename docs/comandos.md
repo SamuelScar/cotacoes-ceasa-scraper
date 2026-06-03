@@ -60,8 +60,8 @@ Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
 - `--list-categories`: lista as categorias disponiveis da fonte sem baixar nem salvar cotacoes.
 - `--parse`: baixa os dados brutos e extrai as cotacoes, mas nao salva no banco.
 - `--save`: baixa os dados, extrai as cotacoes e salva no SQLite.
-- `--target-date`: define uma data especifica de cotacao; se nao for usada, o sistema usa a data atual.
-- `--quotes-back`: coleta tambem datas anteriores a data alvo, quando a fonte suporta historico.
+- `--target-date`: define uma data limite de cotacao; se nao for usada, o sistema busca a ultima cotacao disponivel.
+- `--quotes-back`: coleta tambem datas anteriores a data limite, quando a fonte suporta historico.
 - `--process-raw`: processa arquivos brutos ja salvos em `data/raw`, sem acessar a internet.
 - `--complement-prohort`: complementa cotacoes ja salvas usando o PROHORT, sem sobrescrever campos preenchidos.
 - `--raw-dir`: define outra pasta para ler ou salvar arquivos brutos.
@@ -102,6 +102,14 @@ docker compose run --rm app --source ceasa-campinas --save
 
 Na CEASA Campinas, o scraper descobre os PDFs pela lista de datas da pagina de cotacoes anteriores.
 O `--list-categories` mostra a pagina de cotacoes da fonte; os grupos de produtos sao descobertos dentro do PDF durante `--parse` ou `--save`.
+
+Exemplo para CEASA-GO:
+
+```bash
+docker compose run --rm app --source ceasa-go --save
+```
+
+Na CEASA-GO, o scraper acessa a pagina anual, encontra a pagina mensal e baixa o PDF diario mais recente ate a data limite. A fonte suporta `--target-date` e `--quotes-back`; os grupos de produtos sao descobertos dentro do PDF.
 
 Exemplo para CEASA-CE:
 
@@ -194,11 +202,11 @@ Baixar, extrair e salvar datas de cotacao anteriores:
 docker compose run --rm app --quotes-back 30 --save
 ```
 
-Com `--quotes-back 30`, o scraper coleta a data alvo e mais 30 datas anteriores que realmente tenham cotacao. Dias sem cotacao sao ignorados.
+Com `--quotes-back 30`, o scraper coleta a data limite e mais 30 datas anteriores que realmente tenham cotacao. Dias sem cotacao sao ignorados.
 
-Se `--target-date` nao for informado e `COTACOES_TARGET_DATE` estiver vazio, a data alvo sera a data atual.
+Se `--target-date` nao for informado e `COTACOES_TARGET_DATE` estiver vazio, a coleta busca a ultima cotacao disponivel na fonte.
 
-Exemplo usando a data atual como ponto de partida:
+Exemplo buscando a ultima cotacao disponivel como ponto de partida:
 
 ```bash
 docker compose run --rm app --quotes-back 30 --save
@@ -274,14 +282,14 @@ COTACOES_REUSE_RAW_BEFORE_REQUEST=true
 
 Com essa opcao ativa, o scraper procura o raw correspondente em `data/raw/<fonte>/` antes de fazer download. A regra nao usa `old/` nem arquivos `.zip`.
 
-A data alvo e a janela de cotacoes tambem vem do `.env`:
+A data limite e a janela de cotacoes tambem vem do `.env`:
 
 ```env
 COTACOES_TARGET_DATE=
 COTACOES_QUOTES_BACK=0
 ```
 
-Com `COTACOES_TARGET_DATE=` vazio, a CLI usa a data atual. Com `COTACOES_QUOTES_BACK=0`, coleta somente essa data alvo.
+Com `COTACOES_TARGET_DATE=` vazio, a CLI busca a ultima cotacao disponivel. Com `COTACOES_QUOTES_BACK=0`, coleta somente essa cotacao.
 
 Tambem pode ser alterado por comando:
 
