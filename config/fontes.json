@@ -47,5 +47,12 @@
     "uf": "RJ",
     "city": "Rio de Janeiro",
     "base_url": "https://www.rj.gov.br/ceasa/Cota%C3%A7%C3%A3o"
+  },
+  "ceasa-ba": {
+    "name": "CEASA-BA",
+    "state": "Bahia",
+    "uf": "BA",
+    "city": "Salvador",
+    "base_url": "https://www.ba.gov.br/sde/boletim-informativo-ceasa"
   }
 }

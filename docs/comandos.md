@@ -135,6 +135,22 @@ cotacao-diaria: 155 cotacoes
 total: 155 cotacoes extraidas.
 ```
 
+Exemplo para CEASA-BA:
+
+```bash
+docker compose run --rm app --source ceasa-ba --save
+```
+
+Na CEASA-BA, o scraper encontra os PDFs diarios na lista historica da pagina oficial. A fonte suporta `--target-date` e `--quotes-back`.
+
+Resultado observado em 2026-06-06:
+
+```text
+datas: ultima disponivel
+boletim-diario: 98 cotacoes
+total: 98 cotacoes extraidas.
+```
+
 ## Verificar CLI
 
 Mostra os parametros disponiveis sem acessar a internet:

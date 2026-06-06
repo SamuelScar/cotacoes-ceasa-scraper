@@ -187,3 +187,11 @@ Decisao: escolher a CEASA-RJ como proxima fonte individual.
 Motivo: a pagina oficial organiza as cotacoes por ano, mes e dia, com links diretos para PDFs diarios. Os boletins trazem preco minimo, modal e maximo, alem de tipo e embalagem.
 
 Detalhe: o coletor encontra o PDF mais recente ate a data limite e suporta `--quotes-back`. As secoes numeradas do boletim sao usadas como categorias. Na validacao, a ultima cotacao disponivel extraiu 155 registros; a coleta de 2026-06-03 e uma data anterior extraiu 310 registros; a navegacao para 2025-12-31 extraiu 150 registros.
+
+### Implementar CEASA-BA por PDFs diarios
+
+Decisao: escolher a CEASA-BA como proxima fonte individual.
+
+Motivo: a pagina oficial publica uma lista historica de boletins com links diretos para PDFs. Os boletins trazem categoria, unidade, procedencia, preco minimo, comum e maximo, alem da situacao de mercado.
+
+Detalhe: o coletor encontra o PDF mais recente ate a data limite e suporta `--quotes-back`. Na validacao, a ultima cotacao disponivel extraiu 98 registros; a coleta de 2026-06-03 e uma data anterior extraiu 185 registros; a navegacao para 2025 extraiu 90 registros.
