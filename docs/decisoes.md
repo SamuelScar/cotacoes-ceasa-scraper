@@ -195,3 +195,17 @@ Decisao: escolher a CEASA-BA como proxima fonte individual.
 Motivo: a pagina oficial publica uma lista historica de boletins com links diretos para PDFs. Os boletins trazem categoria, unidade, procedencia, preco minimo, comum e maximo, alem da situacao de mercado.
 
 Detalhe: o coletor encontra o PDF mais recente ate a data limite e suporta `--quotes-back`. Na validacao, a ultima cotacao disponivel extraiu 98 registros; a coleta de 2026-06-03 e uma data anterior extraiu 185 registros; a navegacao para 2025 extraiu 90 registros.
+
+### Implementar CEASA-DF pelo boletim SIMA atual
+
+Decisao: escolher a CEASA-DF como proxima fonte individual.
+
+Motivo: a pagina oficial publica um link direto para o boletim SIMA atual em PDF, com classificacao, situacao de mercado e precos minimo, comum e maximo.
+
+Detalhe: a primeira versao coleta apenas o boletim atual porque a pagina oficial nao expoe uma lista historica direta. O parser separa as duas colunas do PDF de forma adaptativa por pagina antes de extrair os registros. Na validacao, foram extraidas 91 cotacoes sem nomes suspeitos.
+
+### Manter CEASA-MG somente com a ultima cotacao
+
+Decisao: manter a CEASA-MG sem suporte a cotacoes anteriores.
+
+Motivo: nao foi identificado acesso confiavel a historico por data na fonte individual. O fluxo atual ja atende a coleta da ultima cotacao publicada por cidade.

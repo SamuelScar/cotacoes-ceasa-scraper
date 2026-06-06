@@ -11,7 +11,7 @@ Este documento acompanha o avanco dos scrapers por fonte.
 | CEASA-PR | PR | <span style="color: #22863a;">Concluido</span> | <span style="color: #22863a;">Concluido</span> | Coleta PDFs diarios por cidade na estrutura unificada a partir de 2022. |
 | CEAGESP-SP | SP | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Pode exigir formulario por categoria, produto ou data. |
 | CEASA-RJ | RJ | <span style="color: #22863a;">Concluido</span> | <span style="color: #22863a;">Concluido</span> | Coleta PDFs diarios navegados por ano e mes; fluxo atual e `--quotes-back` validados em 2026-06-06. |
-| CEASA-DF | DF | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa avaliar estrutura da pagina de precos. |
+| CEASA-DF | DF | <span style="color: #22863a;">Concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Coleta o boletim SIMA atual; fluxo validado com 91 cotacoes em 2026-06-06. A pagina oficial nao expoe lista historica direta. |
 | CEASA Campinas | SP | <span style="color: #b08800;">Parcial</span> | <span style="color: #b08800;">Parcial</span> | Scraper implementado para PDFs descobertos dinamicamente; pendente de validacao local. |
 | CEASA-GO | GO | <span style="color: #b08800;">Parcial</span> | <span style="color: #b08800;">Parcial</span> | Scraper implementado para PDFs diarios descobertos nas paginas oficiais de ano e mes; pendente de validacao local. |
 | CEASA-BA | BA | <span style="color: #22863a;">Concluido</span> | <span style="color: #22863a;">Concluido</span> | Coleta PDFs diarios listados na pagina oficial; fluxo atual, `--quotes-back` e navegacao para 2025 validados em 2026-06-06. |

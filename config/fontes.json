@@ -54,5 +54,12 @@
     "uf": "BA",
     "city": "Salvador",
     "base_url": "https://www.ba.gov.br/sde/boletim-informativo-ceasa"
+  },
+  "ceasa-df": {
+    "name": "CEASA-DF",
+    "state": "Distrito Federal",
+    "uf": "DF",
+    "city": "Brasilia",
+    "base_url": "https://www.portal.ceasadf.com.br/informacao-mercado"
   }
 }

@@ -10,6 +10,7 @@ from cotacoes_ceasa.collectors.ceasa_campinas import (
     CeasaCampinasCollector,
 )
 from cotacoes_ceasa.collectors.ceasa_ce import CEASA_CE_HEADERS, CeasaCeCollector
+from cotacoes_ceasa.collectors.ceasa_df import CEASA_DF_HEADERS, CeasaDfCollector
 from cotacoes_ceasa.collectors.ceasa_go import CEASA_GO_HEADERS, CeasaGoCollector
 from cotacoes_ceasa.collectors.ceasa_mg import CeasaMgCollector
 from cotacoes_ceasa.collectors.ceasa_pe import CeasaPeCollector
@@ -21,6 +22,7 @@ from cotacoes_ceasa.models import Cotacao
 from cotacoes_ceasa.parsers.ceasa_ba import CeasaBaParser
 from cotacoes_ceasa.parsers.ceasa_campinas import CeasaCampinasParser
 from cotacoes_ceasa.parsers.ceasa_ce import CeasaCeParser
+from cotacoes_ceasa.parsers.ceasa_df import CeasaDfParser
 from cotacoes_ceasa.parsers.ceasa_go import CeasaGoParser
 from cotacoes_ceasa.parsers.ceasa_mg import CeasaMgParser
 from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
@@ -241,6 +243,24 @@ def build_collector(args, config: AppConfig, source_config: SourceConfig):
             reuse_raw_before_request=config.reuse_raw_before_request,
         )
 
+    if args.source == "ceasa-df":
+        if args.quotes_back:
+            raise ValueError("CEASA-DF nao suporta cotacoes anteriores.")
+
+        ceasa_df_http_client = HttpClient(
+            timeout_seconds=args.http_timeout_seconds,
+            request_delay_seconds=args.request_delay_seconds,
+            headers=CEASA_DF_HEADERS,
+        )
+
+        return CeasaDfCollector(
+            http_client=ceasa_df_http_client,
+            raw_storage=raw_storage,
+            parser=CeasaDfParser(),
+            base_url=base_url,
+            reuse_raw_before_request=config.reuse_raw_before_request,
+        )
+
     raise ValueError(f"Fonte nao suportada: {args.source}")
 
 
@@ -268,6 +288,9 @@ def build_source_parser(source_slug: str):
 
     if source_slug == "ceasa-ba":
         return CeasaBaParser()
+
+    if source_slug == "ceasa-df":
+        return CeasaDfParser()
 
     raise ValueError(f"Fonte nao suportada: {source_slug}")
 

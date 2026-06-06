@@ -151,6 +151,21 @@ boletim-diario: 98 cotacoes
 total: 98 cotacoes extraidas.
 ```
 
+Exemplo para CEASA-DF:
+
+```bash
+docker compose run --rm app --source ceasa-df --save
+```
+
+Na CEASA-DF, o scraper coleta o boletim SIMA atual publicado na pagina oficial. A fonte nao suporta `--quotes-back`.
+
+Resultado observado em 2026-06-06:
+
+```text
+sima: 91 cotacoes
+total: 91 cotacoes extraidas.
+```
+
 ## Verificar CLI
 
 Mostra os parametros disponiveis sem acessar a internet:
