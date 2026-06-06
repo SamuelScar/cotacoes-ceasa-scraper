@@ -38,7 +38,7 @@ Cada cotacao deve seguir um formato padrao, independentemente da fonte:
 - CEASA-MG: https://minas1.ceasa.mg.gov.br/ceasainternet/cst_precosmaiscomumMG/cst_precosmaiscomumMG.php
 - CEASA-PR: https://www.ceasa.pr.gov.br/Pagina/Cotacao-Diaria-de-Precos
 - CEAGESP-SP: https://ceagesp.gov.br/cotacoes/
-- CEASA-RJ: https://www.rj.gov.br/ceasa/Cotação
+- CEASA-RJ: https://www.rj.gov.br/ceasa/Cota%C3%A7%C3%A3o
 - CEASA-DF: https://www.portal.ceasadf.com.br/precos
 - CEASA Campinas: https://www.ceasacampinas.com.br/cotacoes-anteriores
 - CEASA-GO: https://goias.gov.br/ceasa/cotacoes-diarias/

@@ -177,3 +177,13 @@ Decisao: adicionar a CEASA-GO como nova fonte individual ainda pendente.
 Motivo: a pagina oficial organiza cotacoes por ano, mes e PDF diario. O boletim informa preco mais comum, maximo e minimo, permitindo complementar a cobertura de fontes estaduais sem depender apenas do PROHORT.
 
 Detalhe: a primeira versao encontra o PDF mais recente ate a data limite, salva o bruto em `data/raw/ceasa-go/` e usa as secoes internas do PDF como categorias dos registros.
+
+## 2026-06-06
+
+### Implementar CEASA-RJ por PDFs diarios
+
+Decisao: escolher a CEASA-RJ como proxima fonte individual.
+
+Motivo: a pagina oficial organiza as cotacoes por ano, mes e dia, com links diretos para PDFs diarios. Os boletins trazem preco minimo, modal e maximo, alem de tipo e embalagem.
+
+Detalhe: o coletor encontra o PDF mais recente ate a data limite e suporta `--quotes-back`. As secoes numeradas do boletim sao usadas como categorias. Na validacao, a ultima cotacao disponivel extraiu 155 registros; a coleta de 2026-06-03 e uma data anterior extraiu 310 registros; a navegacao para 2025-12-31 extraiu 150 registros.

@@ -40,5 +40,12 @@
     "uf": "CE",
     "city": "Varias cidades",
     "base_url": "https://files.ceasa-ce.com.br/unsima/boletim_diario/boletim.php"
+  },
+  "ceasa-rj": {
+    "name": "CEASA-RJ",
+    "state": "Rio de Janeiro",
+    "uf": "RJ",
+    "city": "Rio de Janeiro",
+    "base_url": "https://www.rj.gov.br/ceasa/Cota%C3%A7%C3%A3o"
   }
 }

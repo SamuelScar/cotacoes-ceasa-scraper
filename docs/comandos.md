@@ -119,6 +119,22 @@ docker compose run --rm app --source ceasa-ce --save
 
 Na CEASA-CE, as categorias representam boletins atuais por entreposto e tipo de produto descobertos na pagina oficial. A fonte nao suporta `--quotes-back`.
 
+Exemplo para CEASA-RJ:
+
+```bash
+docker compose run --rm app --source ceasa-rj --save
+```
+
+Na CEASA-RJ, o scraper navega pelas paginas de ano e mes para encontrar o PDF diario mais recente. A fonte suporta `--target-date` e `--quotes-back`.
+
+Resultado observado em 2026-06-06:
+
+```text
+datas: ultima disponivel
+cotacao-diaria: 155 cotacoes
+total: 155 cotacoes extraidas.
+```
+
 ## Verificar CLI
 
 Mostra os parametros disponiveis sem acessar a internet:
