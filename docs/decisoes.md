@@ -209,3 +209,11 @@ Detalhe: a primeira versao coleta apenas o boletim atual porque a pagina oficial
 Decisao: manter a CEASA-MG sem suporte a cotacoes anteriores.
 
 Motivo: nao foi identificado acesso confiavel a historico por data na fonte individual. O fluxo atual ja atende a coleta da ultima cotacao publicada por cidade.
+
+### Implementar CEAGESP-SP pelo formulario da capital
+
+Decisao: escolher a CEAGESP-SP como proxima fonte individual.
+
+Motivo: a pagina oficial publica as categorias e datas disponiveis e retorna uma tabela HTML com produto, classificacao, unidade e precos minimo, comum e maximo.
+
+Detalhe: o coletor envia a categoria e a data pelo formulario oficial. A primeira versao cobre o Entreposto da Capital e suporta `--target-date` e `--quotes-back` dentro da janela recente exposta pela pagina. Na validacao, a ultima cotacao disponivel extraiu 557 registros; duas datas publicadas resultaram em 1.129 registros.

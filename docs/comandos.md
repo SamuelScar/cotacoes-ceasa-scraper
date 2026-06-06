@@ -166,6 +166,28 @@ sima: 91 cotacoes
 total: 91 cotacoes extraidas.
 ```
 
+Exemplo para CEAGESP-SP:
+
+```bash
+docker compose run --rm app --source ceagesp-sp --save
+```
+
+Na CEAGESP-SP, o scraper consulta todas as categorias disponiveis para a capital. A fonte suporta `--target-date` e `--quotes-back`.
+
+A pagina publica apenas uma janela recente de datas por categoria. O `--quotes-back` fica limitado a essas datas disponiveis.
+
+Resultado observado em 2026-06-06:
+
+```text
+diversos: 34 cotacoes
+flores: 58 cotacoes
+frutas: 214 cotacoes
+legumes: 118 cotacoes
+pescados: 56 cotacoes
+verduras: 77 cotacoes
+total: 557 cotacoes extraidas.
+```
+
 ## Verificar CLI
 
 Mostra os parametros disponiveis sem acessar a internet:

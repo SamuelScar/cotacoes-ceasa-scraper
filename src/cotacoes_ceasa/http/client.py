@@ -3,6 +3,7 @@ from http.client import RemoteDisconnected
 from time import monotonic, sleep
 
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
@@ -30,15 +31,26 @@ class HttpClient:
 
     def get_bytes(self, url: str) -> bytes:
         """Baixa uma URL e retorna o corpo da resposta como bytes."""
+        return self._request(url)
+
+    def post_form(self, url: str, data: dict[str, str]) -> str:
+        """Envia um formulario e retorna o corpo da resposta como texto."""
+        body = urlencode(data).encode("utf-8")
+
+        return self._request(url, body).decode("utf-8", errors="replace")
+
+    def _request(self, url: str, data: bytes | None = None) -> bytes:
         for attempt in range(2):
             self._wait_before_request()
-            request = Request(url, headers=self.headers)
+            request = Request(url, data=data, headers=self.headers)
 
             try:
                 with urlopen(request, timeout=self.timeout_seconds) as response:
                     return response.read()
             except HTTPError as error:
-                raise RuntimeError(f"Erro HTTP ao baixar {url}: {error.code}") from error
+                raise RuntimeError(
+                    f"Erro HTTP ao baixar {url}: {error.code}"
+                ) from error
             except RemoteDisconnected as error:
                 if attempt == 1:
                     raise RuntimeError(

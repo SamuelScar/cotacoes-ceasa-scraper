@@ -16,6 +16,10 @@ from cotacoes_ceasa.collectors.ceasa_mg import CeasaMgCollector
 from cotacoes_ceasa.collectors.ceasa_pe import CeasaPeCollector
 from cotacoes_ceasa.collectors.ceasa_pr import CEASA_PR_HEADERS, CeasaPrCollector
 from cotacoes_ceasa.collectors.ceasa_rj import CEASA_RJ_HEADERS, CeasaRjCollector
+from cotacoes_ceasa.collectors.ceagesp_sp import (
+    CEAGESP_SP_HEADERS,
+    CeagespSpCollector,
+)
 from cotacoes_ceasa.config import AppConfig, SourceConfig, load_config
 from cotacoes_ceasa.http.client import HttpClient
 from cotacoes_ceasa.models import Cotacao
@@ -28,6 +32,7 @@ from cotacoes_ceasa.parsers.ceasa_mg import CeasaMgParser
 from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
 from cotacoes_ceasa.parsers.ceasa_pr import CeasaPrParser
 from cotacoes_ceasa.parsers.ceasa_rj import CeasaRjParser
+from cotacoes_ceasa.parsers.ceagesp_sp import CeagespSpParser
 from cotacoes_ceasa.prohort import ProhortComplementer, ProhortComplementResult
 from cotacoes_ceasa.storage.raw_html import RawArchiveResult, RawHtmlStorage
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
@@ -261,6 +266,21 @@ def build_collector(args, config: AppConfig, source_config: SourceConfig):
             reuse_raw_before_request=config.reuse_raw_before_request,
         )
 
+    if args.source == "ceagesp-sp":
+        ceagesp_sp_http_client = HttpClient(
+            timeout_seconds=args.http_timeout_seconds,
+            request_delay_seconds=args.request_delay_seconds,
+            headers=CEAGESP_SP_HEADERS,
+        )
+
+        return CeagespSpCollector(
+            http_client=ceagesp_sp_http_client,
+            raw_storage=raw_storage,
+            parser=CeagespSpParser(),
+            base_url=base_url,
+            reuse_raw_before_request=config.reuse_raw_before_request,
+        )
+
     raise ValueError(f"Fonte nao suportada: {args.source}")
 
 
@@ -291,6 +311,9 @@ def build_source_parser(source_slug: str):
 
     if source_slug == "ceasa-df":
         return CeasaDfParser()
+
+    if source_slug == "ceagesp-sp":
+        return CeagespSpParser()
 
     raise ValueError(f"Fonte nao suportada: {source_slug}")
 

@@ -61,5 +61,12 @@
     "uf": "DF",
     "city": "Brasilia",
     "base_url": "https://www.portal.ceasadf.com.br/informacao-mercado"
+  },
+  "ceagesp-sp": {
+    "name": "CEAGESP-SP",
+    "state": "Sao Paulo",
+    "uf": "SP",
+    "city": "Sao Paulo",
+    "base_url": "https://ceagesp.gov.br/cotacoes/"
   }
 }
