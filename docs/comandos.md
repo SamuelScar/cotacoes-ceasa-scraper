@@ -50,6 +50,16 @@ docker compose run --rm complementar-prohort
 
 Esse comando deve ser executado depois dos scrapers individuais. Ele le o banco SQLite, baixa o `ProhortDiario.txt` e preenche `preco_comum` vazio quando encontra correspondencia confiavel por CEASA, data, produto e unidade. Dados ja preenchidos nao sao sobrescritos. Se o PROHORT tiver um produto do mesmo dia e da mesma CEASA que a fonte principal nao trouxe, o comando insere uma cotacao complementar marcada com `fonte_complemento = prohort`. Quando a categoria da fonte principal nao for conhecida, a cotacao entra na categoria `prohort-complemento`.
 
+Normalizar unidades ja salvas no banco:
+
+```bash
+docker compose run --rm normalizar-unidades
+```
+
+Esse comando preserva a unidade original em cada cotacao, separa medida
+canonica, embalagem, quantidade e detalhe, e remove da tabela `unidades` as
+variacoes brutas que deixaram de ser usadas.
+
 ## Comandos avancados
 
 Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
@@ -64,6 +74,7 @@ Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
 - `--quotes-back`: coleta tambem datas anteriores a data limite, quando a fonte suporta historico.
 - `--process-raw`: processa arquivos brutos ja salvos em `data/raw`, sem acessar a internet.
 - `--complement-prohort`: complementa cotacoes ja salvas usando o PROHORT, sem sobrescrever campos preenchidos.
+- `--normalize-units`: normaliza unidades ja salvas e remove variacoes brutas sem uso.
 - `--raw-dir`: define outra pasta para ler ou salvar arquivos brutos.
 - `--database-path`: define outro arquivo SQLite para salvar os registros.
 - `--base-url`: sobrescreve temporariamente a URL base da fonte configurada.

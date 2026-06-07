@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from cotacoes_ceasa.normalizers.unit import NormalizedUnit, normalize_unit
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 
 
@@ -155,7 +156,7 @@ class ProhortComplementer:
                 ce.slug,
                 ca.slug,
                 p.nome_original,
-                u.sigla,
+                COALESCE(co.unidade_original, u.sigla),
                 co.data_cotacao,
                 co.procedencia,
                 co.preco_comum
@@ -418,7 +419,8 @@ class ProhortComplementer:
             destination.category_slug,
         )
         produto_id = self._get_or_create_produto(connection, product_name)
-        unidade_id = self._get_or_create_unidade(connection, unit)
+        normalized_unit = normalize_unit(unit)
+        unidade_id = self._get_or_create_unidade(connection, normalized_unit)
         data_coleta = datetime.now().isoformat(timespec="seconds")
         unique_key = self._build_unique_key(
             ceasa_id=destination.ceasa_id,
@@ -437,6 +439,12 @@ class ProhortComplementer:
                 categoria_id,
                 produto_id,
                 unidade_id,
+                unidade_original,
+                unidade_normalizada,
+                embalagem,
+                quantidade_minima,
+                quantidade_maxima,
+                detalhe_unidade,
                 data_cotacao,
                 preco_minimo,
                 preco_comum,
@@ -450,7 +458,10 @@ class ProhortComplementer:
                 data_coleta,
                 url_origem
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
             """,
             (
                 unique_key,
@@ -458,6 +469,12 @@ class ProhortComplementer:
                 categoria_id,
                 produto_id,
                 unidade_id,
+                normalized_unit.original,
+                normalized_unit.normalized,
+                normalized_unit.packaging,
+                self._decimal_to_db(normalized_unit.quantity_min),
+                self._decimal_to_db(normalized_unit.quantity_max),
+                normalized_unit.detail,
                 quote_date.isoformat(),
                 None,
                 str(price),
@@ -537,21 +554,31 @@ class ProhortComplementer:
     def _get_or_create_unidade(
         self,
         connection: sqlite3.Connection,
-        unit: str,
+        unit: NormalizedUnit,
     ) -> int:
+        if unit.symbol is None:
+            raise RuntimeError("Unidade do PROHORT nao informada")
+
         connection.execute(
             "INSERT OR IGNORE INTO unidades (sigla, descricao) VALUES (?, ?)",
-            (unit, unit),
+            (unit.symbol, unit.description),
+        )
+        connection.execute(
+            "UPDATE unidades SET descricao = ? WHERE sigla = ?",
+            (unit.description, unit.symbol),
         )
         row = connection.execute(
             "SELECT id FROM unidades WHERE sigla = ?",
-            (unit,),
+            (unit.symbol,),
         ).fetchone()
 
         if row is None:
-            raise RuntimeError(f"Unidade nao encontrada apos insert: {unit}")
+            raise RuntimeError(f"Unidade nao encontrada apos insert: {unit.symbol}")
 
         return int(row[0])
+
+    def _decimal_to_db(self, value: Decimal | None) -> str | None:
+        return str(value) if value is not None else None
 
     def _build_unique_key(
         self,

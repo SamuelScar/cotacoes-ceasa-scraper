@@ -67,30 +67,21 @@ A combinacao `nome_original + nome_normalizado` e unica.
 
 ## unidades
 
-Representa as unidades de comercializacao.
+Representa somente medidas canonicas.
 
 | Campo | Tipo SQLite | Obrigatorio | Observacao |
 | --- | --- | --- | --- |
 | id | INTEGER | Sim | Chave primaria autoincremental |
-| sigla | TEXT | Sim | Unidade como aparece na fonte |
-| descricao | TEXT | Nao | Descricao da unidade |
+| sigla | TEXT | Sim | Sigla canonica, como `kg`, `g`, `l`, `ml`, `un`, `dz` ou `cento` |
+| descricao | TEXT | Nao | Descricao canonica da medida |
 
-Na versao atual, esta tabela ainda recebe a unidade bruta da fonte. Isso gera muitas variações equivalentes, por exemplo:
+Embalagem e quantidade nao fazem parte da sigla. Por exemplo, `Cx.25Kg`,
+`Fardo.5 Kg` e `Saco 25Kg` apontam para a unidade canonica `kg`. Os detalhes
+comerciais ficam na propria cotacao.
 
-- `Kg`, `KG`, `Kg-`
-- `Cx.20Kg`, `CX.20Kg`, `Cx.20-kg`, `Cx .20Kg`
-- `Frd. 30Kg`, `Frd 30Kg`, `Frd.30Kg`
-- `Sc.25 Kg`, `Sc.25Kg`
-
-Tambem existem valores que misturam embalagem e medida:
-
-- `Cx.30 Dz`
-- `Cx12Unid.1L`
-- `Molho 0,350 Kg`
-- `Fardo.5 Kg`
-- `50 Espigas`
-
-Por isso, tratar unidade apenas como `sigla` nao e suficiente para analise posterior.
+Quando a fonte informa somente uma embalagem sem medida, como `CX`, a cotacao
+fica sem `unidade_id`. A embalagem e o texto original continuam preservados sem
+inventar peso ou volume.
 
 ## cotacoes
 
@@ -103,7 +94,13 @@ Representa cada registro de preco coletado.
 | ceasa_id | INTEGER | Sim | Referencia para `ceasas` |
 | categoria_id | INTEGER | Sim | Referencia para `categorias` |
 | produto_id | INTEGER | Sim | Referencia para `produtos` |
-| unidade_id | INTEGER | Nao | Referencia para `unidades` |
+| unidade_id | INTEGER | Nao | Referencia para a medida canonica em `unidades` |
+| unidade_original | TEXT | Nao | Texto de unidade exatamente como veio da fonte |
+| unidade_normalizada | TEXT | Nao | Representacao comercial limpa e legivel |
+| embalagem | TEXT | Nao | Embalagem identificada, como `caixa`, `saco` ou `fardo` |
+| quantidade_minima | NUMERIC | Nao | Quantidade, peso ou volume minimo identificado |
+| quantidade_maxima | NUMERIC | Nao | Limite superior quando a fonte informa uma faixa |
+| detalhe_unidade | TEXT | Nao | Informacao restante que nao pertence aos outros campos |
 | data_cotacao | TEXT | Nao | Data da cotacao em formato ISO `YYYY-MM-DD` |
 | preco_minimo | NUMERIC | Nao | Preco minimo sem simbolo de moeda |
 | preco_comum | NUMERIC | Nao | Preco comum ou mais frequente |
@@ -147,31 +144,34 @@ Nao existe backup automatico. A pasta `data/` e ignorada pelo Git e pode ser rem
 - Textos vazios viram `NULL`.
 - O nome original do produto e preservado.
 - O nome normalizado ainda e simples: minusculo e sem espacos duplicados.
-- Unidade, procedencia e classificacao ficam como vierem da fonte.
+- A unidade original e preservada em `cotacoes.unidade_original`.
+- Medida, embalagem, quantidade e detalhe sao separados durante a gravacao.
+- Procedencia e classificacao ficam como vierem da fonte.
 
-## Proposta para normalizacao de unidades
+## Normalizacao de unidades
 
-A proxima evolucao recomendada e separar o texto bruto da unidade em partes consultaveis:
+O normalizador separa o texto bruto da unidade em partes consultaveis:
 
-| Campo proposto | Exemplo | Observacao |
+| Campo | Exemplo | Observacao |
 | --- | --- | --- |
 | unidade_original | `Cx.20-Kg` | Valor exatamente como veio da fonte |
-| unidade_normalizada | `cx 20 kg` | Texto limpo para comparacao |
+| unidade_normalizada | `caixa 20 kg` | Texto comercial limpo para exibicao |
 | embalagem | `caixa` | Tipo de embalagem, quando existir |
 | quantidade_minima | `20` | Quantidade, peso ou volume minimo identificado |
 | quantidade_maxima | `23` | Usado em faixas como `20a23Kg` |
-| unidade_medida | `kg` | Medida base: `kg`, `g`, `l`, `ml`, `un`, `dz`, `cento` |
-| detalhe | `tp1` | Sobra util que nao se encaixa nos campos anteriores |
+| unidades.sigla | `kg` | Medida base referenciada por `unidade_id` |
+| detalhe_unidade | `tp1` | Sobra util que nao se encaixa nos campos anteriores |
 
-Exemplos esperados:
+Exemplos:
 
-| Original | Embalagem | Quantidade minima | Quantidade maxima | Unidade medida |
-| --- | --- | ---: | ---: | --- |
-| `Kg` |  | 1 |  | `kg` |
-| `Cx.20Kg` | `caixa` | 20 |  | `kg` |
-| `Cx .20a23Kg` | `caixa` | 20 | 23 | `kg` |
-| `Cx.30 Dz` | `caixa` | 30 |  | `dz` |
-| `Molho 0,350 Kg` | `molho` | 0.350 |  | `kg` |
-| `50 Espigas` |  | 50 |  | `espiga` |
+| Original | Normalizada | Embalagem | Quantidade minima | Quantidade maxima | Unidade canonica |
+| --- | --- | --- | ---: | ---: | --- |
+| `Kg` | `kg` |  | 1 |  | `kg` |
+| `Cx.20Kg` | `caixa 20 kg` | `caixa` | 20 |  | `kg` |
+| `Cx .20a23Kg` | `caixa 20 a 23 kg` | `caixa` | 20 | 23 | `kg` |
+| `Cx.30 Dz` | `caixa 30 dz` | `caixa` | 30 |  | `dz` |
+| `Molho 0,350 Kg` | `molho 0.35 kg` | `molho` | 0.350 |  | `kg` |
+| `50 Espigas` | `50 espiga` |  | 50 |  | `espiga` |
 
-O valor original deve continuar salvo para auditoria. Os campos normalizados devem ser derivados por uma funcao de parsing, sem apagar a informacao bruta da fonte.
+Valores nao reconhecidos ficam sem `unidade_id` e permanecem registrados em
+`unidade_original` e `detalhe_unidade` para revisao.

@@ -60,6 +60,10 @@ def main() -> None:
         complement_prohort_and_report(args)
         return
 
+    if args.normalize_units:
+        normalize_units_and_report(args)
+        return
+
     source_config = config.sources[args.source]
     collector = build_collector(
         args=args,
@@ -443,6 +447,16 @@ def complement_prohort_and_report(args) -> None:
     print(format_prohort_complement_result(result, args.database_path))
 
 
+def normalize_units_and_report(args) -> None:
+    result = SQLiteStorage(Path(args.database_path)).normalize_units()
+    print(
+        f"unidades: {result.quotation_count} cotacoes normalizadas, "
+        f"{result.canonical_unit_count} unidades canonicas, "
+        f"{result.removed_unit_count} variacoes removidas e "
+        f"{result.unrecognized_count} cotacoes com unidade nao reconhecida."
+    )
+
+
 def format_prohort_complement_result(
     result: ProhortComplementResult,
     database_path: str,
@@ -770,6 +784,11 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
             "Complementa cotacoes ja salvas usando o PROHORT, "
             "sem sobrescrever campos preenchidos."
         ),
+    )
+    parser.add_argument(
+        "--normalize-units",
+        action="store_true",
+        help="Normaliza unidades ja salvas e remove variacoes brutas sem uso.",
     )
     parser.add_argument(
         "--list-categories",

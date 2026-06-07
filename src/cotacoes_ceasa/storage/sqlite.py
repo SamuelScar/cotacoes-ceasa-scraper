@@ -6,6 +6,15 @@ from decimal import Decimal
 from pathlib import Path
 
 from cotacoes_ceasa.models import Cotacao
+from cotacoes_ceasa.normalizers.unit import NormalizedUnit, normalize_unit
+
+
+@dataclass(frozen=True)
+class UnitNormalizationResult:
+    quotation_count: int
+    canonical_unit_count: int
+    removed_unit_count: int
+    unrecognized_count: int
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,80 @@ class SQLiteStorage:
                 source_url=source_url,
             )
             return self._insert_cotacoes(connection, cotacoes, ceasa_id)
+
+    def normalize_units(self) -> UnitNormalizationResult:
+        """Normaliza unidades existentes e remove variacoes brutas sem uso."""
+        if not self.database_path.exists():
+            raise FileNotFoundError(f"Banco SQLite nao encontrado: {self.database_path}")
+
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            self._create_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT co.id, co.unidade_original, u.sigla
+                FROM cotacoes co
+                LEFT JOIN unidades u ON u.id = co.unidade_id
+                """
+            ).fetchall()
+            unrecognized_count = 0
+
+            for quotation_id, original_unit, saved_unit in rows:
+                normalized_unit = normalize_unit(original_unit or saved_unit)
+                unidade_id = self._get_or_create_unidade(connection, normalized_unit)
+
+                if (
+                    normalized_unit.original is not None
+                    and normalized_unit.symbol is None
+                    and normalized_unit.packaging is None
+                ):
+                    unrecognized_count += 1
+
+                connection.execute(
+                    """
+                    UPDATE cotacoes
+                    SET
+                        unidade_id = ?,
+                        unidade_original = ?,
+                        unidade_normalizada = ?,
+                        embalagem = ?,
+                        quantidade_minima = ?,
+                        quantidade_maxima = ?,
+                        detalhe_unidade = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        unidade_id,
+                        normalized_unit.original,
+                        normalized_unit.normalized,
+                        normalized_unit.packaging,
+                        self._decimal_to_db(normalized_unit.quantity_min),
+                        self._decimal_to_db(normalized_unit.quantity_max),
+                        normalized_unit.detail,
+                        quotation_id,
+                    ),
+                )
+
+            delete_cursor = connection.execute(
+                """
+                DELETE FROM unidades
+                WHERE id NOT IN (
+                    SELECT DISTINCT unidade_id
+                    FROM cotacoes
+                    WHERE unidade_id IS NOT NULL
+                )
+                """
+            )
+            canonical_unit_count = connection.execute(
+                "SELECT COUNT(*) FROM unidades"
+            ).fetchone()[0]
+
+            return UnitNormalizationResult(
+                quotation_count=len(rows),
+                canonical_unit_count=canonical_unit_count,
+                removed_unit_count=delete_cursor.rowcount,
+                unrecognized_count=unrecognized_count,
+            )
 
     def _create_schema(self, connection: sqlite3.Connection) -> None:
         self._ensure_compatible_schema(connection)
@@ -113,6 +196,12 @@ class SQLiteStorage:
                 categoria_id INTEGER NOT NULL,
                 produto_id INTEGER NOT NULL,
                 unidade_id INTEGER,
+                unidade_original TEXT,
+                unidade_normalizada TEXT,
+                embalagem TEXT,
+                quantidade_minima NUMERIC,
+                quantidade_maxima NUMERIC,
+                detalhe_unidade TEXT,
                 data_cotacao TEXT,
                 preco_minimo NUMERIC,
                 preco_comum NUMERIC,
@@ -133,6 +222,7 @@ class SQLiteStorage:
             """
         )
         self._ensure_complement_columns(connection)
+        self._ensure_unit_columns(connection)
 
     def _insert_cotacoes(
         self,
@@ -146,7 +236,8 @@ class SQLiteStorage:
         for cotacao in cotacoes:
             categoria_id = self._get_or_create_categoria(connection, ceasa_id, cotacao.categoria)
             produto_id = self._get_or_create_produto(connection, cotacao.produto)
-            unidade_id = self._get_or_create_unidade(connection, cotacao.unidade)
+            normalized_unit = normalize_unit(cotacao.unidade)
+            unidade_id = self._get_or_create_unidade(connection, normalized_unit)
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO cotacoes (
@@ -155,6 +246,12 @@ class SQLiteStorage:
                     categoria_id,
                     produto_id,
                     unidade_id,
+                    unidade_original,
+                    unidade_normalizada,
+                    embalagem,
+                    quantidade_minima,
+                    quantidade_maxima,
+                    detalhe_unidade,
                     data_cotacao,
                     preco_minimo,
                     preco_comum,
@@ -165,7 +262,7 @@ class SQLiteStorage:
                     data_coleta,
                     url_origem
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     self._build_unique_key(cotacao, ceasa_id),
@@ -173,6 +270,12 @@ class SQLiteStorage:
                     categoria_id,
                     produto_id,
                     unidade_id,
+                    normalized_unit.original,
+                    normalized_unit.normalized,
+                    normalized_unit.packaging,
+                    self._decimal_to_db(normalized_unit.quantity_min),
+                    self._decimal_to_db(normalized_unit.quantity_max),
+                    normalized_unit.detail,
                     cotacao.data_cotacao.isoformat() if cotacao.data_cotacao else None,
                     self._decimal_to_db(cotacao.preco_minimo),
                     self._decimal_to_db(cotacao.preco_comum),
@@ -213,6 +316,23 @@ class SQLiteStorage:
         ):
             if column_name not in columns:
                 connection.execute(f"ALTER TABLE cotacoes ADD COLUMN {column_name} TEXT")
+
+    def _ensure_unit_columns(self, connection: sqlite3.Connection) -> None:
+        columns = self._get_table_columns(connection, "cotacoes")
+        definitions = {
+            "unidade_original": "TEXT",
+            "unidade_normalizada": "TEXT",
+            "embalagem": "TEXT",
+            "quantidade_minima": "NUMERIC",
+            "quantidade_maxima": "NUMERIC",
+            "detalhe_unidade": "TEXT",
+        }
+
+        for column_name, column_type in definitions.items():
+            if column_name not in columns:
+                connection.execute(
+                    f"ALTER TABLE cotacoes ADD COLUMN {column_name} {column_type}"
+                )
 
     def _get_table_columns(
         self,
@@ -326,17 +446,21 @@ class SQLiteStorage:
     def _get_or_create_unidade(
         self,
         connection: sqlite3.Connection,
-        unit: str | None,
+        unit: NormalizedUnit,
     ) -> int | None:
-        if unit is None:
+        if unit.symbol is None:
             return None
 
         connection.execute(
             "INSERT OR IGNORE INTO unidades (sigla, descricao) VALUES (?, ?)",
-            (unit, unit),
+            (unit.symbol, unit.description),
+        )
+        connection.execute(
+            "UPDATE unidades SET descricao = ? WHERE sigla = ?",
+            (unit.description, unit.symbol),
         )
 
-        return self._fetch_id(connection, "unidades", "sigla", unit)
+        return self._fetch_id(connection, "unidades", "sigla", unit.symbol)
 
     def _fetch_id(
         self,

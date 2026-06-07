@@ -31,3 +31,7 @@ services:
   complementar-prohort:
     <<: *app
     command: ["--complement-prohort"]
+
+  normalizar-unidades:
+    <<: *app
+    command: ["--normalize-units"]

@@ -98,6 +98,14 @@ Tarefas futuras:
 - Registrar falhas de coleta.
 - Manter historico por data de cotacao.
 
+## TODO antes da coleta completa
+
+- [ ] Fazer uma revisao total do codigo, refatorando e melhorando a distribuicao de responsabilidades.
+- [ ] Revisar os metodos de coleta para reduzir o risco de bloqueio de IP durante o scraping.
+- [ ] Melhorar e reorganizar o layout das saidas do terminal para deixar a execucao mais clara.
+- [ ] Revisar toda a documentacao, removendo conteudo inutil ou desatualizado e mantendo o que ajuda na operacao do projeto.
+- [ ] Fazer uma validacao completa antes de iniciar a coleta demorada, garantindo que fontes, processamento e persistencia funcionem corretamente.
+
 ## Decisoes iniciais
 
 - Python sera a opcao natural para o scraper pela disponibilidade de bibliotecas de coleta, parsing e tratamento de dados.

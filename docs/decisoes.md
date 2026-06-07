@@ -124,7 +124,11 @@ Decisao: a normalizacao de unidades deve preservar a unidade original da fonte e
 
 Motivo: a CEASA-PE mistura unidade, embalagem e quantidade no mesmo texto. Exemplos: `Kg`, `Cx.20Kg`, `Cx.30 Dz`, `Molho 0,350 Kg`, `Cx12Unid.1L`. Se o scraper apenas sobrescrever esse texto por uma sigla simples, parte da informacao comercial sera perdida.
 
-Caminho recomendado: criar um normalizador especifico de unidade que extraia `embalagem`, `quantidade_minima`, `quantidade_maxima`, `unidade_medida` e `detalhe`, mantendo tambem `unidade_original`.
+Implementacao: `unidades` guarda somente a medida canonica. A cotacao preserva
+`unidade_original` e recebe os campos derivados `unidade_normalizada`,
+`embalagem`, `quantidade_minima`, `quantidade_maxima` e `detalhe_unidade`.
+Variacoes ja salvas podem ser reorganizadas pelo comando
+`docker compose run --rm normalizar-unidades`.
 
 ## 2026-06-02
 
