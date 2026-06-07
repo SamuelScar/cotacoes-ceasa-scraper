@@ -142,7 +142,7 @@ Decisao: implementar a CEASA Campinas a partir da pagina de cotacoes anteriores,
 
 Motivo: a fonte publica as cotacoes em uma lista paginada de datas. Como os links estao no HTML e podem mudar ao longo do tempo, o scraper deve descobrir os PDFs pela propria pagina em vez de montar URLs manualmente.
 
-Detalhe: o coletor busca o PDF mais recente ate a data limite. O parser usa as secoes encontradas dentro do PDF como categorias dos registros, sem manter lista fixa de grupos de produtos.
+Detalhe: o coletor busca o PDF mais recente ate a data limite. O parser usa as secoes encontradas dentro do PDF como categorias dos registros, sem manter lista fixa de grupos de produtos. Na validacao de 2026-06-07, a ultima cotacao extraiu 316 registros, duas datas publicadas resultaram em 630 registros e a navegacao para 2025 extraiu 312 registros.
 
 ### Avaliar PROHORT antes de novos scrapers individuais
 
@@ -168,7 +168,7 @@ Decisao: escolher a CEASA-CE como proxima fonte individual.
 
 Motivo: a pagina oficial de boletins lista links diretos para PDFs por entreposto e categoria, sem formulario por produto. Os PDFs trazem data, unidade, preco minimo, comum, maximo, procedencia e situacao de mercado, oferecendo mais detalhe que o PROHORT para uso como fonte principal.
 
-Detalhe: a primeira versao coleta boletins atuais descobertos em `boletim.php`. Nao foi implementado historico por data para esta fonte.
+Detalhe: a primeira versao coleta boletins atuais descobertos em `boletim.php`. Nao foi implementado historico por data para esta fonte. Na validacao de 2026-06-07, os nove boletins disponiveis extrairam 544 registros.
 
 ### Implementar CEASA-GO por PDFs diarios
 
@@ -176,7 +176,7 @@ Decisao: adicionar a CEASA-GO como nova fonte individual ainda pendente.
 
 Motivo: a pagina oficial organiza cotacoes por ano, mes e PDF diario. O boletim informa preco mais comum, maximo e minimo, permitindo complementar a cobertura de fontes estaduais sem depender apenas do PROHORT.
 
-Detalhe: a primeira versao encontra o PDF mais recente ate a data limite, salva o bruto em `data/raw/ceasa-go/` e usa as secoes internas do PDF como categorias dos registros.
+Detalhe: a primeira versao encontra o PDF mais recente ate a data limite, salva o bruto em `data/raw/ceasa-go/` e usa as secoes internas do PDF como categorias dos registros. Na validacao de 2026-06-07, a ultima cotacao extraiu 233 registros, duas datas publicadas resultaram em 466 registros e a navegacao para 2025 extraiu 252 registros.
 
 ## 2026-06-06
 
@@ -217,3 +217,13 @@ Decisao: escolher a CEAGESP-SP como proxima fonte individual.
 Motivo: a pagina oficial publica as categorias e datas disponiveis e retorna uma tabela HTML com produto, classificacao, unidade e precos minimo, comum e maximo.
 
 Detalhe: o coletor envia a categoria e a data pelo formulario oficial. A primeira versao cobre o Entreposto da Capital e suporta `--target-date` e `--quotes-back` dentro da janela recente exposta pela pagina. Na validacao, a ultima cotacao disponivel extraiu 557 registros; duas datas publicadas resultaram em 1.129 registros.
+
+## 2026-06-07
+
+### Implementar CEASA-ES pelo formulario legado
+
+Decisao: implementar a CEASA-ES pelo sistema legado vinculado na pagina oficial de boletins.
+
+Motivo: o formulario permite selecionar tres mercados, expoe datas historicas e retorna um relatorio HTML completo com produto, embalagem, precos minimo, comum e maximo, alem da situacao de mercado.
+
+Detalhe: o coletor mantem a sessao exigida pelo Scriptcase, seleciona a ultima data disponivel ate a data limite e suporta `--target-date` e `--quotes-back` com datas independentes por mercado. Grande Vitoria expoe 1.221 datas de 2021-07-01 a 2026-06-03, Noroeste expoe 856 datas de 2010-09-01 a 2024-12-20 e Cachoeiro expoe 180 datas de 2015-07-02 a 2018-08-27. Na validacao de 2026-06-07, as ultimas cotacoes extrairam 289 registros e duas datas de cada mercado resultaram em 574 registros.

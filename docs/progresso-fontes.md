@@ -12,11 +12,11 @@ Este documento acompanha o avanco dos scrapers por fonte.
 | CEAGESP-SP | SP | <span style="color: #22863a;">Concluido</span> | <span style="color: #b08800;">Parcial</span> | Coleta o formulario da capital por categoria e data. O fluxo atual e `--quotes-back` foram validados em 2026-06-06, mas a pagina expoe apenas uma janela recente de datas. |
 | CEASA-RJ | RJ | <span style="color: #22863a;">Concluido</span> | <span style="color: #22863a;">Concluido</span> | Coleta PDFs diarios navegados por ano e mes; fluxo atual e `--quotes-back` validados em 2026-06-06. |
 | CEASA-DF | DF | <span style="color: #22863a;">Concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Coleta o boletim SIMA atual; fluxo validado com 91 cotacoes em 2026-06-06. A pagina oficial nao expoe lista historica direta. |
-| CEASA Campinas | SP | <span style="color: #b08800;">Parcial</span> | <span style="color: #b08800;">Parcial</span> | Scraper implementado para PDFs descobertos dinamicamente; pendente de validacao local. |
-| CEASA-GO | GO | <span style="color: #b08800;">Parcial</span> | <span style="color: #b08800;">Parcial</span> | Scraper implementado para PDFs diarios descobertos nas paginas oficiais de ano e mes; pendente de validacao local. |
+| CEASA Campinas | SP | <span style="color: #22863a;">Concluido</span> | <span style="color: #22863a;">Concluido</span> | Fluxo atual, `--quotes-back` e navegacao para 2025 validados em 2026-06-07. |
+| CEASA-GO | GO | <span style="color: #22863a;">Concluido</span> | <span style="color: #22863a;">Concluido</span> | Fluxo atual, `--quotes-back` e navegacao para 2025 validados em 2026-06-07. |
 | CEASA-BA | BA | <span style="color: #22863a;">Concluido</span> | <span style="color: #22863a;">Concluido</span> | Coleta PDFs diarios listados na pagina oficial; fluxo atual, `--quotes-back` e navegacao para 2025 validados em 2026-06-06. |
-| CEASA-CE | CE | <span style="color: #b08800;">Parcial</span> | <span style="color: #d73a49;">Nao concluido</span> | Scraper implementado para boletins atuais em PDF descobertos pela pagina oficial; pendente de validacao local. |
-| CEASA-ES | ES | <span style="color: #d73a49;">Nao concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Precisa avaliar HTML ou arquivo. |
+| CEASA-CE | CE | <span style="color: #22863a;">Concluido</span> | <span style="color: #d73a49;">Nao concluido</span> | Fluxo atual validado com 544 cotacoes em 2026-06-07; nao foi implementado historico por data. |
+| CEASA-ES | ES | <span style="color: #22863a;">Concluido</span> | <span style="color: #22863a;">Concluido</span> | Os tres mercados e suas datas independentes foram validados em 2026-06-07; Noroeste publica ate 2024-12-20 e Cachoeiro ate 2018-08-27. |
 
 ## Legenda
 

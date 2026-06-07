@@ -1,10 +1,11 @@
 from dataclasses import dataclass, field
 from http.client import RemoteDisconnected
+from http.cookiejar import CookieJar
 from time import monotonic, sleep
 
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 
 @dataclass
@@ -22,6 +23,11 @@ class HttpClient:
         }
     )
     _last_request_at: float = field(default=0.0, init=False, repr=False)
+    _cookie_jar: CookieJar = field(default_factory=CookieJar, init=False, repr=False)
+    _opener: object = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._opener = build_opener(HTTPCookieProcessor(self._cookie_jar))
 
     def get_text(self, url: str, encoding: str = "utf-8") -> str:
         """Baixa uma URL e retorna o corpo da resposta como texto."""
@@ -33,9 +39,9 @@ class HttpClient:
         """Baixa uma URL e retorna o corpo da resposta como bytes."""
         return self._request(url)
 
-    def post_form(self, url: str, data: dict[str, str]) -> str:
+    def post_form(self, url: str, data: dict[str, str | list[str]]) -> str:
         """Envia um formulario e retorna o corpo da resposta como texto."""
-        body = urlencode(data).encode("utf-8")
+        body = urlencode(data, doseq=True).encode("utf-8")
 
         return self._request(url, body).decode("utf-8", errors="replace")
 
@@ -45,7 +51,7 @@ class HttpClient:
             request = Request(url, data=data, headers=self.headers)
 
             try:
-                with urlopen(request, timeout=self.timeout_seconds) as response:
+                with self._opener.open(request, timeout=self.timeout_seconds) as response:
                     return response.read()
             except HTTPError as error:
                 raise RuntimeError(

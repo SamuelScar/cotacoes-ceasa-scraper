@@ -68,5 +68,12 @@
     "uf": "SP",
     "city": "Sao Paulo",
     "base_url": "https://ceagesp.gov.br/cotacoes/"
+  },
+  "ceasa-es": {
+    "name": "CEASA-ES",
+    "state": "Espirito Santo",
+    "uf": "ES",
+    "city": "Varias cidades",
+    "base_url": "http://200.198.51.71/detec/filtro_boletim_es/filtro_boletim_es.php"
   }
 }

@@ -329,6 +329,18 @@ Consultar alguns registros:
 docker compose run --rm --entrypoint python app -c "import sqlite3; con=sqlite3.connect('data/cotacoes.sqlite'); rows=con.execute('select c.nome, ca.slug, p.nome_original, u.sigla, co.preco_comum, co.data_cotacao from cotacoes co join ceasas c on c.id = co.ceasa_id join categorias ca on ca.id = co.categoria_id join produtos p on p.id = co.produto_id left join unidades u on u.id = co.unidade_id limit 5').fetchall(); [print(row) for row in rows]"
 ```
 
+Coletar e salvar a ultima cotacao da CEASA-ES:
+
+```bash
+docker compose run --rm app --source ceasa-es --save
+```
+
+Coletar uma data limite e mais uma cotacao anterior da CEASA-ES:
+
+```bash
+docker compose run --rm app --source ceasa-es --target-date 03/06/2026 --quotes-back 1 --save
+```
+
 Listar tabelas do banco:
 
 ```bash

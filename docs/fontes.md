@@ -26,11 +26,11 @@ Fontes em PDF, arquivos baixados manualmente, paginas muito dinamicas ou com cap
 | CEAGESP-SP | SP | https://ceagesp.gov.br/cotacoes/ | HTML | Alta | Implementado e validado para cotacoes da capital |
 | CEASA-RJ | RJ | https://www.rj.gov.br/ceasa/Cota%C3%A7%C3%A3o | HTML + PDF | Alta | Implementado e validado para PDFs diarios |
 | CEASA-DF | DF | https://www.portal.ceasadf.com.br/informacao-mercado | HTML + PDF | Alta | Implementado e validado para boletim SIMA atual |
-| CEASA Campinas | SP | https://www.ceasacampinas.com.br/cotacoes-anteriores | HTML + PDF | Media | Implementado, pendente de validacao |
-| CEASA-GO | GO | https://goias.gov.br/ceasa/cotacoes-diarias/ | HTML + PDF | Media | Implementado para PDFs diarios, pendente de validacao |
+| CEASA Campinas | SP | https://www.ceasacampinas.com.br/cotacoes-anteriores | HTML + PDF | Media | Implementado e validado para PDFs historicos |
+| CEASA-GO | GO | https://goias.gov.br/ceasa/cotacoes-diarias/ | HTML + PDF | Media | Implementado e validado para PDFs diarios |
 | CEASA-BA | BA | https://www.ba.gov.br/sde/boletim-informativo-ceasa | HTML + PDF | Alta | Implementado e validado para PDFs diarios |
-| CEASA-CE | CE | https://files.ceasa-ce.com.br/unsima/boletim_diario/boletim.php | HTML + PDF | Media | Implementado para boletins atuais |
-| CEASA-ES | ES | https://ceasa.es.gov.br/boletim | HTML ou arquivo | Media | Pendente |
+| CEASA-CE | CE | https://files.ceasa-ce.com.br/unsima/boletim_diario/boletim.php | HTML + PDF | Media | Implementado e validado para boletins atuais |
+| CEASA-ES | ES | http://200.198.51.71/detec/filtro_boletim_es/filtro_boletim_es.php | HTML | Media | Implementado e validado para mercados e datas disponiveis |
 
 ## Campos para avaliacao de cada fonte
 

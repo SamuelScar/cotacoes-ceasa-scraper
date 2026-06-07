@@ -11,6 +11,7 @@ from cotacoes_ceasa.collectors.ceasa_campinas import (
 )
 from cotacoes_ceasa.collectors.ceasa_ce import CEASA_CE_HEADERS, CeasaCeCollector
 from cotacoes_ceasa.collectors.ceasa_df import CEASA_DF_HEADERS, CeasaDfCollector
+from cotacoes_ceasa.collectors.ceasa_es import CEASA_ES_HEADERS, CeasaEsCollector
 from cotacoes_ceasa.collectors.ceasa_go import CEASA_GO_HEADERS, CeasaGoCollector
 from cotacoes_ceasa.collectors.ceasa_mg import CeasaMgCollector
 from cotacoes_ceasa.collectors.ceasa_pe import CeasaPeCollector
@@ -27,6 +28,7 @@ from cotacoes_ceasa.parsers.ceasa_ba import CeasaBaParser
 from cotacoes_ceasa.parsers.ceasa_campinas import CeasaCampinasParser
 from cotacoes_ceasa.parsers.ceasa_ce import CeasaCeParser
 from cotacoes_ceasa.parsers.ceasa_df import CeasaDfParser
+from cotacoes_ceasa.parsers.ceasa_es import CeasaEsParser
 from cotacoes_ceasa.parsers.ceasa_go import CeasaGoParser
 from cotacoes_ceasa.parsers.ceasa_mg import CeasaMgParser
 from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
@@ -281,6 +283,21 @@ def build_collector(args, config: AppConfig, source_config: SourceConfig):
             reuse_raw_before_request=config.reuse_raw_before_request,
         )
 
+    if args.source == "ceasa-es":
+        ceasa_es_http_client = HttpClient(
+            timeout_seconds=args.http_timeout_seconds,
+            request_delay_seconds=args.request_delay_seconds,
+            headers=CEASA_ES_HEADERS,
+        )
+
+        return CeasaEsCollector(
+            http_client=ceasa_es_http_client,
+            raw_storage=raw_storage,
+            parser=CeasaEsParser(),
+            base_url=base_url,
+            reuse_raw_before_request=config.reuse_raw_before_request,
+        )
+
     raise ValueError(f"Fonte nao suportada: {args.source}")
 
 
@@ -315,6 +332,9 @@ def build_source_parser(source_slug: str):
     if source_slug == "ceagesp-sp":
         return CeagespSpParser()
 
+    if source_slug == "ceasa-es":
+        return CeasaEsParser()
+
     raise ValueError(f"Fonte nao suportada: {source_slug}")
 
 
@@ -339,19 +359,24 @@ def collect_and_report(
 ) -> list[Cotacao]:
     """Coleta cotacoes e imprime um resumo por categoria."""
     categories = collector.discover_categories()
-    target_dates = resolve_quotation_dates(
-        collector=collector,
-        probe_category_slug=categories[0].slug,
-        target_date=target_date,
-        quotes_back=quotes_back,
+    target_dates_by_category = resolve_category_target_dates(
+        collector,
+        categories,
+        target_date,
+        quotes_back,
     )
     cotacoes: list[Cotacao] = []
 
-    if collector.supports_target_dates:
-        print(f"datas: {format_target_dates(target_dates)}")
-
     for category in categories:
+        target_dates = target_dates_by_category[category.slug]
         category_total = 0
+
+        if collector.supports_target_dates and getattr(
+            collector,
+            "category_specific_dates",
+            False,
+        ):
+            print(f"{category.slug} datas: {format_target_dates(target_dates)}")
 
         for target_date in target_dates:
             try:
@@ -375,16 +400,16 @@ def download_and_report(
 ) -> list[Path]:
     """Baixa arquivos brutos para a janela de datas configurada."""
     categories = collector.discover_categories()
-    target_dates = resolve_quotation_dates(
-        collector=collector,
-        probe_category_slug=categories[0].slug,
-        target_date=target_date,
-        quotes_back=quotes_back,
+    target_dates_by_category = resolve_category_target_dates(
+        collector,
+        categories,
+        target_date,
+        quotes_back,
     )
     saved_files: list[Path] = []
 
     for category in categories:
-        for target_date in target_dates:
+        for target_date in target_dates_by_category[category.slug]:
             saved_files.append(collector._download_category(category.slug, target_date))
 
     return saved_files
@@ -571,9 +596,9 @@ def resolve_quotation_dates(
     expected_count = quotes_back + 1
     found_dates: list[date] = []
     candidate_date = target_date
-    max_calendar_days = max(expected_count * 4, 30)
+    max_attempts = max(expected_count * 4, 30)
 
-    for _ in range(max_calendar_days):
+    for _ in range(max_attempts):
         try:
             cotacoes = collector._collect_category(
                 probe_category_slug,
@@ -597,12 +622,46 @@ def resolve_quotation_dates(
         if len(found_dates) >= expected_count:
             return found_dates[:expected_count]
 
-        candidate_date -= timedelta(days=1)
+        candidate_date = (
+            min(quotation_dates) - timedelta(days=1)
+            if quotation_dates
+            else candidate_date - timedelta(days=1)
+        )
 
     raise RuntimeError(
         f"Nao foi possivel encontrar {expected_count} datas de cotacao "
-        f"em {max_calendar_days} dias corridos."
+        f"apos {max_attempts} tentativas."
     )
+
+
+def resolve_category_target_dates(
+    collector,
+    categories,
+    target_date: date | None,
+    quotes_back: int,
+) -> dict[str, list[date | None]]:
+    if getattr(collector, "category_specific_dates", False):
+        return {
+            category.slug: resolve_quotation_dates(
+                collector=collector,
+                probe_category_slug=category.slug,
+                target_date=target_date,
+                quotes_back=quotes_back,
+            )
+            for category in categories
+        }
+
+    target_dates = resolve_quotation_dates(
+        collector=collector,
+        probe_category_slug=categories[0].slug,
+        target_date=target_date,
+        quotes_back=quotes_back,
+    )
+
+    if collector.supports_target_dates:
+        print(f"datas: {format_target_dates(target_dates)}")
+
+    return {category.slug: target_dates for category in categories}
 
 
 def parse_target_date(value: str | None) -> date | None:
