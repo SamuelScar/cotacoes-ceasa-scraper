@@ -1,10 +1,139 @@
 # Pendencias
 
-## Versionamento dos dados
+## Dados compactados e Git LFS
 
-Definir um fluxo seguro para versionar a pasta `data/` compactada:
+A pasta `data/` deve manter a estrutura atual durante a execucao, mas ser
+versionada como um unico arquivo compactado para evitar milhares de raws no
+repositorio. Como esse arquivo crescera continuamente e cada alteracao de um
+arquivo binario pode aumentar muito o historico normal do Git, ele deve ser
+armazenado com Git LFS.
 
-- descompactar antes de comandos do container;
-- compactar novamente ao encerrar, inclusive em falhas ou interrupcoes;
-- ajustar o `.gitignore`;
-- substituir o arquivo compactado de forma atomica para evitar perda de dados.
+Fluxo proposto:
+
+1. Manter somente `data.tar.gz` versionado com Git LFS.
+2. Antes de executar um comando, descompactar o arquivo preservando
+   `data/cotacoes.sqlite`, `data/raw/` e suas subpastas.
+3. Executar o scraper normalmente, adicionando raws e registros ao banco
+   existente.
+4. Ao encerrar, inclusive em falhas ou interrupcoes, gerar um novo arquivo
+   compactado temporario.
+5. Validar o arquivo temporario e substituir `data.tar.gz` de forma atomica.
+6. Remover a pasta `data/` descompactada somente depois da substituicao.
+
+A implementacao deve fornecer um script unico para envolver os comandos
+existentes, por exemplo:
+
+```bash
+./scripts/cotacoes tudo
+./scripts/cotacoes baixar
+./scripts/cotacoes salvar
+./scripts/cotacoes app --source ceasa-pe --save
+```
+
+Cuidados necessarios:
+
+- usar um lock para impedir duas execucoes alterando o mesmo pacote;
+- nunca sobrescrever diretamente o arquivo compactado valido;
+- manter `data/` e arquivos compactados temporarios no `.gitignore`;
+- configurar `data.tar.gz` no `.gitattributes` para uso do Git LFS;
+- documentar a instalacao do Git LFS para quem clonar o repositorio;
+- acompanhar armazenamento e transferencia consumidos no provedor;
+- considerar armazenamento externo quando o volume deixar de ser adequado
+  ate mesmo para Git LFS.
+
+O Git LFS evita que o repositorio Git comum carregue os dados completos, mas
+continua armazenando cada versao enviada de `data.tar.gz`. Portanto, ele reduz
+o peso do clone normal, mas nao elimina o crescimento do armazenamento remoto.
+
+## Paralelismo entre fontes
+
+A coleta de todas as fontes atualmente ocorre de forma sequencial. Executar
+fontes independentes em paralelo pode reduzir bastante o tempo total, pois boa
+parte da execucao fica aguardando respostas HTTP.
+
+O paralelismo deve ocorrer somente entre fontes. As requisicoes internas de
+cada fonte devem continuar sequenciais para preservar cookies, navegacao,
+ordem de descoberta e o intervalo configurado entre requisicoes.
+
+Fluxo proposto:
+
+1. Criar uma fila com as fontes configuradas.
+2. Executar uma quantidade limitada de fontes simultaneamente.
+3. Manter um coletor e uma sessao HTTP isolados por fonte.
+4. Salvar cada raw imediatamente, como ocorre atualmente.
+5. Agrupar as falhas por fonte sem interromper as demais.
+6. Processar e persistir os raws depois do download paralelo.
+
+Exemplo de comando futuro:
+
+```bash
+docker compose run --rm baixar --workers 3
+docker compose run --rm tudo --workers 3
+```
+
+Cuidados necessarios:
+
+- iniciar com poucos workers e tornar o limite configuravel;
+- garantir que a saida identifique a fonte em todas as mensagens;
+- preservar delay, retry, `Retry-After` e interrupcao por bloqueio em cada
+  fonte;
+- evitar que duas tarefas escrevam o mesmo raw;
+- nao compartilhar coletores ou sessoes HTTP entre threads;
+- evitar escritas concorrentes no SQLite, preferindo uma fase unica de
+  persistencia depois dos downloads;
+- permitir cancelar a execucao e encerrar os workers corretamente;
+- medir o impacto antes de aumentar o paralelismo.
+
+O objetivo nao e aumentar agressivamente o numero de requisicoes para uma
+mesma CEASA. O ganho deve vir da espera simultanea por fontes diferentes.
+
+## Execucao continua como crawler
+
+Transformar o scraper em um crawler significa manter um processo responsavel
+por verificar periodicamente todas as fontes, coletar somente dados novos,
+persistir os resultados e continuar aguardando a proxima execucao.
+
+O crawler deve reutilizar os fluxos existentes em vez de implementar outra
+logica de coleta. Ele seria apenas responsavel por agendar e coordenar chamadas
+equivalentes ao comando `tudo`.
+
+Fluxo proposto:
+
+1. Iniciar o servico e validar configuracao, diretorios e banco.
+2. Executar uma rodada de download para as fontes agendadas.
+3. Processar os raws baixados e salvar somente registros novos.
+4. Registrar o resultado da rodada por fonte.
+5. Aguardar o proximo horario configurado.
+6. Encerrar de forma controlada ao receber um sinal do container.
+
+Exemplo de configuracao futura:
+
+```env
+COTACOES_CRAWLER_INTERVAL_MINUTES=60
+COTACOES_CRAWLER_WORKERS=3
+```
+
+Exemplo de servico futuro:
+
+```bash
+docker compose up crawler
+```
+
+Cuidados necessarios:
+
+- impedir que uma nova rodada comece antes da anterior terminar;
+- permitir frequencias diferentes para fontes com atualizacoes distintas;
+- manter a coleta idempotente para nao duplicar registros;
+- persistir o estado minimo necessario para retomar apos reinicio;
+- aplicar backoff maior quando uma fonte permanecer indisponivel;
+- registrar inicio, fim, duracao, arquivos baixados, registros novos e falhas
+  de cada rodada;
+- disponibilizar uma verificacao de saude para identificar processo travado;
+- encerrar corretamente durante compactacao, download ou persistencia;
+- separar erros temporarios de falhas que exigem manutencao do coletor.
+
+Antes de manter um processo Python permanentemente ativo, deve ser avaliada
+uma alternativa mais simples: executar `docker compose run --rm tudo` por
+agendamento externo, como cron ou systemd timer. Um servico crawler dedicado
+passa a ser interessante quando forem necessarios intervalos por fonte,
+retentativas coordenadas, estado persistente e observabilidade continua.
