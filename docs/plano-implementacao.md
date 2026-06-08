@@ -100,11 +100,14 @@ Tarefas futuras:
 
 ## TODO antes da coleta completa
 
-- [ ] Fazer uma revisao total do codigo, refatorando e melhorando a distribuicao de responsabilidades.
+- [x] Fazer uma revisao total do codigo, refatorando e melhorando a distribuicao de responsabilidades.
 - [ ] Revisar os metodos de coleta para reduzir o risco de bloqueio de IP durante o scraping.
-- [ ] Melhorar e reorganizar o layout das saidas do terminal para deixar a execucao mais clara.
+- [x] Melhorar e reorganizar o layout das saidas do terminal para deixar a execucao mais clara.
 - [ ] Revisar toda a documentacao, removendo conteudo inutil ou desatualizado e mantendo o que ajuda na operacao do projeto.
-- [ ] Fazer uma validacao completa antes de iniciar a coleta demorada, garantindo que fontes, processamento e persistencia funcionem corretamente.
+- [ ] Versionar a pasta `data/` compactada no Git, descompactando antes de qualquer comando do container e compactando novamente ao encerrar, inclusive em falhas ou interrupcoes; ajustar o `.gitignore` e garantir substituicao atomica do arquivo compactado para evitar perda de dados.
+- [x] Recriar o banco do zero usando os arquivos brutos disponiveis, evitando migracoes corretivas ou ajustes no banco atual.
+- [x] Fazer uma validacao completa antes de iniciar a coleta demorada, garantindo que fontes, processamento e persistencia funcionem corretamente.
+- [x] Revisar e reorganizar o modelo do banco, separando entrepostos, proveniencia, aliases de produto e apresentacoes de unidade.
 
 ## Decisoes iniciais
 

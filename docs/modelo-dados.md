@@ -1,177 +1,152 @@
 # Modelo de dados
 
-Este documento descreve o modelo de dados vigente do projeto.
-
-## Versao atual
-
-A versao atual usa SQLite com tabelas normalizadas:
-
-- `estados`
-- `ceasas`
-- `categorias`
-- `produtos`
-- `unidades`
-- `cotacoes`
+O banco SQLite separa a origem dos dados, a identidade comercial da cotacao e
+os valores observados em cada coleta.
 
 Arquivo padrao:
 
 - `data/cotacoes.sqlite`
 
-## estados
+## Tabelas
+
+### estados
 
 Representa os estados das fontes coletadas.
 
-| Campo | Tipo SQLite | Obrigatorio | Observacao |
-| --- | --- | --- | --- |
-| id | INTEGER | Sim | Chave primaria autoincremental |
-| nome | TEXT | Sim | Nome do estado |
-| uf | TEXT | Sim | Sigla do estado, unica |
+| Campo | Descricao |
+| --- | --- |
+| `id` | Chave primaria |
+| `nome` | Nome do estado |
+| `uf` | Sigla unica do estado |
 
-## ceasas
+### ceasas
 
-Representa cada fonte/central de abastecimento.
+Representa a fonte responsavel pela publicacao. Uma CEASA pode possuir varios
+entrepostos.
 
-| Campo | Tipo SQLite | Obrigatorio | Observacao |
-| --- | --- | --- | --- |
-| id | INTEGER | Sim | Chave primaria autoincremental |
-| estado_id | INTEGER | Sim | Referencia para `estados` |
-| slug | TEXT | Sim | Identificador da fonte, exemplo: `ceasa-pe` |
-| nome | TEXT | Sim | Nome da fonte, exemplo: `CEASA-PE` |
-| cidade | TEXT | Nao | Cidade da fonte |
-| url_origem | TEXT | Sim | URL base configurada para a fonte |
+| Campo | Descricao |
+| --- | --- |
+| `id` | Chave primaria |
+| `estado_id` | Estado da fonte |
+| `slug` | Identificador unico da fonte |
+| `nome` | Nome exibivel |
+| `url_origem` | URL base configurada |
 
-## categorias
+### entrepostos
 
-Representa categorias descobertas dentro de uma fonte.
+Representa o mercado ou unidade atendida por uma fonte. Cidade nao deve ser
+armazenada como categoria ou procedencia.
 
-| Campo | Tipo SQLite | Obrigatorio | Observacao |
-| --- | --- | --- | --- |
-| id | INTEGER | Sim | Chave primaria autoincremental |
-| ceasa_id | INTEGER | Sim | Referencia para `ceasas` |
-| slug | TEXT | Sim | Slug da categoria na fonte |
-| nome | TEXT | Sim | Nome exibivel da categoria |
+| Campo | Descricao |
+| --- | --- |
+| `id` | Chave primaria |
+| `ceasa_id` | Fonte responsavel |
+| `slug` | Identificador do entreposto dentro da fonte |
+| `nome` | Nome como informado pela fonte |
 
-A combinacao `ceasa_id + slug` e unica.
+### categorias
 
-## produtos
+Representa grupos de produtos, como `frutas` e `verduras`. Quando a fonte nao
+informa um grupo confiavel, usa-se `nao-informada`.
 
-Representa produtos encontrados nas cotacoes.
+| Campo | Descricao |
+| --- | --- |
+| `id` | Chave primaria |
+| `slug` | Identificador global unico |
 
-| Campo | Tipo SQLite | Obrigatorio | Observacao |
-| --- | --- | --- | --- |
-| id | INTEGER | Sim | Chave primaria autoincremental |
-| nome_original | TEXT | Sim | Nome como aparece na fonte |
-| nome_normalizado | TEXT | Sim | Nome simples para comparacao inicial |
+### produtos e produto_aliases
 
-A combinacao `nome_original + nome_normalizado` e unica.
+`produtos` guarda o nome normalizado usado para comparacao. `produto_aliases`
+preserva cada nome original encontrado nas fontes.
 
-## unidades
-
-Representa somente medidas canonicas.
-
-| Campo | Tipo SQLite | Obrigatorio | Observacao |
-| --- | --- | --- | --- |
-| id | INTEGER | Sim | Chave primaria autoincremental |
-| sigla | TEXT | Sim | Sigla canonica, como `kg`, `g`, `l`, `ml`, `un`, `dz` ou `cento` |
-| descricao | TEXT | Nao | Descricao canonica da medida |
-
-Embalagem e quantidade nao fazem parte da sigla. Por exemplo, `Cx.25Kg`,
-`Fardo.5 Kg` e `Saco 25Kg` apontam para a unidade canonica `kg`. Os detalhes
-comerciais ficam na propria cotacao.
-
-Quando a fonte informa somente uma embalagem sem medida, como `CX`, a cotacao
-fica sem `unidade_id`. A embalagem e o texto original continuam preservados sem
-inventar peso ou volume.
-
-## cotacoes
-
-Representa cada registro de preco coletado.
-
-| Campo | Tipo SQLite | Obrigatorio | Observacao |
-| --- | --- | --- | --- |
-| id | INTEGER | Sim | Chave primaria autoincremental |
-| chave_unica | TEXT | Sim | Hash usado para evitar duplicidade |
-| ceasa_id | INTEGER | Sim | Referencia para `ceasas` |
-| categoria_id | INTEGER | Sim | Referencia para `categorias` |
-| produto_id | INTEGER | Sim | Referencia para `produtos` |
-| unidade_id | INTEGER | Nao | Referencia para a medida canonica em `unidades` |
-| unidade_original | TEXT | Nao | Texto de unidade exatamente como veio da fonte |
-| unidade_normalizada | TEXT | Nao | Representacao comercial limpa e legivel |
-| embalagem | TEXT | Nao | Embalagem identificada, como `caixa`, `saco` ou `fardo` |
-| quantidade_minima | NUMERIC | Nao | Quantidade, peso ou volume minimo identificado |
-| quantidade_maxima | NUMERIC | Nao | Limite superior quando a fonte informa uma faixa |
-| detalhe_unidade | TEXT | Nao | Informacao restante que nao pertence aos outros campos |
-| data_cotacao | TEXT | Nao | Data da cotacao em formato ISO `YYYY-MM-DD` |
-| preco_minimo | NUMERIC | Nao | Preco minimo sem simbolo de moeda |
-| preco_comum | NUMERIC | Nao | Preco comum ou mais frequente |
-| preco_maximo | NUMERIC | Nao | Preco maximo |
-| procedencia | TEXT | Nao | Procedencia informada pela fonte |
-| classificacao | TEXT | Nao | Tipo, classificacao ou variedade |
-| situacao_mercado | TEXT | Nao | Situacao do mercado informada pela fonte |
-| fonte_complemento | TEXT | Nao | Fonte secundaria usada para preencher campos vazios, quando houver |
-| url_complemento | TEXT | Nao | URL da fonte secundaria usada no complemento |
-| data_complemento | TEXT | Nao | Data e hora em que o complemento foi aplicado |
-| data_coleta | TEXT | Sim | Data e hora em que o scraper salvou o registro |
-| url_origem | TEXT | Sim | URL exata usada na coleta |
-
-## Chave unica
-
-A coluna `chave_unica` evita duplicar cotacoes iguais em execucoes repetidas.
-
-Ela considera:
-
-- CEASA.
-- Categoria.
-- Produto.
-- Unidade.
-- Procedencia.
-- Classificacao.
-- Data da cotacao.
-- Precos.
-- Situacao de mercado.
-- URL de origem.
-
-## Banco local
-
-Se existir um banco antigo com a tabela unica `cotacoes`, o scraper interrompe a gravacao e informa que o arquivo deve ser excluido para recriar o schema relacional.
-
-Nao existe backup automatico. A pasta `data/` e ignorada pelo Git e pode ser removida localmente quando for necessario recriar o banco.
-
-## Regras de normalizacao atuais
-
-- Precos sao convertidos para numero decimal.
-- Datas sao convertidas para `date` e salvas no SQLite como texto ISO.
-- Textos vazios viram `NULL`.
-- O nome original do produto e preservado.
-- O nome normalizado ainda e simples: minusculo e sem espacos duplicados.
-- A unidade original e preservada em `cotacoes.unidade_original`.
-- Medida, embalagem, quantidade e detalhe sao separados durante a gravacao.
-- Procedencia e classificacao ficam como vierem da fonte.
-
-## Normalizacao de unidades
-
-O normalizador separa o texto bruto da unidade em partes consultaveis:
-
-| Campo | Exemplo | Observacao |
+| Tabela | Campo principal | Descricao |
 | --- | --- | --- |
-| unidade_original | `Cx.20-Kg` | Valor exatamente como veio da fonte |
-| unidade_normalizada | `caixa 20 kg` | Texto comercial limpo para exibicao |
-| embalagem | `caixa` | Tipo de embalagem, quando existir |
-| quantidade_minima | `20` | Quantidade, peso ou volume minimo identificado |
-| quantidade_maxima | `23` | Usado em faixas como `20a23Kg` |
-| unidades.sigla | `kg` | Medida base referenciada por `unidade_id` |
-| detalhe_unidade | `tp1` | Sobra util que nao se encaixa nos campos anteriores |
+| `produtos` | `nome_normalizado` | Nome comparavel entre fontes |
+| `produto_aliases` | `nome_original` | Nome exatamente como veio da fonte |
 
-Exemplos:
+A normalizacao de produto ainda e conservadora: minusculas e espacos
+duplicados removidos. Equivalencias mais agressivas devem ser criadas somente
+quando houver evidencia.
 
-| Original | Normalizada | Embalagem | Quantidade minima | Quantidade maxima | Unidade canonica |
-| --- | --- | --- | ---: | ---: | --- |
-| `Kg` | `kg` |  | 1 |  | `kg` |
-| `Cx.20Kg` | `caixa 20 kg` | `caixa` | 20 |  | `kg` |
-| `Cx .20a23Kg` | `caixa 20 a 23 kg` | `caixa` | 20 | 23 | `kg` |
-| `Cx.30 Dz` | `caixa 30 dz` | `caixa` | 30 |  | `dz` |
-| `Molho 0,350 Kg` | `molho 0.35 kg` | `molho` | 0.350 |  | `kg` |
-| `50 Espigas` | `50 espiga` |  | 50 |  | `espiga` |
+### unidades e apresentacoes_unidade
 
-Valores nao reconhecidos ficam sem `unidade_id` e permanecem registrados em
-`unidade_original` e `detalhe_unidade` para revisao.
+`unidades` guarda medidas canonicas. `apresentacoes_unidade` preserva a forma
+comercial completa encontrada na fonte.
+
+| Campo em `apresentacoes_unidade` | Exemplo |
+| --- | --- |
+| `unidade_original` | `Cx.20Kg` |
+| `unidade_normalizada` | `caixa 20 kg` |
+| `embalagem` | `caixa` |
+| `quantidade_minima` | `20` |
+| `quantidade_maxima` | `23` em uma faixa |
+| `detalhe_unidade` | Texto restante util |
+
+Apresentacoes iguais sao reutilizadas entre cotacoes. Valores nao reconhecidos
+continuam preservados mesmo sem unidade canonica.
+
+### coletas
+
+Registra a proveniencia de cada processamento.
+
+| Campo | Descricao |
+| --- | --- |
+| `chave_unica` | Identidade tecnica da coleta |
+| `ceasa_id` | Fonte processada |
+| `arquivo_raw` | Caminho do arquivo bruto, quando existir |
+| `hash_raw` | SHA-256 do conteudo bruto |
+| `url_origem` | URL representada pela coleta |
+| `baixado_em` | Data extraida do nome do raw |
+| `processado_em` | Momento do processamento |
+
+Ao reconstruir o banco pelos arquivos ativos, cotacoes do mesmo raw apontam
+para a mesma coleta. Reprocessar o mesmo arquivo nao cria outra coleta.
+
+### cotacoes
+
+Representa os valores observados para uma identidade comercial em uma coleta.
+
+| Campo | Obrigatorio | Descricao |
+| --- | --- | --- |
+| `chave_unica` | Sim | Identifica uma versao observada |
+| `chave_identidade` | Sim | Identifica a cotacao sem considerar coleta e precos |
+| `coleta_id` | Sim | Proveniencia do registro |
+| `entreposto_id` | Nao | Mercado ao qual o preco pertence |
+| `categoria_id` | Sim | Grupo de produtos |
+| `produto_alias_id` | Sim | Nome original ligado ao produto normalizado |
+| `apresentacao_unidade_id` | Nao | Unidade e embalagem informadas |
+| `data_cotacao` | Sim | Data ISO `YYYY-MM-DD` |
+| `preco_minimo` | Nao | Preco minimo nao negativo |
+| `preco_comum` | Nao | Preco comum nao negativo |
+| `preco_maximo` | Nao | Preco maximo nao negativo |
+| `procedencia` | Nao | Origem do produto |
+| `classificacao` | Nao | Tipo, variedade ou classificacao |
+| `situacao_mercado` | Nao | Situacao informada pela fonte |
+| `fonte_complemento` | Nao | Fonte secundaria utilizada |
+| `url_complemento` | Nao | URL da fonte secundaria |
+| `data_complemento` | Nao | Momento do complemento |
+
+## Identidade e versoes
+
+`chave_identidade` considera fonte, entreposto, categoria, produto
+normalizado, apresentacao, procedencia, classificacao e data da cotacao.
+
+`chave_unica` acrescenta a coleta, os precos e a situacao de mercado. Assim:
+
+- Reprocessar o mesmo raw nao duplica registros.
+- Publicacoes diferentes para a mesma identidade permanecem auditaveis.
+- Cotacoes semelhantes de entrepostos diferentes nao sao misturadas.
+
+## Integridade
+
+- Datas ausentes e cotacoes sem nenhum preco nao sao persistidas.
+- Precos negativos sao rejeitados.
+- A ordem entre minimo, comum e maximo nao e alterada automaticamente.
+- Chaves estrangeiras sao ativadas durante a gravacao.
+- Indices atendem consultas por coleta, entreposto/data, categoria/data,
+  produto/data e identidade.
+- IDs usam `INTEGER PRIMARY KEY`, sem `AUTOINCREMENT`.
+- Insercoes tratam somente conflitos esperados por chave unica.
+
+Nao existe conversao de bancos antigos. Quando o schema mudar, o arquivo
+SQLite deve ser excluido e reconstruido a partir dos arquivos brutos ativos.

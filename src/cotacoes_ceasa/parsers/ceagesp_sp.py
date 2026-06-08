@@ -1,6 +1,5 @@
 import json
 import re
-import unicodedata
 from datetime import date
 
 from bs4 import BeautifulSoup
@@ -8,7 +7,11 @@ from bs4 import BeautifulSoup
 from cotacoes_ceasa.models import Category, Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
 from cotacoes_ceasa.normalizers.money import parse_brl_money
-from cotacoes_ceasa.normalizers.text import clean_text
+from cotacoes_ceasa.normalizers.text import (
+    clean_text,
+    normalize_key as _normalize_key,
+    slugify as _slugify,
+)
 
 
 GROUPS_PATTERN = re.compile(r"var\s+Grupos\s*=\s*(\{.+?\});", re.DOTALL)
@@ -114,17 +117,3 @@ class CeagespSpParser:
         match = RESULT_DATE_PATTERN.search(value)
 
         return parse_br_date(match.group(1)) if match is not None else None
-
-
-def _normalize_key(value: str | None) -> str:
-    return re.sub(r"[^a-z0-9]+", "", _strip_accents(value or "").lower())
-
-
-def _slugify(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", _strip_accents(value).lower()).strip("-")
-
-
-def _strip_accents(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-
-    return normalized.encode("ascii", "ignore").decode("ascii")

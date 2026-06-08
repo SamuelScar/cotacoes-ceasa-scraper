@@ -1,8 +1,6 @@
 import re
-import unicodedata
 from dataclasses import dataclass
 from datetime import date
-from io import BytesIO
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -10,7 +8,12 @@ from bs4 import BeautifulSoup
 from cotacoes_ceasa.models import Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
 from cotacoes_ceasa.normalizers.money import parse_brl_money
-from cotacoes_ceasa.normalizers.text import clean_text
+from cotacoes_ceasa.normalizers.text import (
+    clean_text,
+    normalize_key as _normalize_key,
+    slugify as _slugify,
+)
+from cotacoes_ceasa.parsers.pdf import extract_pdf_text
 
 
 DATE_PATTERN = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")
@@ -70,7 +73,7 @@ class CeasaBaParser:
         url_origem: str,
     ) -> list[Cotacao]:
         text = (
-            self._extract_pdf_text(content)
+            extract_pdf_text(content)
             if isinstance(content, bytes)
             else content
         )
@@ -150,26 +153,6 @@ class CeasaBaParser:
             url_origem=url_origem,
         )
 
-    def _extract_pdf_text(self, content: bytes) -> str:
-        try:
-            from pypdf import PdfReader
-        except ModuleNotFoundError as error:
-            raise RuntimeError(
-                "Dependencia pypdf nao instalada. "
-                "Instale as dependencias atualizadas do projeto."
-            ) from error
-
-        reader = PdfReader(BytesIO(content))
-        texts: list[str] = []
-
-        for page in reader.pages:
-            try:
-                texts.append(page.extract_text(extraction_mode="layout") or "")
-            except TypeError:
-                texts.append(page.extract_text() or "")
-
-        return "\n".join(texts)
-
     def _extract_quote_date(self, text: str) -> date | None:
         match = re.search(r"EMISS[AÃ]O\s*:\s*(\d{2}/\d{2}/\d{4})", text)
 
@@ -179,17 +162,3 @@ class CeasaBaParser:
         key = _normalize_key(value)
 
         return _slugify(value) if key in CATEGORY_KEYS else None
-
-
-def _normalize_key(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", _strip_accents(value).lower())
-
-
-def _slugify(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", _strip_accents(value).lower()).strip("-")
-
-
-def _strip_accents(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-
-    return normalized.encode("ascii", "ignore").decode("ascii")

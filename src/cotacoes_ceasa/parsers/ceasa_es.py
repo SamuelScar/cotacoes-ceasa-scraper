@@ -1,6 +1,5 @@
 import json
 import re
-import unicodedata
 from dataclasses import dataclass
 from datetime import date
 
@@ -9,7 +8,7 @@ from bs4 import BeautifulSoup
 from cotacoes_ceasa.models import Category, Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
 from cotacoes_ceasa.normalizers.money import parse_brl_money
-from cotacoes_ceasa.normalizers.text import clean_text
+from cotacoes_ceasa.normalizers.text import clean_text, slugify as _slugify
 
 
 RESULT_DATE_PATTERN = re.compile(r"Data Pesquisada:\s*(\d{2}/\d{2}/\d{4})")
@@ -130,7 +129,7 @@ class CeasaEsParser:
             cotacoes.append(
                 Cotacao(
                     fonte="CEASA-ES",
-                    categoria=category_slug,
+                    categoria="nao-informada",
                     produto=product,
                     unidade=self._find_field_text(row, "embdesresu"),
                     procedencia=None,
@@ -147,6 +146,7 @@ class CeasaEsParser:
                     situacao_mercado=self._find_field_text(row, "mersit"),
                     data_cotacao=data_cotacao,
                     url_origem=url_origem,
+                    entreposto=category_slug,
                 )
             )
 
@@ -173,10 +173,3 @@ class CeasaEsParser:
         field = row.select_one(f".css_{field_name}_grid_line")
 
         return clean_text(field.get_text(" ", strip=True)) if field is not None else None
-
-
-def _slugify(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
-
-    return re.sub(r"[^a-z0-9]+", "-", ascii_value.lower()).strip("-")

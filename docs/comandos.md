@@ -2,6 +2,41 @@
 
 Comandos principais para preparar o ambiente e executar o scraper.
 
+## Como ler a saida
+
+A CLI organiza cada execucao em cabecalho, etapas e resumo final. As mensagens
+usam niveis fixos para facilitar a identificacao do que aconteceu:
+
+- `[INFO]`: etapa iniciada ou contexto da execucao.
+- `[OK]`: etapa concluida com sucesso.
+- `[AVISO]`: problema pontual que nao interrompeu toda a execucao.
+- `[ERRO]`: problema que encerrou a execucao.
+
+Exemplo resumido:
+
+```text
+========================================================================
+COTACOES CEASA
+========================================================================
+Operacao      : Processar arquivos brutos
+Fonte         : CEASA-MG (ceasa-mg)
+Diretorio raw : data/raw
+Banco         : data/cotacoes.sqlite
+
+-- Processamento de arquivos brutos ------------------------------------
+[INFO ] 3 arquivo(s) encontrado(s) em data/raw/ceasa-mg.
+[OK   ] frutas_20260607_120000.html | 120 cotacoes.
+
+-- Persistencia --------------------------------------------------------
+[OK   ] 120 registro(s) novo(s) salvo(s).
+
+-- Resumo --------------------------------------------------------------
+[OK   ] Execucao concluida sem avisos.
+Cotacoes processadas : 120
+Registros novos      : 120
+Banco                : data/cotacoes.sqlite
+```
+
 ## Preparar ambiente
 
 Criar `.env` local:
@@ -28,6 +63,25 @@ Processar os arquivos brutos baixados e salvar no SQLite:
 docker compose run --rm banco
 ```
 
+O servico `banco` processa somente a fonte configurada em `COTACOES_SOURCE`.
+
+### Recriar o banco completo
+
+Quando o schema ou uma regra de normalizacao mudar, exclua o SQLite atual e
+reprocesse os raws ativos de todas as fontes:
+
+```powershell
+Remove-Item data\cotacoes.sqlite
+
+Get-ChildItem data\raw -Directory | ForEach-Object {
+    docker compose run --rm app --source $_.Name --process-raw
+}
+```
+
+O projeto nao migra estruturas antigas. A reconstrucao considera somente os
+arquivos diretamente em `data/raw/<fonte>/`; arquivos em `old/` e `.zip` ficam
+fora do processamento.
+
 Baixar, processar e salvar no SQLite em um unico comando:
 
 ```bash
@@ -50,16 +104,6 @@ docker compose run --rm complementar-prohort
 
 Esse comando deve ser executado depois dos scrapers individuais. Ele le o banco SQLite, baixa o `ProhortDiario.txt` e preenche `preco_comum` vazio quando encontra correspondencia confiavel por CEASA, data, produto e unidade. Dados ja preenchidos nao sao sobrescritos. Se o PROHORT tiver um produto do mesmo dia e da mesma CEASA que a fonte principal nao trouxe, o comando insere uma cotacao complementar marcada com `fonte_complemento = prohort`. Quando a categoria da fonte principal nao for conhecida, a cotacao entra na categoria `prohort-complemento`.
 
-Normalizar unidades ja salvas no banco:
-
-```bash
-docker compose run --rm normalizar-unidades
-```
-
-Esse comando preserva a unidade original em cada cotacao, separa medida
-canonica, embalagem, quantidade e detalhe, e remove da tabela `unidades` as
-variacoes brutas que deixaram de ser usadas.
-
 ## Comandos avancados
 
 Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
@@ -74,7 +118,6 @@ Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
 - `--quotes-back`: coleta tambem datas anteriores a data limite, quando a fonte suporta historico.
 - `--process-raw`: processa arquivos brutos ja salvos em `data/raw`, sem acessar a internet.
 - `--complement-prohort`: complementa cotacoes ja salvas usando o PROHORT, sem sobrescrever campos preenchidos.
-- `--normalize-units`: normaliza unidades ja salvas e remove variacoes brutas sem uso.
 - `--raw-dir`: define outra pasta para ler ou salvar arquivos brutos.
 - `--database-path`: define outro arquivo SQLite para salvar os registros.
 - `--base-url`: sobrescreve temporariamente a URL base da fonte configurada.
@@ -138,14 +181,6 @@ docker compose run --rm app --source ceasa-rj --save
 
 Na CEASA-RJ, o scraper navega pelas paginas de ano e mes para encontrar o PDF diario mais recente. A fonte suporta `--target-date` e `--quotes-back`.
 
-Resultado observado em 2026-06-06:
-
-```text
-datas: ultima disponivel
-cotacao-diaria: 155 cotacoes
-total: 155 cotacoes extraidas.
-```
-
 Exemplo para CEASA-BA:
 
 ```bash
@@ -154,14 +189,6 @@ docker compose run --rm app --source ceasa-ba --save
 
 Na CEASA-BA, o scraper encontra os PDFs diarios na lista historica da pagina oficial. A fonte suporta `--target-date` e `--quotes-back`.
 
-Resultado observado em 2026-06-06:
-
-```text
-datas: ultima disponivel
-boletim-diario: 98 cotacoes
-total: 98 cotacoes extraidas.
-```
-
 Exemplo para CEASA-DF:
 
 ```bash
@@ -169,13 +196,6 @@ docker compose run --rm app --source ceasa-df --save
 ```
 
 Na CEASA-DF, o scraper coleta o boletim SIMA atual publicado na pagina oficial. A fonte nao suporta `--quotes-back`.
-
-Resultado observado em 2026-06-06:
-
-```text
-sima: 91 cotacoes
-total: 91 cotacoes extraidas.
-```
 
 Exemplo para CEAGESP-SP:
 
@@ -186,18 +206,6 @@ docker compose run --rm app --source ceagesp-sp --save
 Na CEAGESP-SP, o scraper consulta todas as categorias disponiveis para a capital. A fonte suporta `--target-date` e `--quotes-back`.
 
 A pagina publica apenas uma janela recente de datas por categoria. O `--quotes-back` fica limitado a essas datas disponiveis.
-
-Resultado observado em 2026-06-06:
-
-```text
-diversos: 34 cotacoes
-flores: 58 cotacoes
-frutas: 214 cotacoes
-legumes: 118 cotacoes
-pescados: 56 cotacoes
-verduras: 77 cotacoes
-total: 557 cotacoes extraidas.
-```
 
 ## Verificar CLI
 
@@ -239,12 +247,6 @@ Extrair todas as categorias descobertas:
 docker compose run --rm app --parse
 ```
 
-Resultado observado em 2026-06-01:
-
-```text
-total: 326 cotacoes extraidas.
-```
-
 ## Salvar no SQLite
 
 Baixar, extrair e salvar todas as categorias descobertas:
@@ -257,23 +259,6 @@ Baixar, extrair e salvar uma data especifica:
 
 ```bash
 docker compose run --rm app --target-date 29/05/2026 --save
-```
-
-Resultado observado para 29/05/2026:
-
-```text
-datas: 2026-05-29
-aves-e-ovos: 9 cotacoes
-carnes-e-laticinios: 15 cotacoes
-cereais-e-diversos: 16 cotacoes
-flores 2026-05-29: erro - Tabela de cotacoes da CEASA-PE nao encontrada.
-flores: 0 cotacoes
-frutas: 83 cotacoes
-hortalicas: 81 cotacoes
-organicos 2026-05-29: erro - Tabela de cotacoes da CEASA-PE nao encontrada.
-organicos: 0 cotacoes
-pescados: 12 cotacoes
-total: 216 cotacoes extraidas. 216 registros novos salvos em data/cotacoes.sqlite.
 ```
 
 Baixar, extrair e salvar datas de cotacao anteriores:
@@ -302,14 +287,6 @@ Nesse caso, o scraper coleta `29/05/2026` e mais 30 datas de cotacao anteriores 
 
 Quando uma categoria nao tem tabela para uma data, o erro e exibido e as outras categorias continuam sendo processadas.
 
-Resultado observado em 2026-06-01:
-
-```text
-total: 326 cotacoes extraidas. 317 registros novos salvos em data/cotacoes.sqlite.
-```
-
-Os 317 registros novos ocorreram porque 9 registros ja tinham sido salvos em um teste anterior.
-
 O caminho padrao do banco vem do `.env`:
 
 ```env
@@ -337,7 +314,7 @@ docker compose run --rm --entrypoint python app -c "import sqlite3; con=sqlite3.
 Consultar alguns registros:
 
 ```bash
-docker compose run --rm --entrypoint python app -c "import sqlite3; con=sqlite3.connect('data/cotacoes.sqlite'); rows=con.execute('select c.nome, ca.slug, p.nome_original, u.sigla, co.preco_comum, co.data_cotacao from cotacoes co join ceasas c on c.id = co.ceasa_id join categorias ca on ca.id = co.categoria_id join produtos p on p.id = co.produto_id left join unidades u on u.id = co.unidade_id limit 5').fetchall(); [print(row) for row in rows]"
+docker compose run --rm --entrypoint python app -c "import sqlite3; con=sqlite3.connect('data/cotacoes.sqlite'); rows=con.execute('select ce.nome, en.nome, ca.slug, pa.nome_original, u.sigla, co.preco_comum, co.data_cotacao from cotacoes co join coletas cl on cl.id=co.coleta_id join ceasas ce on ce.id=cl.ceasa_id left join entrepostos en on en.id=co.entreposto_id join categorias ca on ca.id=co.categoria_id join produto_aliases pa on pa.id=co.produto_alias_id left join apresentacoes_unidade au on au.id=co.apresentacao_unidade_id left join unidades u on u.id=au.unidade_id limit 5').fetchall(); [print(row) for row in rows]"
 ```
 
 Coletar e salvar a ultima cotacao da CEASA-ES:

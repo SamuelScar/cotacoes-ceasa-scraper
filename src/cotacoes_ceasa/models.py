@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 
@@ -27,3 +27,10 @@ class Cotacao:
     preco_maximo: Decimal | None
     situacao_mercado: str | None
     url_origem: str
+    entreposto: str | None = None
+    arquivo_raw: str | None = None
+    hash_raw: str | None = None
+    baixado_em: datetime | None = None
+    fonte_complemento: str | None = None
+    url_complemento: str | None = None
+    data_complemento: datetime | None = None

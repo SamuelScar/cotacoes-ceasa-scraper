@@ -1,5 +1,4 @@
 import csv
-import hashlib
 import io
 import re
 import sqlite3
@@ -10,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from cotacoes_ceasa.normalizers.unit import NormalizedUnit, normalize_unit
+from cotacoes_ceasa.models import Cotacao
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 
 
@@ -56,6 +55,7 @@ class _SavedCotacao:
     id: int
     ceasa_id: int
     source_slug: str
+    market_slug: str | None
     category_slug: str
     product_name: str
     unit: str | None
@@ -67,6 +67,8 @@ class _SavedCotacao:
 @dataclass(frozen=True)
 class _FallbackDestination:
     ceasa_id: int
+    source_slug: str
+    market_slug: str | None
     category_slug: str
     procedencia: str | None
 
@@ -91,6 +93,7 @@ class ProhortComplementer:
         SQLiteStorage(self.database_path).ensure_schema()
 
         with sqlite3.connect(self.database_path) as connection:
+            connection.execute("PRAGMA foreign_keys = ON")
             saved_cotacoes = self._fetch_saved_cotacoes(connection)
             targets = [
                 cotacao
@@ -152,19 +155,24 @@ class ProhortComplementer:
             """
             SELECT
                 co.id,
-                co.ceasa_id,
+                col.ceasa_id,
                 ce.slug,
+                en.slug,
                 ca.slug,
-                p.nome_original,
-                COALESCE(co.unidade_original, u.sigla),
+                pa.nome_original,
+                COALESCE(au.unidade_original, u.sigla),
                 co.data_cotacao,
                 co.procedencia,
                 co.preco_comum
             FROM cotacoes co
-            JOIN ceasas ce ON ce.id = co.ceasa_id
+            JOIN coletas col ON col.id = co.coleta_id
+            JOIN ceasas ce ON ce.id = col.ceasa_id
+            LEFT JOIN entrepostos en ON en.id = co.entreposto_id
             JOIN categorias ca ON ca.id = co.categoria_id
-            JOIN produtos p ON p.id = co.produto_id
-            LEFT JOIN unidades u ON u.id = co.unidade_id
+            JOIN produto_aliases pa ON pa.id = co.produto_alias_id
+            LEFT JOIN apresentacoes_unidade au
+                ON au.id = co.apresentacao_unidade_id
+            LEFT JOIN unidades u ON u.id = au.unidade_id
             WHERE co.data_cotacao IS NOT NULL
             """
         ).fetchall()
@@ -174,12 +182,13 @@ class ProhortComplementer:
                 id=int(row[0]),
                 ceasa_id=int(row[1]),
                 source_slug=row[2],
-                category_slug=row[3],
-                product_name=row[4],
-                unit=row[5],
-                quote_date=date.fromisoformat(row[6]),
-                procedencia=row[7],
-                preco_comum=row[8],
+                market_slug=row[3],
+                category_slug=row[4],
+                product_name=row[5],
+                unit=row[6],
+                quote_date=date.fromisoformat(row[7]),
+                procedencia=row[8],
+                preco_comum=row[9],
             )
             for row in rows
         ]
@@ -271,20 +280,12 @@ class ProhortComplementer:
         self,
         cotacao: _SavedCotacao,
     ) -> _FallbackDestination:
-        category_slug = "prohort-complemento"
-        procedencia = None
-
-        if cotacao.source_slug == "ceasa-pr":
-            category_slug = cotacao.category_slug
-
-        if cotacao.source_slug == "ceasa-mg":
-            category_slug = cotacao.category_slug
-            procedencia = cotacao.procedencia
-
         return _FallbackDestination(
             ceasa_id=cotacao.ceasa_id,
-            category_slug=category_slug,
-            procedencia=procedencia,
+            source_slug=cotacao.source_slug,
+            market_slug=cotacao.market_slug,
+            category_slug="prohort-complemento",
+            procedencia=None,
         )
 
     def _resolve_prohort_ceasa_name(self, target: _SavedCotacao) -> str | None:
@@ -292,10 +293,10 @@ class ProhortComplementer:
             return SOURCE_CEASA_NAMES[target.source_slug]
 
         if target.source_slug == "ceasa-pr":
-            return CEASA_PR_CATEGORIES.get(target.category_slug)
+            return CEASA_PR_CATEGORIES.get(target.market_slug or "")
 
-        if target.source_slug == "ceasa-mg" and target.procedencia:
-            return CEASA_MG_PROCEDENCIAS.get(normalize_text(target.procedencia))
+        if target.source_slug == "ceasa-mg" and target.market_slug:
+            return CEASA_MG_PROCEDENCIAS.get(normalize_text(target.market_slug))
 
         return None
 
@@ -413,200 +414,32 @@ class ProhortComplementer:
         unit: str,
         price: Decimal,
     ) -> int:
-        categoria_id = self._get_or_create_categoria(
-            connection,
-            destination.ceasa_id,
-            destination.category_slug,
-        )
-        produto_id = self._get_or_create_produto(connection, product_name)
-        normalized_unit = normalize_unit(unit)
-        unidade_id = self._get_or_create_unidade(connection, normalized_unit)
-        data_coleta = datetime.now().isoformat(timespec="seconds")
-        unique_key = self._build_unique_key(
-            ceasa_id=destination.ceasa_id,
-            category_slug=destination.category_slug,
-            product_name=product_name,
-            unit=unit,
+        now = datetime.now()
+        cotacao = Cotacao(
+            fonte="PROHORT",
+            categoria=destination.category_slug,
+            produto=product_name,
+            unidade=unit,
             procedencia=destination.procedencia,
-            quote_date=quote_date,
-            price=price,
+            classificacao=None,
+            data_cotacao=quote_date,
+            preco_minimo=None,
+            preco_comum=price,
+            preco_maximo=None,
+            situacao_mercado=None,
+            url_origem=self.prohort_url,
+            entreposto=destination.market_slug,
+            fonte_complemento="prohort",
+            url_complemento=self.prohort_url,
+            data_complemento=now,
         )
-        cursor = connection.execute(
-            """
-            INSERT OR IGNORE INTO cotacoes (
-                chave_unica,
-                ceasa_id,
-                categoria_id,
-                produto_id,
-                unidade_id,
-                unidade_original,
-                unidade_normalizada,
-                embalagem,
-                quantidade_minima,
-                quantidade_maxima,
-                detalhe_unidade,
-                data_cotacao,
-                preco_minimo,
-                preco_comum,
-                preco_maximo,
-                procedencia,
-                classificacao,
-                situacao_mercado,
-                fonte_complemento,
-                url_complemento,
-                data_complemento,
-                data_coleta,
-                url_origem
-            )
-            VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-            )
-            """,
-            (
-                unique_key,
-                destination.ceasa_id,
-                categoria_id,
-                produto_id,
-                unidade_id,
-                normalized_unit.original,
-                normalized_unit.normalized,
-                normalized_unit.packaging,
-                self._decimal_to_db(normalized_unit.quantity_min),
-                self._decimal_to_db(normalized_unit.quantity_max),
-                normalized_unit.detail,
-                quote_date.isoformat(),
-                None,
-                str(price),
-                None,
-                destination.procedencia,
-                None,
-                None,
-                "prohort",
-                self.prohort_url,
-                data_coleta,
-                data_coleta,
-                self.prohort_url,
-            ),
+        return SQLiteStorage(self.database_path).insert_cotacoes(
+            connection=connection,
+            cotacoes=[cotacao],
+            ceasa_id=destination.ceasa_id,
+            source_slug=destination.source_slug,
+            default_market=destination.market_slug or "Varias cidades",
         )
-
-        return cursor.rowcount
-
-    def _get_or_create_categoria(
-        self,
-        connection: sqlite3.Connection,
-        ceasa_id: int,
-        slug: str,
-    ) -> int:
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO categorias (
-                ceasa_id,
-                slug,
-                nome
-            )
-            VALUES (?, ?, ?)
-            """,
-            (ceasa_id, slug, slug.replace("-", " ").title()),
-        )
-
-        row = connection.execute(
-            "SELECT id FROM categorias WHERE ceasa_id = ? AND slug = ?",
-            (ceasa_id, slug),
-        ).fetchone()
-
-        if row is None:
-            raise RuntimeError(f"Categoria nao encontrada apos insert: {slug}")
-
-        return int(row[0])
-
-    def _get_or_create_produto(
-        self,
-        connection: sqlite3.Connection,
-        product_name: str,
-    ) -> int:
-        normalized_name = " ".join(product_name.lower().split())
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO produtos (
-                nome_original,
-                nome_normalizado
-            )
-            VALUES (?, ?)
-            """,
-            (product_name, normalized_name),
-        )
-
-        row = connection.execute(
-            """
-            SELECT id
-            FROM produtos
-            WHERE nome_original = ? AND nome_normalizado = ?
-            """,
-            (product_name, normalized_name),
-        ).fetchone()
-
-        if row is None:
-            raise RuntimeError(f"Produto nao encontrado apos insert: {product_name}")
-
-        return int(row[0])
-
-    def _get_or_create_unidade(
-        self,
-        connection: sqlite3.Connection,
-        unit: NormalizedUnit,
-    ) -> int:
-        if unit.symbol is None:
-            raise RuntimeError("Unidade do PROHORT nao informada")
-
-        connection.execute(
-            "INSERT OR IGNORE INTO unidades (sigla, descricao) VALUES (?, ?)",
-            (unit.symbol, unit.description),
-        )
-        connection.execute(
-            "UPDATE unidades SET descricao = ? WHERE sigla = ?",
-            (unit.description, unit.symbol),
-        )
-        row = connection.execute(
-            "SELECT id FROM unidades WHERE sigla = ?",
-            (unit.symbol,),
-        ).fetchone()
-
-        if row is None:
-            raise RuntimeError(f"Unidade nao encontrada apos insert: {unit.symbol}")
-
-        return int(row[0])
-
-    def _decimal_to_db(self, value: Decimal | None) -> str | None:
-        return str(value) if value is not None else None
-
-    def _build_unique_key(
-        self,
-        ceasa_id: int,
-        category_slug: str,
-        product_name: str,
-        unit: str,
-        procedencia: str | None,
-        quote_date: date,
-        price: Decimal,
-    ) -> str:
-        values = (
-            str(ceasa_id),
-            category_slug,
-            product_name,
-            unit,
-            procedencia,
-            None,
-            quote_date.isoformat(),
-            None,
-            str(price),
-            None,
-            None,
-            self.prohort_url,
-        )
-        raw_key = "|".join(value or "" for value in values)
-
-        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
 def build_match_key(

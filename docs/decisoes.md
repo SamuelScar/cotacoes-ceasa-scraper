@@ -76,9 +76,11 @@ Motivo: o projeto precisa manter o HTML bruto para auditoria, mas o resultado ut
 
 Decisao: substituir a tabela unica por tabelas normalizadas: `estados`, `ceasas`, `categorias`, `produtos`, `unidades` e `cotacoes`.
 
-Motivo: o processamento da CEASA-PE foi validado de ponta a ponta. Com isso, o banco pode seguir mais proximo do modelo planejado sem antecipar regras complexas de normalizacao. Se existir uma tabela unica antiga, a gravacao e interrompida para que o banco local seja recriado manualmente.
+Motivo: o processamento da CEASA-PE foi validado de ponta a ponta. Com isso, o banco pode seguir mais proximo do modelo planejado sem antecipar regras complexas de normalizacao.
 
-Atualizacao: backup automatico foi removido. Se existir banco antigo com tabela flat, a gravacao e interrompida para que o arquivo local seja excluido manualmente.
+Atualizacao: a compatibilidade com bancos anteriores foi removida. O projeto
+considera somente o schema vigente e recria a base a partir dos arquivos brutos
+ativos quando a estrutura muda.
 
 ### Coletar datas de cotacao anteriores
 
@@ -114,9 +116,12 @@ Motivo: a opcao reduz requests repetidas durante desenvolvimento e reprocessamen
 
 ### Implementar CEASA-MG pela ultima cotacao
 
-Decisao: implementar a CEASA-MG a partir da tabela de preco mais comum da ultima cotacao. Cada coluna de cidade vira uma cotacao separada, registrando a cidade em `procedencia`.
+Decisao: implementar a CEASA-MG a partir da tabela de preco mais comum da
+ultima cotacao. Cada coluna de cidade vira uma cotacao separada para seu
+entreposto.
 
-Motivo: a fonte nao expoe categorias nem acesso confiavel a cotacoes anteriores. Como a tabela publica traz uma cidade por coluna, usar `procedencia` preserva a cidade sem alterar o schema relacional neste momento.
+Motivo: a fonte nao expoe categorias nem acesso confiavel a cotacoes
+anteriores. As cidades representam mercados, nao a procedencia dos produtos.
 
 ### Normalizar unidades sem perder o valor original
 
@@ -127,8 +132,18 @@ Motivo: a CEASA-PE mistura unidade, embalagem e quantidade no mesmo texto. Exemp
 Implementacao: `unidades` guarda somente a medida canonica. A cotacao preserva
 `unidade_original` e recebe os campos derivados `unidade_normalizada`,
 `embalagem`, `quantidade_minima`, `quantidade_maxima` e `detalhe_unidade`.
-Variacoes ja salvas podem ser reorganizadas pelo comando
-`docker compose run --rm normalizar-unidades`.
+Atualizacao: o comando corretivo para registros ja salvos foi removido. Quando
+a estrutura ou a normalizacao mudar, o banco deve ser recriado a partir dos
+arquivos brutos ativos.
+
+### Recriar o banco em vez de migrar estruturas antigas
+
+Decisao: considerar somente o schema SQLite vigente e remover conversoes,
+adicoes de colunas e comandos corretivos para bancos anteriores.
+
+Motivo: os arquivos brutos preservam a fonte original e permitem reconstruir a
+base de forma previsivel. Manter migracoes locais aumentaria a complexidade e
+poderia conservar dados inconsistentes de estruturas abandonadas.
 
 ## 2026-06-02
 
@@ -231,3 +246,38 @@ Decisao: implementar a CEASA-ES pelo sistema legado vinculado na pagina oficial 
 Motivo: o formulario permite selecionar tres mercados, expoe datas historicas e retorna um relatorio HTML completo com produto, embalagem, precos minimo, comum e maximo, alem da situacao de mercado.
 
 Detalhe: o coletor mantem a sessao exigida pelo Scriptcase, seleciona a ultima data disponivel ate a data limite e suporta `--target-date` e `--quotes-back` com datas independentes por mercado. Grande Vitoria expoe 1.221 datas de 2021-07-01 a 2026-06-03, Noroeste expoe 856 datas de 2010-09-01 a 2024-12-20 e Cachoeiro expoe 180 datas de 2015-07-02 a 2018-08-27. Na validacao de 2026-06-07, as ultimas cotacoes extrairam 289 registros e duas datas de cada mercado resultaram em 574 registros.
+
+## 2026-06-08
+
+### Separar identidade comercial, proveniencia e versoes
+
+Decisao: reorganizar o SQLite em `estados`, `ceasas`, `entrepostos`,
+`categorias`, `produtos`, `produto_aliases`, `unidades`,
+`apresentacoes_unidade`, `coletas` e `cotacoes`.
+
+Motivo: o modelo anterior misturava cidades com categorias ou procedencias,
+repetia detalhes de unidade em todas as cotacoes e nao identificava com
+precisao qual arquivo bruto originou cada registro.
+
+Detalhe: a identidade comercial nao inclui preco nem coleta. Cada publicacao
+permanece como uma versao auditavel ligada a uma coleta, enquanto reprocessar o
+mesmo raw continua idempotente. O banco antigo nao e convertido; ele e
+reconstruido a partir dos raws ativos.
+
+### Rejeitar layouts sem interpretacao confiavel
+
+Decisao: nao persistir o layout antigo de duas colunas da CEASA Campinas
+quando a data da cotacao nao puder ser identificada.
+
+Motivo: a extracao textual desse formato mistura colunas e produzia produtos,
+categorias, datas e precos incorretos. Ignorar o arquivo com aviso e mais
+confiavel que manter registros aparentemente validos e semanticamente errados.
+
+### Nao corrigir automaticamente a ordem dos precos
+
+Decisao: validar datas, existencia de algum preco e valores nao negativos, mas
+nao impor que `preco_minimo <= preco_comum <= preco_maximo`.
+
+Motivo: algumas fontes publicam valores fora dessa ordem. Sem uma regra
+confiavel por fonte, trocar ou descartar esses valores esconderia o conteudo
+original. O raw e a coleta permanecem registrados para auditoria.

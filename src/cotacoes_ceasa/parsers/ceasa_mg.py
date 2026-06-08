@@ -1,5 +1,4 @@
 import re
-import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -8,7 +7,7 @@ from bs4 import BeautifulSoup
 
 from cotacoes_ceasa.models import Category, Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
-from cotacoes_ceasa.normalizers.text import clean_text
+from cotacoes_ceasa.normalizers.text import clean_text, normalize_key as _normalize_key
 
 
 PRICE_CATEGORY = Category(slug="preco-mais-comum", name="Preco mais comum")
@@ -57,10 +56,10 @@ class CeasaMgParser:
                 cotacoes.append(
                     Cotacao(
                         fonte="CEASA-MG",
-                        categoria=PRICE_CATEGORY.slug,
+                        categoria="nao-informada",
                         produto=product,
                         unidade=unit,
-                        procedencia=city_column.name,
+                        procedencia=None,
                         classificacao=None,
                         preco_minimo=None,
                         preco_comum=price,
@@ -68,6 +67,7 @@ class CeasaMgParser:
                         situacao_mercado=None,
                         data_cotacao=city_dates.get(city_column.key),
                         url_origem=url_origem,
+                        entreposto=city_column.name,
                     )
                 )
 
@@ -219,13 +219,3 @@ def _parse_price(value: str | None) -> Decimal | None:
         return Decimal(cleaned_value)
     except InvalidOperation:
         return None
-
-
-def _normalize_key(value: str | None) -> str:
-    if value is None:
-        return ""
-
-    normalized_value = unicodedata.normalize("NFKD", value)
-    ascii_value = normalized_value.encode("ascii", "ignore").decode("ascii")
-
-    return re.sub(r"[^a-z0-9]+", "", ascii_value.lower())

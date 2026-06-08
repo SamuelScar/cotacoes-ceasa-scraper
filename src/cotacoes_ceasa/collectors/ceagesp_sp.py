@@ -30,7 +30,7 @@ class CeagespSpCollector:
     reuse_raw_before_request: bool = False
     supports_target_dates: bool = True
 
-    def _download_category(
+    def download_category(
         self,
         category_slug: str,
         cotacao_date: date | None = None,
@@ -49,7 +49,7 @@ class CeagespSpCollector:
 
         return self.raw_storage.save("ceagesp-sp", storage_category, html)
 
-    def _collect_category(
+    def collect_category(
         self,
         category_slug: str,
         cotacao_date: date | None = None,

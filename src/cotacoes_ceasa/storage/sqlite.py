@@ -6,15 +6,8 @@ from decimal import Decimal
 from pathlib import Path
 
 from cotacoes_ceasa.models import Cotacao
+from cotacoes_ceasa.normalizers.text import slugify
 from cotacoes_ceasa.normalizers.unit import NormalizedUnit, normalize_unit
-
-
-@dataclass(frozen=True)
-class UnitNormalizationResult:
-    quotation_count: int
-    canonical_unit_count: int
-    removed_unit_count: int
-    unrecognized_count: int
 
 
 @dataclass(frozen=True)
@@ -53,148 +46,71 @@ class SQLiteStorage:
                 source_name=source_name,
                 state_name=state_name,
                 uf=uf,
-                city=city,
                 source_url=source_url,
             )
-            return self._insert_cotacoes(connection, cotacoes, ceasa_id)
 
-    def normalize_units(self) -> UnitNormalizationResult:
-        """Normaliza unidades existentes e remove variacoes brutas sem uso."""
-        if not self.database_path.exists():
-            raise FileNotFoundError(f"Banco SQLite nao encontrado: {self.database_path}")
-
-        with sqlite3.connect(self.database_path) as connection:
-            connection.execute("PRAGMA foreign_keys = ON")
-            self._create_schema(connection)
-            rows = connection.execute(
-                """
-                SELECT co.id, co.unidade_original, u.sigla
-                FROM cotacoes co
-                LEFT JOIN unidades u ON u.id = co.unidade_id
-                """
-            ).fetchall()
-            unrecognized_count = 0
-
-            for quotation_id, original_unit, saved_unit in rows:
-                normalized_unit = normalize_unit(original_unit or saved_unit)
-                unidade_id = self._get_or_create_unidade(connection, normalized_unit)
-
-                if (
-                    normalized_unit.original is not None
-                    and normalized_unit.symbol is None
-                    and normalized_unit.packaging is None
-                ):
-                    unrecognized_count += 1
-
-                connection.execute(
-                    """
-                    UPDATE cotacoes
-                    SET
-                        unidade_id = ?,
-                        unidade_original = ?,
-                        unidade_normalizada = ?,
-                        embalagem = ?,
-                        quantidade_minima = ?,
-                        quantidade_maxima = ?,
-                        detalhe_unidade = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        unidade_id,
-                        normalized_unit.original,
-                        normalized_unit.normalized,
-                        normalized_unit.packaging,
-                        self._decimal_to_db(normalized_unit.quantity_min),
-                        self._decimal_to_db(normalized_unit.quantity_max),
-                        normalized_unit.detail,
-                        quotation_id,
-                    ),
-                )
-
-            delete_cursor = connection.execute(
-                """
-                DELETE FROM unidades
-                WHERE id NOT IN (
-                    SELECT DISTINCT unidade_id
-                    FROM cotacoes
-                    WHERE unidade_id IS NOT NULL
-                )
-                """
-            )
-            canonical_unit_count = connection.execute(
-                "SELECT COUNT(*) FROM unidades"
-            ).fetchone()[0]
-
-            return UnitNormalizationResult(
-                quotation_count=len(rows),
-                canonical_unit_count=canonical_unit_count,
-                removed_unit_count=delete_cursor.rowcount,
-                unrecognized_count=unrecognized_count,
+            return self.insert_cotacoes(
+                connection=connection,
+                cotacoes=cotacoes,
+                ceasa_id=ceasa_id,
+                source_slug=source_slug,
+                default_market=city,
             )
 
     def _create_schema(self, connection: sqlite3.Connection) -> None:
-        self._ensure_compatible_schema(connection)
-        connection.execute(
+        connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS estados (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY,
                 nome TEXT NOT NULL,
                 uf TEXT NOT NULL UNIQUE
-            )
-            """
-        )
-        connection.execute(
-            """
+            );
+
             CREATE TABLE IF NOT EXISTS ceasas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY,
                 estado_id INTEGER NOT NULL,
                 slug TEXT NOT NULL UNIQUE,
                 nome TEXT NOT NULL,
-                cidade TEXT,
                 url_origem TEXT NOT NULL,
                 FOREIGN KEY (estado_id) REFERENCES estados (id)
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS categorias (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+            );
+
+            CREATE TABLE IF NOT EXISTS entrepostos (
+                id INTEGER PRIMARY KEY,
                 ceasa_id INTEGER NOT NULL,
                 slug TEXT NOT NULL,
                 nome TEXT NOT NULL,
                 UNIQUE (ceasa_id, slug),
                 FOREIGN KEY (ceasa_id) REFERENCES ceasas (id)
-            )
-            """
-        )
-        connection.execute(
-            """
+            );
+
+            CREATE TABLE IF NOT EXISTS categorias (
+                id INTEGER PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE
+            );
+
             CREATE TABLE IF NOT EXISTS produtos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY,
+                nome_normalizado TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE IF NOT EXISTS produto_aliases (
+                id INTEGER PRIMARY KEY,
+                produto_id INTEGER NOT NULL,
                 nome_original TEXT NOT NULL,
-                nome_normalizado TEXT NOT NULL,
-                UNIQUE (nome_original, nome_normalizado)
-            )
-            """
-        )
-        connection.execute(
-            """
+                UNIQUE (produto_id, nome_original),
+                FOREIGN KEY (produto_id) REFERENCES produtos (id)
+            );
+
             CREATE TABLE IF NOT EXISTS unidades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY,
                 sigla TEXT NOT NULL UNIQUE,
                 descricao TEXT
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS cotacoes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+            );
+
+            CREATE TABLE IF NOT EXISTS apresentacoes_unidade (
+                id INTEGER PRIMARY KEY,
                 chave_unica TEXT NOT NULL UNIQUE,
-                ceasa_id INTEGER NOT NULL,
-                categoria_id INTEGER NOT NULL,
-                produto_id INTEGER NOT NULL,
                 unidade_id INTEGER,
                 unidade_original TEXT,
                 unidade_normalizada TEXT,
@@ -202,56 +118,117 @@ class SQLiteStorage:
                 quantidade_minima NUMERIC,
                 quantidade_maxima NUMERIC,
                 detalhe_unidade TEXT,
-                data_cotacao TEXT,
-                preco_minimo NUMERIC,
-                preco_comum NUMERIC,
-                preco_maximo NUMERIC,
+                FOREIGN KEY (unidade_id) REFERENCES unidades (id)
+            );
+
+            CREATE TABLE IF NOT EXISTS coletas (
+                id INTEGER PRIMARY KEY,
+                chave_unica TEXT NOT NULL UNIQUE,
+                ceasa_id INTEGER NOT NULL,
+                arquivo_raw TEXT,
+                hash_raw TEXT,
+                url_origem TEXT NOT NULL,
+                baixado_em TEXT,
+                processado_em TEXT NOT NULL,
+                FOREIGN KEY (ceasa_id) REFERENCES ceasas (id)
+            );
+
+            CREATE TABLE IF NOT EXISTS cotacoes (
+                id INTEGER PRIMARY KEY,
+                chave_unica TEXT NOT NULL UNIQUE,
+                chave_identidade TEXT NOT NULL,
+                coleta_id INTEGER NOT NULL,
+                entreposto_id INTEGER,
+                categoria_id INTEGER NOT NULL,
+                produto_alias_id INTEGER NOT NULL,
+                apresentacao_unidade_id INTEGER,
+                data_cotacao TEXT NOT NULL,
+                preco_minimo NUMERIC CHECK (preco_minimo IS NULL OR preco_minimo >= 0),
+                preco_comum NUMERIC CHECK (preco_comum IS NULL OR preco_comum >= 0),
+                preco_maximo NUMERIC CHECK (preco_maximo IS NULL OR preco_maximo >= 0),
                 procedencia TEXT,
                 classificacao TEXT,
                 situacao_mercado TEXT,
                 fonte_complemento TEXT,
                 url_complemento TEXT,
                 data_complemento TEXT,
-                data_coleta TEXT NOT NULL,
-                url_origem TEXT NOT NULL,
-                FOREIGN KEY (ceasa_id) REFERENCES ceasas (id),
+                FOREIGN KEY (coleta_id) REFERENCES coletas (id),
+                FOREIGN KEY (entreposto_id) REFERENCES entrepostos (id),
                 FOREIGN KEY (categoria_id) REFERENCES categorias (id),
-                FOREIGN KEY (produto_id) REFERENCES produtos (id),
-                FOREIGN KEY (unidade_id) REFERENCES unidades (id)
-            )
+                FOREIGN KEY (produto_alias_id) REFERENCES produto_aliases (id),
+                FOREIGN KEY (apresentacao_unidade_id) REFERENCES apresentacoes_unidade (id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_coletas_ceasa
+                ON coletas (ceasa_id);
+            CREATE INDEX IF NOT EXISTS idx_cotacoes_identidade
+                ON cotacoes (chave_identidade);
+            CREATE INDEX IF NOT EXISTS idx_cotacoes_coleta
+                ON cotacoes (coleta_id);
+            CREATE INDEX IF NOT EXISTS idx_cotacoes_entreposto_data
+                ON cotacoes (entreposto_id, data_cotacao);
+            CREATE INDEX IF NOT EXISTS idx_cotacoes_categoria_data
+                ON cotacoes (categoria_id, data_cotacao);
+            CREATE INDEX IF NOT EXISTS idx_cotacoes_produto_data
+                ON cotacoes (produto_alias_id, data_cotacao);
+            CREATE INDEX IF NOT EXISTS idx_produto_aliases_produto
+                ON produto_aliases (produto_id);
             """
         )
-        self._ensure_complement_columns(connection)
-        self._ensure_unit_columns(connection)
 
-    def _insert_cotacoes(
+    def insert_cotacoes(
         self,
         connection: sqlite3.Connection,
         cotacoes: list[Cotacao],
         ceasa_id: int,
+        source_slug: str,
+        default_market: str,
     ) -> int:
         inserted_count = 0
-        data_coleta = datetime.now().isoformat(timespec="seconds")
+        processado_em = datetime.now().isoformat(timespec="seconds")
 
         for cotacao in cotacoes:
-            categoria_id = self._get_or_create_categoria(connection, ceasa_id, cotacao.categoria)
-            produto_id = self._get_or_create_produto(connection, cotacao.produto)
-            normalized_unit = normalize_unit(cotacao.unidade)
-            unidade_id = self._get_or_create_unidade(connection, normalized_unit)
+            self._validate_cotacao(cotacao)
+            coleta_id, coleta_key = self._get_or_create_coleta(
+                connection,
+                cotacao,
+                ceasa_id,
+                source_slug,
+                processado_em,
+            )
+            entreposto_id, entreposto_slug = self._get_or_create_entreposto(
+                connection,
+                ceasa_id,
+                cotacao.entreposto or self._default_market(default_market),
+            )
+            categoria_id = self._get_or_create_categoria(connection, cotacao.categoria)
+            produto_alias_id, product_key = self._get_or_create_product_alias(
+                connection,
+                cotacao.produto,
+            )
+            presentation_id, presentation_key = self._get_or_create_presentation(
+                connection,
+                normalize_unit(cotacao.unidade),
+            )
+            identity_key = self._build_identity_key(
+                source_slug=source_slug,
+                market_slug=entreposto_slug,
+                category_slug=cotacao.categoria,
+                product_key=product_key,
+                presentation_key=presentation_key,
+                cotacao=cotacao,
+            )
+            unique_key = self._build_unique_key(identity_key, coleta_key, cotacao)
             cursor = connection.execute(
                 """
-                INSERT OR IGNORE INTO cotacoes (
+                INSERT INTO cotacoes (
                     chave_unica,
-                    ceasa_id,
+                    chave_identidade,
+                    coleta_id,
+                    entreposto_id,
                     categoria_id,
-                    produto_id,
-                    unidade_id,
-                    unidade_original,
-                    unidade_normalizada,
-                    embalagem,
-                    quantidade_minima,
-                    quantidade_maxima,
-                    detalhe_unidade,
+                    produto_alias_id,
+                    apresentacao_unidade_id,
                     data_cotacao,
                     preco_minimo,
                     preco_comum,
@@ -259,89 +236,247 @@ class SQLiteStorage:
                     procedencia,
                     classificacao,
                     situacao_mercado,
-                    data_coleta,
-                    url_origem
+                    fonte_complemento,
+                    url_complemento,
+                    data_complemento
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (chave_unica) DO NOTHING
                 """,
                 (
-                    self._build_unique_key(cotacao, ceasa_id),
-                    ceasa_id,
+                    unique_key,
+                    identity_key,
+                    coleta_id,
+                    entreposto_id,
                     categoria_id,
-                    produto_id,
-                    unidade_id,
-                    normalized_unit.original,
-                    normalized_unit.normalized,
-                    normalized_unit.packaging,
-                    self._decimal_to_db(normalized_unit.quantity_min),
-                    self._decimal_to_db(normalized_unit.quantity_max),
-                    normalized_unit.detail,
-                    cotacao.data_cotacao.isoformat() if cotacao.data_cotacao else None,
+                    produto_alias_id,
+                    presentation_id,
+                    cotacao.data_cotacao.isoformat(),
                     self._decimal_to_db(cotacao.preco_minimo),
                     self._decimal_to_db(cotacao.preco_comum),
                     self._decimal_to_db(cotacao.preco_maximo),
                     cotacao.procedencia,
                     cotacao.classificacao,
                     cotacao.situacao_mercado,
-                    data_coleta,
-                    cotacao.url_origem,
+                    cotacao.fonte_complemento,
+                    cotacao.url_complemento,
+                    (
+                        cotacao.data_complemento.isoformat(timespec="seconds")
+                        if cotacao.data_complemento is not None
+                        else None
+                    ),
                 ),
             )
             inserted_count += cursor.rowcount
 
         return inserted_count
 
-    def _ensure_compatible_schema(self, connection: sqlite3.Connection) -> None:
-        columns = self._get_table_columns(connection, "cotacoes")
+    def _validate_cotacao(self, cotacao: Cotacao) -> None:
+        if cotacao.data_cotacao is None:
+            raise ValueError(f"Cotacao sem data: {cotacao.produto}")
 
-        if not columns or "ceasa_id" in columns:
-            return
+        prices = (cotacao.preco_minimo, cotacao.preco_comum, cotacao.preco_maximo)
 
-        raise RuntimeError(
-            "Banco SQLite antigo com tabela cotacoes flat detectado. "
-            "Exclua o arquivo configurado em COTACOES_DATABASE_PATH para recriar "
-            "o banco com o schema relacional."
-        )
+        if all(price is None for price in prices):
+            raise ValueError(f"Cotacao sem preco: {cotacao.produto}")
 
-    def _ensure_complement_columns(self, connection: sqlite3.Connection) -> None:
-        columns = self._get_table_columns(connection, "cotacoes")
+        if any(price is not None and price < 0 for price in prices):
+            raise ValueError(f"Cotacao com preco negativo: {cotacao.produto}")
 
-        if not columns:
-            return
-
-        for column_name in (
-            "fonte_complemento",
-            "url_complemento",
-            "data_complemento",
-        ):
-            if column_name not in columns:
-                connection.execute(f"ALTER TABLE cotacoes ADD COLUMN {column_name} TEXT")
-
-    def _ensure_unit_columns(self, connection: sqlite3.Connection) -> None:
-        columns = self._get_table_columns(connection, "cotacoes")
-        definitions = {
-            "unidade_original": "TEXT",
-            "unidade_normalizada": "TEXT",
-            "embalagem": "TEXT",
-            "quantidade_minima": "NUMERIC",
-            "quantidade_maxima": "NUMERIC",
-            "detalhe_unidade": "TEXT",
-        }
-
-        for column_name, column_type in definitions.items():
-            if column_name not in columns:
-                connection.execute(
-                    f"ALTER TABLE cotacoes ADD COLUMN {column_name} {column_type}"
-                )
-
-    def _get_table_columns(
+    def _get_or_create_coleta(
         self,
         connection: sqlite3.Connection,
-        table_name: str,
-    ) -> set[str]:
-        rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        cotacao: Cotacao,
+        ceasa_id: int,
+        source_slug: str,
+        processado_em: str,
+    ) -> tuple[int, str]:
+        baixado_em = (
+            cotacao.baixado_em.isoformat(timespec="seconds")
+            if cotacao.baixado_em is not None
+            else None
+        )
+        collection_key = self._hash_values(
+            (
+                source_slug,
+                cotacao.arquivo_raw,
+                cotacao.hash_raw,
+                cotacao.url_origem,
+                baixado_em or processado_em,
+            )
+        )
+        connection.execute(
+            """
+            INSERT INTO coletas (
+                chave_unica,
+                ceasa_id,
+                arquivo_raw,
+                hash_raw,
+                url_origem,
+                baixado_em,
+                processado_em
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (chave_unica) DO NOTHING
+            """,
+            (
+                collection_key,
+                ceasa_id,
+                cotacao.arquivo_raw,
+                cotacao.hash_raw,
+                cotacao.url_origem,
+                baixado_em,
+                processado_em,
+            ),
+        )
 
-        return {row[1] for row in rows}
+        return (
+            self._fetch_id(connection, "coletas", "chave_unica", collection_key),
+            collection_key,
+        )
+
+    def _get_or_create_entreposto(
+        self,
+        connection: sqlite3.Connection,
+        ceasa_id: int,
+        name: str | None,
+    ) -> tuple[int | None, str | None]:
+        if name is None:
+            return None, None
+
+        market_slug = slugify(name)
+        connection.execute(
+            """
+            INSERT INTO entrepostos (ceasa_id, slug, nome)
+            VALUES (?, ?, ?)
+            ON CONFLICT (ceasa_id, slug) DO UPDATE SET nome = excluded.nome
+            """,
+            (ceasa_id, market_slug, name),
+        )
+        row = connection.execute(
+            "SELECT id FROM entrepostos WHERE ceasa_id = ? AND slug = ?",
+            (ceasa_id, market_slug),
+        ).fetchone()
+
+        if row is None:
+            raise RuntimeError(f"Entreposto nao encontrado apos insert: {name}")
+
+        return int(row[0]), market_slug
+
+    def _get_or_create_categoria(
+        self,
+        connection: sqlite3.Connection,
+        category_slug: str,
+    ) -> int:
+        connection.execute(
+            """
+            INSERT INTO categorias (slug)
+            VALUES (?)
+            ON CONFLICT (slug) DO NOTHING
+            """,
+            (category_slug,),
+        )
+
+        return self._fetch_id(connection, "categorias", "slug", category_slug)
+
+    def _get_or_create_product_alias(
+        self,
+        connection: sqlite3.Connection,
+        product_name: str,
+    ) -> tuple[int, str]:
+        normalized_name = self._normalize_name(product_name)
+        connection.execute(
+            """
+            INSERT INTO produtos (nome_normalizado)
+            VALUES (?)
+            ON CONFLICT (nome_normalizado) DO NOTHING
+            """,
+            (normalized_name,),
+        )
+        product_id = self._fetch_id(
+            connection,
+            "produtos",
+            "nome_normalizado",
+            normalized_name,
+        )
+        connection.execute(
+            """
+            INSERT INTO produto_aliases (produto_id, nome_original)
+            VALUES (?, ?)
+            ON CONFLICT (produto_id, nome_original) DO NOTHING
+            """,
+            (product_id, product_name),
+        )
+        row = connection.execute(
+            """
+            SELECT id
+            FROM produto_aliases
+            WHERE produto_id = ? AND nome_original = ?
+            """,
+            (product_id, product_name),
+        ).fetchone()
+
+        if row is None:
+            raise RuntimeError(f"Alias de produto nao encontrado: {product_name}")
+
+        return int(row[0]), normalized_name
+
+    def _get_or_create_presentation(
+        self,
+        connection: sqlite3.Connection,
+        unit: NormalizedUnit,
+    ) -> tuple[int | None, str | None]:
+        if unit.original is None:
+            return None, None
+
+        unidade_id = self._get_or_create_unidade(connection, unit)
+        presentation_key = self._hash_values(
+            (
+                unit.original,
+                unit.normalized,
+                unit.symbol,
+                unit.packaging,
+                self._decimal_to_db(unit.quantity_min),
+                self._decimal_to_db(unit.quantity_max),
+                unit.detail,
+            )
+        )
+        connection.execute(
+            """
+            INSERT INTO apresentacoes_unidade (
+                chave_unica,
+                unidade_id,
+                unidade_original,
+                unidade_normalizada,
+                embalagem,
+                quantidade_minima,
+                quantidade_maxima,
+                detalhe_unidade
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (chave_unica) DO NOTHING
+            """,
+            (
+                presentation_key,
+                unidade_id,
+                unit.original,
+                unit.normalized,
+                unit.packaging,
+                self._decimal_to_db(unit.quantity_min),
+                self._decimal_to_db(unit.quantity_max),
+                unit.detail,
+            ),
+        )
+
+        return (
+            self._fetch_id(
+                connection,
+                "apresentacoes_unidade",
+                "chave_unica",
+                presentation_key,
+            ),
+            presentation_key,
+        )
 
     def _get_or_create_ceasa(
         self,
@@ -350,22 +485,19 @@ class SQLiteStorage:
         source_name: str,
         state_name: str,
         uf: str,
-        city: str,
         source_url: str,
     ) -> int:
         estado_id = self._get_or_create_estado(connection, state_name, uf)
         connection.execute(
             """
-            INSERT OR IGNORE INTO ceasas (
-                estado_id,
-                slug,
-                nome,
-                cidade,
-                url_origem
-            )
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO ceasas (estado_id, slug, nome, url_origem)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (slug) DO UPDATE SET
+                estado_id = excluded.estado_id,
+                nome = excluded.nome,
+                url_origem = excluded.url_origem
             """,
-            (estado_id, source_slug, source_name, city, source_url),
+            (estado_id, source_slug, source_name, source_url),
         )
 
         return self._fetch_id(connection, "ceasas", "slug", source_slug)
@@ -377,71 +509,15 @@ class SQLiteStorage:
         uf: str,
     ) -> int:
         connection.execute(
-            "INSERT OR IGNORE INTO estados (nome, uf) VALUES (?, ?)",
+            """
+            INSERT INTO estados (nome, uf)
+            VALUES (?, ?)
+            ON CONFLICT (uf) DO UPDATE SET nome = excluded.nome
+            """,
             (state_name, uf),
         )
 
         return self._fetch_id(connection, "estados", "uf", uf)
-
-    def _get_or_create_categoria(
-        self,
-        connection: sqlite3.Connection,
-        ceasa_id: int,
-        slug: str,
-    ) -> int:
-        name = slug.replace("-", " ").title()
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO categorias (
-                ceasa_id,
-                slug,
-                nome
-            )
-            VALUES (?, ?, ?)
-            """,
-            (ceasa_id, slug, name),
-        )
-
-        row = connection.execute(
-            "SELECT id FROM categorias WHERE ceasa_id = ? AND slug = ?",
-            (ceasa_id, slug),
-        ).fetchone()
-
-        if row is None:
-            raise RuntimeError(f"Categoria nao encontrada apos insert: {slug}")
-
-        return int(row[0])
-
-    def _get_or_create_produto(
-        self,
-        connection: sqlite3.Connection,
-        product_name: str,
-    ) -> int:
-        normalized_name = self._normalize_name(product_name)
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO produtos (
-                nome_original,
-                nome_normalizado
-            )
-            VALUES (?, ?)
-            """,
-            (product_name, normalized_name),
-        )
-
-        row = connection.execute(
-            """
-            SELECT id
-            FROM produtos
-            WHERE nome_original = ? AND nome_normalizado = ?
-            """,
-            (product_name, normalized_name),
-        ).fetchone()
-
-        if row is None:
-            raise RuntimeError(f"Produto nao encontrado apos insert: {product_name}")
-
-        return int(row[0])
 
     def _get_or_create_unidade(
         self,
@@ -452,12 +528,12 @@ class SQLiteStorage:
             return None
 
         connection.execute(
-            "INSERT OR IGNORE INTO unidades (sigla, descricao) VALUES (?, ?)",
+            """
+            INSERT INTO unidades (sigla, descricao)
+            VALUES (?, ?)
+            ON CONFLICT (sigla) DO UPDATE SET descricao = excluded.descricao
+            """,
             (unit.symbol, unit.description),
-        )
-        connection.execute(
-            "UPDATE unidades SET descricao = ? WHERE sigla = ?",
-            (unit.description, unit.symbol),
         )
 
         return self._fetch_id(connection, "unidades", "sigla", unit.symbol)
@@ -479,22 +555,47 @@ class SQLiteStorage:
 
         return int(row[0])
 
-    def _build_unique_key(self, cotacao: Cotacao, ceasa_id: int) -> str:
-        values = (
-            str(ceasa_id),
-            cotacao.categoria,
-            cotacao.produto,
-            cotacao.unidade,
-            cotacao.procedencia,
-            cotacao.classificacao,
-            cotacao.data_cotacao.isoformat() if cotacao.data_cotacao else None,
-            self._decimal_to_db(cotacao.preco_minimo),
-            self._decimal_to_db(cotacao.preco_comum),
-            self._decimal_to_db(cotacao.preco_maximo),
-            cotacao.situacao_mercado,
-            cotacao.url_origem,
+    def _build_identity_key(
+        self,
+        source_slug: str,
+        market_slug: str | None,
+        category_slug: str,
+        product_key: str,
+        presentation_key: str | None,
+        cotacao: Cotacao,
+    ) -> str:
+        return self._hash_values(
+            (
+                source_slug,
+                market_slug,
+                category_slug,
+                product_key,
+                presentation_key,
+                cotacao.procedencia,
+                cotacao.classificacao,
+                cotacao.data_cotacao.isoformat() if cotacao.data_cotacao else None,
+            )
         )
-        raw_key = "|".join(value or "" for value in values)
+
+    def _build_unique_key(
+        self,
+        identity_key: str,
+        collection_key: str,
+        cotacao: Cotacao,
+    ) -> str:
+        return self._hash_values(
+            (
+                identity_key,
+                collection_key,
+                self._decimal_to_db(cotacao.preco_minimo),
+                self._decimal_to_db(cotacao.preco_comum),
+                self._decimal_to_db(cotacao.preco_maximo),
+                cotacao.situacao_mercado,
+            )
+        )
+
+    def _hash_values(self, values: tuple[object | None, ...]) -> str:
+        raw_key = "|".join(str(value) if value is not None else "" for value in values)
 
         return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
@@ -503,3 +604,6 @@ class SQLiteStorage:
 
     def _normalize_name(self, value: str) -> str:
         return " ".join(value.lower().split())
+
+    def _default_market(self, city: str) -> str | None:
+        return None if city.lower() == "varias cidades" else city

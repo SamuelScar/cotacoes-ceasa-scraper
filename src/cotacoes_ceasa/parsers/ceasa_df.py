@@ -1,7 +1,5 @@
 import re
-import unicodedata
 from datetime import date
-from io import BytesIO
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -9,7 +7,13 @@ from bs4 import BeautifulSoup
 from cotacoes_ceasa.models import Category, Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
 from cotacoes_ceasa.normalizers.money import parse_brl_money
-from cotacoes_ceasa.normalizers.text import clean_text
+from cotacoes_ceasa.normalizers.text import (
+    clean_text,
+    normalize_key as _normalize_key,
+    slugify as _slugify,
+    strip_accents as _strip_accents,
+)
+from cotacoes_ceasa.parsers.pdf import extract_pdf_pages
 
 
 PRICE_CATEGORY = Category(slug="sima", name="SIMA")
@@ -48,7 +52,7 @@ class CeasaDfParser:
         url_origem: str,
     ) -> list[Cotacao]:
         page_texts = (
-            self._extract_pdf_pages(content)
+            extract_pdf_pages(content)
             if isinstance(content, bytes)
             else [content]
         )
@@ -182,26 +186,6 @@ class CeasaDfParser:
 
         return min(candidates, default=DEFAULT_COLUMN_BREAK)
 
-    def _extract_pdf_pages(self, content: bytes) -> list[str]:
-        try:
-            from pypdf import PdfReader
-        except ModuleNotFoundError as error:
-            raise RuntimeError(
-                "Dependencia pypdf nao instalada. "
-                "Instale as dependencias atualizadas do projeto."
-            ) from error
-
-        reader = PdfReader(BytesIO(content))
-        texts: list[str] = []
-
-        for page in reader.pages:
-            try:
-                texts.append(page.extract_text(extraction_mode="layout") or "")
-            except TypeError:
-                texts.append(page.extract_text() or "")
-
-        return texts
-
     def _extract_quote_date(self, text: str) -> date | None:
         match = DATE_PATTERN.search(text)
 
@@ -244,17 +228,3 @@ class CeasaDfParser:
         match = PROCEDENCE_PATTERN.search(_strip_accents(line).upper())
 
         return clean_text(match.group(1).strip(" .-")) if match is not None else None
-
-
-def _normalize_key(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", _strip_accents(value).lower())
-
-
-def _slugify(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", _strip_accents(value).lower()).strip("-")
-
-
-def _strip_accents(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-
-    return normalized.encode("ascii", "ignore").decode("ascii")

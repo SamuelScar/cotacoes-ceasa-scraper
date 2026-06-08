@@ -32,7 +32,7 @@ class CeasaEsCollector:
     supports_target_dates: bool = True
     category_specific_dates: bool = True
 
-    def _download_category(
+    def download_category(
         self,
         category_slug: str,
         cotacao_date: date | None = None,
@@ -51,7 +51,7 @@ class CeasaEsCollector:
 
         return self.raw_storage.save("ceasa-es", storage_category, html)
 
-    def _collect_category(
+    def collect_category(
         self,
         category_slug: str,
         cotacao_date: date | None = None,

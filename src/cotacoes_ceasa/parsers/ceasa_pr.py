@@ -1,7 +1,5 @@
 import re
-import unicodedata
 from datetime import date
-from io import BytesIO
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -9,7 +7,12 @@ from bs4 import BeautifulSoup
 from cotacoes_ceasa.models import Category, Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
 from cotacoes_ceasa.normalizers.money import parse_brl_money
-from cotacoes_ceasa.normalizers.text import clean_text
+from cotacoes_ceasa.normalizers.text import (
+    clean_text,
+    normalize_key as _normalize_key,
+    slugify as _slugify,
+)
+from cotacoes_ceasa.parsers.pdf import extract_pdf_text
 
 
 DATE_PATTERN = re.compile(r"Data da Coleta:\s*(\d{2}/\d{2}/\d{4})")
@@ -121,7 +124,7 @@ class CeasaPrParser:
         category_slug: str,
         url_origem: str,
     ) -> list[Cotacao]:
-        text = self._extract_pdf_text(content) if isinstance(content, bytes) else content
+        text = extract_pdf_text(content) if isinstance(content, bytes) else content
         data_cotacao = self._extract_quote_date(text)
         cotacoes: list[Cotacao] = []
         current_product: str | None = None
@@ -150,28 +153,6 @@ class CeasaPrParser:
                 cotacoes.append(cotacao)
 
         return cotacoes
-
-    def _extract_pdf_text(self, content: bytes) -> str:
-        try:
-            from pypdf import PdfReader
-        except ModuleNotFoundError as error:
-            raise RuntimeError(
-                "Dependencia pypdf nao instalada. "
-                "Instale as dependencias atualizadas do projeto."
-            ) from error
-
-        reader = PdfReader(BytesIO(content))
-        texts: list[str] = []
-
-        for page in reader.pages:
-            try:
-                page_text = page.extract_text(extraction_mode="layout") or ""
-            except TypeError:
-                page_text = page.extract_text() or ""
-
-            texts.append(page_text)
-
-        return "\n".join(texts)
 
     def _extract_quote_date(self, text: str) -> date | None:
         match = DATE_PATTERN.search(text)
@@ -216,7 +197,7 @@ class CeasaPrParser:
 
         return Cotacao(
             fonte="CEASA-PR",
-            categoria=category_slug,
+            categoria="nao-informada",
             produto=produto,
             unidade=unidade,
             procedencia=procedencia,
@@ -227,6 +208,7 @@ class CeasaPrParser:
             situacao_mercado=situacao_mercado,
             data_cotacao=data_cotacao,
             url_origem=url_origem,
+            entreposto=category_slug,
         )
 
     def _split_situation(self, value: str) -> tuple[str, str | None]:
@@ -446,17 +428,3 @@ class CeasaPrParser:
         line_key = _normalize_key(line)
 
         return any(line_key.startswith(prefix) for prefix in HEADER_KEYS)
-
-
-def _normalize_key(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
-
-    return re.sub(r"[^a-z0-9]+", "", ascii_value.lower())
-
-
-def _slugify(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-    ascii_value = normalized.encode("ascii", "ignore").decode("ascii").lower()
-
-    return re.sub(r"[^a-z0-9]+", "-", ascii_value).strip("-")

@@ -1,9 +1,7 @@
 import re
-import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from html import unescape
-from io import BytesIO
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -11,7 +9,13 @@ from bs4 import BeautifulSoup
 from cotacoes_ceasa.models import Category, Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
 from cotacoes_ceasa.normalizers.money import parse_brl_money
-from cotacoes_ceasa.normalizers.text import clean_text
+from cotacoes_ceasa.normalizers.text import (
+    clean_text,
+    normalize_key as _normalize_key,
+    slugify as _slugify,
+    strip_accents as _strip_accents,
+)
+from cotacoes_ceasa.parsers.pdf import extract_pdf_text
 
 
 BR_DATE_PATTERN = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")
@@ -21,7 +25,7 @@ LINK_TEXT_DATE_PATTERN = re.compile(
 )
 URL_DATE_PATTERN = re.compile(r"(?<!\d)(\d{1,2})[-_/](\d{1,2})[-_/](20\d{2})(?!\d)")
 PDF_URL_PATTERN = re.compile(r"https?://[^\"' <>\n\r]+\.pdf", re.IGNORECASE)
-PRICE_PATTERN = re.compile(r"(?<!\d)\d+(?:\.\d{3})*,\d{2}(?!\d)")
+PRICE_PATTERN = re.compile(r"(?<!\d)\d+(?:\.\d{3})*,\d{2,3}(?!\d)")
 SECTION_PATTERN = re.compile(r"^\d{2}\s*-\s*(.+)$")
 UNIT_CODES = {
     "BD",
@@ -179,7 +183,7 @@ class CeasaGoParser:
         category_slug: str,
         url_origem: str,
     ) -> list[Cotacao]:
-        text = self._extract_pdf_text(content) if isinstance(content, bytes) else content
+        text = extract_pdf_text(content) if isinstance(content, bytes) else content
         data_cotacao = self._extract_quote_date(text, url_origem)
         current_category = category_slug
         current_product: str | None = None
@@ -221,28 +225,6 @@ class CeasaGoParser:
 
         return cotacoes
 
-    def _extract_pdf_text(self, content: bytes) -> str:
-        try:
-            from pypdf import PdfReader
-        except ModuleNotFoundError as error:
-            raise RuntimeError(
-                "Dependencia pypdf nao instalada. "
-                "Instale as dependencias atualizadas do projeto."
-            ) from error
-
-        reader = PdfReader(BytesIO(content))
-        texts: list[str] = []
-
-        for page in reader.pages:
-            try:
-                page_text = page.extract_text(extraction_mode="layout") or ""
-            except TypeError:
-                page_text = page.extract_text() or ""
-
-            texts.append(page_text)
-
-        return "\n".join(texts)
-
     def _extract_quote_date(self, text: str, url_origem: str) -> date | None:
         normalized_text = _strip_accents(text)
         period_match = re.search(r"Periodo\s*:\s*(\d{2}/\d{2}/\d{4})", normalized_text)
@@ -268,9 +250,10 @@ class CeasaGoParser:
     ) -> Cotacao | None:
         price_matches = list(PRICE_PATTERN.finditer(line))
 
-        if len(price_matches) < 3:
+        if len(price_matches) < 4:
             return None
 
+        price_matches = price_matches[-4:]
         prefix = line[: price_matches[0].start()].strip()
         product, unit, classification = self._split_prefix(
             prefix,
@@ -397,17 +380,3 @@ class CeasaGoParser:
 
     def _is_classification(self, value: str) -> bool:
         return bool(re.fullmatch(r"\d+", value))
-
-
-def _normalize_key(value: str | None) -> str:
-    return re.sub(r"[^a-z0-9]+", "", _strip_accents(value or "").lower())
-
-
-def _slugify(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", _strip_accents(value).lower()).strip("-")
-
-
-def _strip_accents(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-
-    return normalized.encode("ascii", "ignore").decode("ascii")

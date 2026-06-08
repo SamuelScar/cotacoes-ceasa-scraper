@@ -1,16 +1,20 @@
 import re
-import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from io import BytesIO
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
 from cotacoes_ceasa.models import Category, Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
-from cotacoes_ceasa.normalizers.text import clean_text
+from cotacoes_ceasa.normalizers.text import (
+    clean_text,
+    normalize_key as _normalize_key,
+    slugify as _slugify,
+    strip_accents as _strip_accents,
+)
+from cotacoes_ceasa.parsers.pdf import extract_pdf_text
 
 
 DATE_PATTERN = re.compile(
@@ -103,7 +107,7 @@ class CeasaCeParser:
         category_slug: str,
         url_origem: str,
     ) -> list[Cotacao]:
-        text = self._extract_pdf_text(content) if isinstance(content, bytes) else content
+        text = extract_pdf_text(content) if isinstance(content, bytes) else content
         data_cotacao = self._extract_quote_date(text)
         cotacoes: list[Cotacao] = []
         current_product: str | None = None
@@ -131,28 +135,6 @@ class CeasaCeParser:
                 cotacoes.append(cotacao)
 
         return cotacoes
-
-    def _extract_pdf_text(self, content: bytes) -> str:
-        try:
-            from pypdf import PdfReader
-        except ModuleNotFoundError as error:
-            raise RuntimeError(
-                "Dependencia pypdf nao instalada. "
-                "Instale as dependencias atualizadas do projeto."
-            ) from error
-
-        reader = PdfReader(BytesIO(content))
-        texts: list[str] = []
-
-        for page in reader.pages:
-            try:
-                page_text = page.extract_text(extraction_mode="layout") or ""
-            except TypeError:
-                page_text = page.extract_text() or ""
-
-            texts.append(page_text)
-
-        return "\n".join(texts)
 
     def _extract_quote_date(self, text: str) -> date | None:
         normalized_text = _strip_accents(text)
@@ -184,9 +166,11 @@ class CeasaCeParser:
         if product is None:
             return None
 
+        entreposto, _, categoria = category_slug.partition("-")
+
         return Cotacao(
             fonte="CEASA-CE",
-            categoria=category_slug,
+            categoria=categoria or "nao-informada",
             produto=product,
             unidade=unit,
             procedencia=self._extract_procedencia(suffix),
@@ -197,6 +181,7 @@ class CeasaCeParser:
             situacao_mercado=market_status,
             data_cotacao=data_cotacao,
             url_origem=url_origem,
+            entreposto=entreposto,
         )
 
     def _split_prefix(self, value: str) -> tuple[str, str | None, str | None]:
@@ -320,17 +305,3 @@ def _parse_price(value: str) -> Decimal | None:
         return Decimal(cleaned_value)
     except InvalidOperation:
         return None
-
-
-def _normalize_key(value: str | None) -> str:
-    return re.sub(r"[^a-z0-9]+", "", _strip_accents(value or "").lower())
-
-
-def _slugify(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", _strip_accents(value).lower()).strip("-")
-
-
-def _strip_accents(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-
-    return normalized.encode("ascii", "ignore").decode("ascii")

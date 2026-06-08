@@ -1,97 +1,122 @@
 import argparse
-import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import urlencode
 
-from cotacoes_ceasa.collectors.ceasa_ba import CEASA_BA_HEADERS, CeasaBaCollector
-from cotacoes_ceasa.collectors.ceasa_campinas import (
-    CEASA_CAMPINAS_HEADERS,
-    CeasaCampinasCollector,
-)
-from cotacoes_ceasa.collectors.ceasa_ce import CEASA_CE_HEADERS, CeasaCeCollector
-from cotacoes_ceasa.collectors.ceasa_df import CEASA_DF_HEADERS, CeasaDfCollector
-from cotacoes_ceasa.collectors.ceasa_es import CEASA_ES_HEADERS, CeasaEsCollector
-from cotacoes_ceasa.collectors.ceasa_go import CEASA_GO_HEADERS, CeasaGoCollector
-from cotacoes_ceasa.collectors.ceasa_mg import CeasaMgCollector
-from cotacoes_ceasa.collectors.ceasa_pe import CeasaPeCollector
-from cotacoes_ceasa.collectors.ceasa_pr import CEASA_PR_HEADERS, CeasaPrCollector
-from cotacoes_ceasa.collectors.ceasa_rj import CEASA_RJ_HEADERS, CeasaRjCollector
-from cotacoes_ceasa.collectors.ceagesp_sp import (
-    CEAGESP_SP_HEADERS,
-    CeagespSpCollector,
+from cotacoes_ceasa.collection import (
+    collect_and_report,
+    download_and_report,
+    format_target_date,
+    format_target_dates,
+    resolve_category_target_dates,
+    resolve_quotation_dates,
 )
 from cotacoes_ceasa.config import AppConfig, SourceConfig, load_config
-from cotacoes_ceasa.http.client import HttpClient
 from cotacoes_ceasa.models import Cotacao
-from cotacoes_ceasa.parsers.ceasa_ba import CeasaBaParser
-from cotacoes_ceasa.parsers.ceasa_campinas import CeasaCampinasParser
-from cotacoes_ceasa.parsers.ceasa_ce import CeasaCeParser
-from cotacoes_ceasa.parsers.ceasa_df import CeasaDfParser
-from cotacoes_ceasa.parsers.ceasa_es import CeasaEsParser
-from cotacoes_ceasa.parsers.ceasa_go import CeasaGoParser
-from cotacoes_ceasa.parsers.ceasa_mg import CeasaMgParser
-from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
-from cotacoes_ceasa.parsers.ceasa_pr import CeasaPrParser
-from cotacoes_ceasa.parsers.ceasa_rj import CeasaRjParser
-from cotacoes_ceasa.parsers.ceagesp_sp import CeagespSpParser
 from cotacoes_ceasa.prohort import ProhortComplementer, ProhortComplementResult
+from cotacoes_ceasa.raw_processing import (
+    RAW_CATEGORY_DATE_PATTERN,
+    RAW_FILE_PATTERN,
+    build_category_url,
+    build_raw_source_url,
+    list_raw_files,
+    parse_raw_file_metadata,
+    process_raw_and_report,
+    read_raw_file,
+)
+from cotacoes_ceasa.source_registry import (
+    build_registered_collector,
+    build_source_parser,
+)
 from cotacoes_ceasa.storage.raw_html import RawArchiveResult, RawHtmlStorage
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
-
-
-RAW_FILE_PATTERN = re.compile(
-    r"^(?P<storage_category>.+)_(?P<downloaded_at>\d{8}_\d{6})\.(?:html|pdf)$"
-)
-RAW_CATEGORY_DATE_PATTERN = re.compile(r"_(?P<target_date>\d{4}-\d{2}-\d{2})$")
+from cotacoes_ceasa.terminal import TerminalOutput
 
 
 def main() -> None:
     """Executa comandos de coleta disponiveis no projeto."""
+    output = TerminalOutput()
+
+    try:
+        run(output)
+    except KeyboardInterrupt:
+        output.error("Execucao interrompida pelo usuario.")
+        output.summary()
+        raise SystemExit(130)
+    except Exception as error:
+        output.error(f"{type(error).__name__}: {error}")
+        output.summary()
+        raise SystemExit(1)
+
+
+def run(output: TerminalOutput) -> None:
+    """Seleciona e executa o fluxo solicitado pela CLI."""
     config = load_config()
     parser = build_parser(config)
     args = parser.parse_args()
 
     if args.archive_raw_old:
-        archive_raw_old_and_report(RawHtmlStorage(Path(args.raw_dir)))
+        output.header(
+            "Compactar arquivos antigos",
+            (("Diretorio raw", args.raw_dir),),
+        )
+        archive_raw_old_and_report(RawHtmlStorage(Path(args.raw_dir)), output)
         return
 
     if args.complement_prohort:
-        complement_prohort_and_report(args)
-        return
-
-    if args.normalize_units:
-        normalize_units_and_report(args)
+        output.header(
+            "Complementar cotacoes com PROHORT",
+            (("Banco", args.database_path),),
+        )
+        complement_prohort_and_report(args, output)
         return
 
     source_config = config.sources[args.source]
+    operation = resolve_source_operation(args)
+    output.header(
+        operation,
+        build_source_execution_details(args, source_config),
+    )
     collector = build_collector(
         args=args,
         config=config,
         source_config=source_config,
     )
-    parser = build_source_parser(args.source)
+    source_parser = build_source_parser(args.source)
 
     if args.list_categories:
-        for category in collector.discover_categories():
-            print(f"{category.slug}\t{category.name}")
+        output.section("Categorias")
+        output.info("Descobrindo categorias disponiveis.")
+        categories = collector.discover_categories()
+        output.success(f"{len(categories)} categoria(s) descoberta(s).")
+
+        for category in categories:
+            output.success(f"{category.slug} | {category.name}")
+
+        output.summary((("Categorias", len(categories)),))
         return
 
     if args.process_raw:
         cotacoes = process_raw_and_report(
-            parser=parser,
+            parser=source_parser,
             raw_dir=Path(args.raw_dir),
             source_slug=args.source,
             base_url=args.base_url or source_config.base_url,
+            output=output,
         )
+        output.section("Persistencia")
+        output.info(f"Salvando cotacoes em {args.database_path}.")
         inserted_count = save_cotacoes(
             args=args,
             cotacoes=cotacoes,
             source_config=source_config,
         )
-        print(
-            f"total: {len(cotacoes)} cotacoes processadas. "
-            f"{inserted_count} registros novos salvos em {args.database_path}."
+        output.success(f"{inserted_count} registro(s) novo(s) salvo(s).")
+        output.summary(
+            (
+                ("Cotacoes processadas", len(cotacoes)),
+                ("Registros novos", inserted_count),
+                ("Banco", args.database_path),
+            )
         )
         return
 
@@ -100,15 +125,22 @@ def main() -> None:
             collector=collector,
             target_date=parse_target_date(args.target_date),
             quotes_back=args.quotes_back,
+            output=output,
         )
+        output.section("Persistencia")
+        output.info(f"Salvando cotacoes em {args.database_path}.")
         inserted_count = save_cotacoes(
             args=args,
             cotacoes=cotacoes,
             source_config=source_config,
         )
-        print(
-            f"total: {len(cotacoes)} cotacoes extraidas. "
-            f"{inserted_count} registros novos salvos em {args.database_path}."
+        output.success(f"{inserted_count} registro(s) novo(s) salvo(s).")
+        output.summary(
+            (
+                ("Cotacoes extraidas", len(cotacoes)),
+                ("Registros novos", inserted_count),
+                ("Banco", args.database_path),
+            )
         )
         return
 
@@ -117,229 +149,35 @@ def main() -> None:
             collector=collector,
             target_date=parse_target_date(args.target_date),
             quotes_back=args.quotes_back,
+            output=output,
         )
-        print(f"total: {len(cotacoes)} cotacoes extraidas.")
+        output.summary((("Cotacoes extraidas", len(cotacoes)),))
         return
 
     saved_files = download_and_report(
         collector=collector,
         target_date=parse_target_date(args.target_date),
         quotes_back=args.quotes_back,
+        output=output,
     )
-
-    for file_path in saved_files:
-        print(file_path)
+    output.summary((("Arquivos salvos", len(saved_files)),))
 
 
 def build_collector(args, config: AppConfig, source_config: SourceConfig):
-    http_client = HttpClient(
-        timeout_seconds=args.http_timeout_seconds,
+    return build_registered_collector(
+        source_slug=args.source,
+        base_url=args.base_url or source_config.base_url,
+        raw_dir=Path(args.raw_dir),
+        http_timeout_seconds=args.http_timeout_seconds,
         request_delay_seconds=args.request_delay_seconds,
+        reuse_raw_before_request=config.reuse_raw_before_request,
+        target_date=(
+            parse_target_date(args.target_date)
+            if args.source == "ceasa-pr"
+            else None
+        ),
+        quotes_back=args.quotes_back,
     )
-    raw_storage = RawHtmlStorage(Path(args.raw_dir))
-    base_url = args.base_url or source_config.base_url
-
-    if args.source == "ceasa-pe":
-        return CeasaPeCollector(
-            http_client=http_client,
-            raw_storage=raw_storage,
-            parser=CeasaPeParser(),
-            base_url=base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    if args.source == "ceasa-mg":
-        if args.quotes_back:
-            raise ValueError("CEASA-MG nao suporta cotacoes anteriores.")
-
-        return CeasaMgCollector(
-            http_client=http_client,
-            raw_storage=raw_storage,
-            parser=CeasaMgParser(),
-            base_url=base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    if args.source == "ceasa-pr":
-        ceasa_pr_http_client = HttpClient(
-            timeout_seconds=args.http_timeout_seconds,
-            request_delay_seconds=args.request_delay_seconds,
-            headers=CEASA_PR_HEADERS,
-        )
-
-        return CeasaPrCollector(
-            http_client=ceasa_pr_http_client,
-            raw_storage=raw_storage,
-            parser=CeasaPrParser(),
-            base_url=base_url,
-            target_date=parse_target_date(args.target_date),
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    if args.source == "ceasa-campinas":
-        ceasa_campinas_http_client = HttpClient(
-            timeout_seconds=args.http_timeout_seconds,
-            request_delay_seconds=args.request_delay_seconds,
-            headers=CEASA_CAMPINAS_HEADERS,
-        )
-
-        return CeasaCampinasCollector(
-            http_client=ceasa_campinas_http_client,
-            raw_storage=raw_storage,
-            parser=CeasaCampinasParser(),
-            base_url=base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    if args.source == "ceasa-go":
-        ceasa_go_http_client = HttpClient(
-            timeout_seconds=args.http_timeout_seconds,
-            request_delay_seconds=args.request_delay_seconds,
-            headers=CEASA_GO_HEADERS,
-        )
-
-        return CeasaGoCollector(
-            http_client=ceasa_go_http_client,
-            raw_storage=raw_storage,
-            parser=CeasaGoParser(),
-            base_url=base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    if args.source == "ceasa-ce":
-        if args.quotes_back:
-            raise ValueError("CEASA-CE nao suporta cotacoes anteriores.")
-
-        ceasa_ce_http_client = HttpClient(
-            timeout_seconds=args.http_timeout_seconds,
-            request_delay_seconds=args.request_delay_seconds,
-            headers=CEASA_CE_HEADERS,
-        )
-
-        return CeasaCeCollector(
-            http_client=ceasa_ce_http_client,
-            raw_storage=raw_storage,
-            parser=CeasaCeParser(),
-            base_url=base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    if args.source == "ceasa-rj":
-        ceasa_rj_http_client = HttpClient(
-            timeout_seconds=args.http_timeout_seconds,
-            request_delay_seconds=args.request_delay_seconds,
-            headers=CEASA_RJ_HEADERS,
-        )
-
-        return CeasaRjCollector(
-            http_client=ceasa_rj_http_client,
-            raw_storage=raw_storage,
-            parser=CeasaRjParser(),
-            base_url=base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    if args.source == "ceasa-ba":
-        ceasa_ba_http_client = HttpClient(
-            timeout_seconds=args.http_timeout_seconds,
-            request_delay_seconds=args.request_delay_seconds,
-            headers=CEASA_BA_HEADERS,
-        )
-
-        return CeasaBaCollector(
-            http_client=ceasa_ba_http_client,
-            raw_storage=raw_storage,
-            parser=CeasaBaParser(),
-            base_url=base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    if args.source == "ceasa-df":
-        if args.quotes_back:
-            raise ValueError("CEASA-DF nao suporta cotacoes anteriores.")
-
-        ceasa_df_http_client = HttpClient(
-            timeout_seconds=args.http_timeout_seconds,
-            request_delay_seconds=args.request_delay_seconds,
-            headers=CEASA_DF_HEADERS,
-        )
-
-        return CeasaDfCollector(
-            http_client=ceasa_df_http_client,
-            raw_storage=raw_storage,
-            parser=CeasaDfParser(),
-            base_url=base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    if args.source == "ceagesp-sp":
-        ceagesp_sp_http_client = HttpClient(
-            timeout_seconds=args.http_timeout_seconds,
-            request_delay_seconds=args.request_delay_seconds,
-            headers=CEAGESP_SP_HEADERS,
-        )
-
-        return CeagespSpCollector(
-            http_client=ceagesp_sp_http_client,
-            raw_storage=raw_storage,
-            parser=CeagespSpParser(),
-            base_url=base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    if args.source == "ceasa-es":
-        ceasa_es_http_client = HttpClient(
-            timeout_seconds=args.http_timeout_seconds,
-            request_delay_seconds=args.request_delay_seconds,
-            headers=CEASA_ES_HEADERS,
-        )
-
-        return CeasaEsCollector(
-            http_client=ceasa_es_http_client,
-            raw_storage=raw_storage,
-            parser=CeasaEsParser(),
-            base_url=base_url,
-            reuse_raw_before_request=config.reuse_raw_before_request,
-        )
-
-    raise ValueError(f"Fonte nao suportada: {args.source}")
-
-
-def build_source_parser(source_slug: str):
-    if source_slug == "ceasa-pe":
-        return CeasaPeParser()
-
-    if source_slug == "ceasa-mg":
-        return CeasaMgParser()
-
-    if source_slug == "ceasa-pr":
-        return CeasaPrParser()
-
-    if source_slug == "ceasa-campinas":
-        return CeasaCampinasParser()
-
-    if source_slug == "ceasa-go":
-        return CeasaGoParser()
-
-    if source_slug == "ceasa-ce":
-        return CeasaCeParser()
-
-    if source_slug == "ceasa-rj":
-        return CeasaRjParser()
-
-    if source_slug == "ceasa-ba":
-        return CeasaBaParser()
-
-    if source_slug == "ceasa-df":
-        return CeasaDfParser()
-
-    if source_slug == "ceagesp-sp":
-        return CeagespSpParser()
-
-    if source_slug == "ceasa-es":
-        return CeasaEsParser()
-
-    raise ValueError(f"Fonte nao suportada: {source_slug}")
 
 
 def save_cotacoes(args, cotacoes: list[Cotacao], source_config: SourceConfig) -> int:
@@ -356,78 +194,66 @@ def save_cotacoes(args, cotacoes: list[Cotacao], source_config: SourceConfig) ->
     )
 
 
-def collect_and_report(
-    collector,
-    target_date: date | None,
-    quotes_back: int,
-) -> list[Cotacao]:
-    """Coleta cotacoes e imprime um resumo por categoria."""
-    categories = collector.discover_categories()
-    target_dates_by_category = resolve_category_target_dates(
-        collector,
-        categories,
-        target_date,
-        quotes_back,
-    )
-    cotacoes: list[Cotacao] = []
+def resolve_source_operation(args) -> str:
+    if args.list_categories:
+        return "Listar categorias"
 
-    for category in categories:
-        target_dates = target_dates_by_category[category.slug]
-        category_total = 0
+    if args.process_raw:
+        return "Processar arquivos brutos"
 
-        if collector.supports_target_dates and getattr(
-            collector,
-            "category_specific_dates",
-            False,
-        ):
-            print(f"{category.slug} datas: {format_target_dates(target_dates)}")
+    if args.save:
+        return "Coletar e salvar cotacoes"
 
-        for target_date in target_dates:
-            try:
-                category_cotacoes = collector._collect_category(category.slug, target_date)
-            except Exception as error:
-                print(f"{category.slug} {format_target_date(target_date)}: erro - {error}")
-                continue
+    if args.parse:
+        return "Coletar e extrair cotacoes"
 
-            cotacoes.extend(category_cotacoes)
-            category_total += len(category_cotacoes)
-
-        print(f"{category.slug}: {category_total} cotacoes")
-
-    return cotacoes
+    return "Baixar arquivos brutos"
 
 
-def download_and_report(
-    collector,
-    target_date: date | None,
-    quotes_back: int,
-) -> list[Path]:
-    """Baixa arquivos brutos para a janela de datas configurada."""
-    categories = collector.discover_categories()
-    target_dates_by_category = resolve_category_target_dates(
-        collector,
-        categories,
-        target_date,
-        quotes_back,
-    )
-    saved_files: list[Path] = []
+def build_source_execution_details(
+    args,
+    source_config: SourceConfig,
+) -> tuple[tuple[str, object], ...]:
+    details: list[tuple[str, object]] = [
+        ("Fonte", f"{source_config.name} ({args.source})"),
+    ]
 
-    for category in categories:
-        for target_date in target_dates_by_category[category.slug]:
-            saved_files.append(collector._download_category(category.slug, target_date))
+    if not args.list_categories and not args.process_raw:
+        details.extend(
+            [
+                ("Data limite", args.target_date or "ultima disponivel"),
+                ("Cotacoes anteriores", args.quotes_back),
+            ]
+        )
 
-    return saved_files
+    if not args.list_categories:
+        details.append(("Diretorio raw", args.raw_dir))
+
+    if args.save or args.process_raw:
+        details.append(("Banco", args.database_path))
+
+    return tuple(details)
 
 
-def archive_raw_old_and_report(raw_storage: RawHtmlStorage) -> None:
+def archive_raw_old_and_report(
+    raw_storage: RawHtmlStorage,
+    output: TerminalOutput | None = None,
+) -> None:
+    output = output or TerminalOutput()
     results = raw_storage.archive_old_html_files()
+    output.section("Compactacao")
 
     if not results:
-        print("Nenhum HTML antigo encontrado para compactar.")
+        output.info("Nenhum HTML antigo encontrado para compactar.")
+        output.summary((("Arquivos compactados", 0),))
         return
 
     for result in results:
-        print(format_archive_result(result))
+        output.success(format_archive_result(result))
+
+    output.summary(
+        (("Arquivos compactados", sum(result.archived_count for result in results)),)
+    )
 
 
 def format_archive_result(result: RawArchiveResult) -> str:
@@ -437,23 +263,34 @@ def format_archive_result(result: RawArchiveResult) -> str:
     )
 
 
-def complement_prohort_and_report(args) -> None:
+def complement_prohort_and_report(
+    args,
+    output: TerminalOutput | None = None,
+) -> None:
+    output = output or TerminalOutput()
+    output.section("Complemento PROHORT")
+    output.info("Lendo cotacoes salvas e buscando correspondencias confiaveis.")
     result = ProhortComplementer(
         database_path=Path(args.database_path),
         prohort_url=args.prohort_url,
         timeout_seconds=args.http_timeout_seconds,
     ).complement()
 
-    print(format_prohort_complement_result(result, args.database_path))
+    if not result.database_found:
+        output.warning(format_prohort_complement_result(result, args.database_path))
+    elif result.candidate_count == 0 and result.fallback_scope_count == 0:
+        output.info(format_prohort_complement_result(result, args.database_path))
+    else:
+        output.success(format_prohort_complement_result(result, args.database_path))
 
-
-def normalize_units_and_report(args) -> None:
-    result = SQLiteStorage(Path(args.database_path)).normalize_units()
-    print(
-        f"unidades: {result.quotation_count} cotacoes normalizadas, "
-        f"{result.canonical_unit_count} unidades canonicas, "
-        f"{result.removed_unit_count} variacoes removidas e "
-        f"{result.unrecognized_count} cotacoes com unidade nao reconhecida."
+    output.summary(
+        (
+            ("Linhas lidas", result.scanned_rows),
+            ("Cotacoes complementadas", result.updated_count),
+            ("Cotacoes inseridas", result.inserted_count),
+            ("Sem mapeamento", result.unmapped_count),
+            ("Ambiguas", result.ambiguous_count),
+        )
     )
 
 
@@ -479,205 +316,6 @@ def format_prohort_complement_result(
     )
 
 
-def process_raw_and_report(
-    parser,
-    raw_dir: Path,
-    source_slug: str,
-    base_url: str,
-) -> list[Cotacao]:
-    """Processa arquivos brutos salvos em disco e retorna cotacoes normalizadas."""
-    raw_files = list_raw_files(raw_dir, source_slug)
-
-    if not raw_files:
-        raise RuntimeError(f"Nenhum arquivo bruto encontrado em {raw_dir / source_slug}.")
-
-    cotacoes: list[Cotacao] = []
-
-    for file_path in raw_files:
-        try:
-            category_slug, target_date = parse_raw_file_metadata(file_path)
-            url_origem = build_raw_source_url(
-                source_slug,
-                base_url,
-                category_slug,
-                target_date,
-            )
-            parsed_cotacoes = parser.parse_category(
-                read_raw_file(file_path),
-                category_slug,
-                url_origem,
-            )
-        except Exception as error:
-            print(f"{file_path}: erro - {error}")
-            continue
-
-        cotacoes.extend(parsed_cotacoes)
-        print(f"{file_path}: {len(parsed_cotacoes)} cotacoes")
-
-    return cotacoes
-
-
-def read_raw_file(file_path: Path) -> bytes | str:
-    """Le arquivo bruto em texto ou bytes conforme a extensao."""
-    if file_path.suffix.lower() == ".pdf":
-        return file_path.read_bytes()
-
-    return file_path.read_text(encoding="utf-8")
-
-
-def list_raw_files(raw_dir: Path, source_slug: str) -> list[Path]:
-    """Lista os raws ativos da fonte, ignorando arquivos arquivados em `old`."""
-    source_raw_dir = raw_dir / source_slug
-
-    if not source_raw_dir.exists():
-        return []
-
-    return sorted(
-        file_path
-        for file_path in source_raw_dir.glob("*.*")
-        if file_path.is_file() and file_path.suffix.lower() in {".html", ".pdf"}
-    )
-
-
-def parse_raw_file_metadata(file_path: Path) -> tuple[str, date | None]:
-    """Extrai categoria e data limite a partir do nome do arquivo bruto."""
-    match = RAW_FILE_PATTERN.match(file_path.name)
-
-    if match is None:
-        raise ValueError("Nome de arquivo bruto fora do padrao esperado.")
-
-    storage_category = match.group("storage_category")
-    date_match = RAW_CATEGORY_DATE_PATTERN.search(storage_category)
-
-    if date_match is None:
-        return storage_category, None
-
-    category_slug = storage_category[: date_match.start()]
-    target_date = datetime.strptime(date_match.group("target_date"), "%Y-%m-%d").date()
-
-    return category_slug, target_date
-
-
-def build_category_url(
-    base_url: str,
-    category_slug: str,
-    target_date: date | None,
-) -> str:
-    """Monta a URL original da categoria usada na coleta."""
-    url = f"{base_url.rstrip('/')}/{category_slug}"
-
-    if target_date is None:
-        return url
-
-    params = urlencode({"data": target_date.strftime("%d/%m/%Y")})
-
-    return f"{url}?{params}"
-
-
-def build_raw_source_url(
-    source_slug: str,
-    base_url: str,
-    category_slug: str,
-    target_date: date | None,
-) -> str:
-    if source_slug == "ceasa-pe":
-        return build_category_url(base_url, category_slug, target_date)
-
-    if source_slug == "ceasa-pr" and target_date is not None:
-        return f"{base_url.rstrip('/')}-{target_date.year}"
-
-    return base_url
-
-
-def resolve_quotation_dates(
-    collector,
-    probe_category_slug: str,
-    target_date: date | None,
-    quotes_back: int,
-) -> list[date | None]:
-    """Descobre datas de cotacao disponiveis voltando a partir da data limite."""
-    if quotes_back < 0:
-        raise ValueError("--quotes-back nao pode ser negativo.")
-
-    if target_date is None and quotes_back == 0:
-        return [None]
-
-    target_date = target_date or date.today()
-
-    if quotes_back == 0:
-        return [target_date]
-
-    expected_count = quotes_back + 1
-    found_dates: list[date] = []
-    candidate_date = target_date
-    max_attempts = max(expected_count * 4, 30)
-
-    for _ in range(max_attempts):
-        try:
-            cotacoes = collector._collect_category(
-                probe_category_slug,
-                candidate_date,
-                save_raw=False,
-            )
-        except Exception:
-            candidate_date -= timedelta(days=1)
-            continue
-
-        quotation_dates = {
-            cotacao.data_cotacao
-            for cotacao in cotacoes
-            if cotacao.data_cotacao is not None
-        }
-
-        for quotation_date in sorted(quotation_dates, reverse=True):
-            if quotation_date not in found_dates:
-                found_dates.append(quotation_date)
-
-        if len(found_dates) >= expected_count:
-            return found_dates[:expected_count]
-
-        candidate_date = (
-            min(quotation_dates) - timedelta(days=1)
-            if quotation_dates
-            else candidate_date - timedelta(days=1)
-        )
-
-    raise RuntimeError(
-        f"Nao foi possivel encontrar {expected_count} datas de cotacao "
-        f"apos {max_attempts} tentativas."
-    )
-
-
-def resolve_category_target_dates(
-    collector,
-    categories,
-    target_date: date | None,
-    quotes_back: int,
-) -> dict[str, list[date | None]]:
-    if getattr(collector, "category_specific_dates", False):
-        return {
-            category.slug: resolve_quotation_dates(
-                collector=collector,
-                probe_category_slug=category.slug,
-                target_date=target_date,
-                quotes_back=quotes_back,
-            )
-            for category in categories
-        }
-
-    target_dates = resolve_quotation_dates(
-        collector=collector,
-        probe_category_slug=categories[0].slug,
-        target_date=target_date,
-        quotes_back=quotes_back,
-    )
-
-    if collector.supports_target_dates:
-        print(f"datas: {format_target_dates(target_dates)}")
-
-    return {category.slug: target_dates for category in categories}
-
-
 def parse_target_date(value: str | None) -> date | None:
     """Converte a data limite da CLI para date."""
     if not value:
@@ -690,14 +328,6 @@ def parse_target_date(value: str | None) -> date | None:
             continue
 
     raise ValueError("Data invalida. Use DD/MM/YYYY ou YYYY-MM-DD.")
-
-
-def format_target_dates(target_dates: list[date | None]) -> str:
-    return ", ".join(format_target_date(target_date) for target_date in target_dates)
-
-
-def format_target_date(target_date: date | None) -> str:
-    return target_date.isoformat() if target_date is not None else "ultima disponivel"
 
 
 def build_parser(config: AppConfig) -> argparse.ArgumentParser:
@@ -784,11 +414,6 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
             "Complementa cotacoes ja salvas usando o PROHORT, "
             "sem sobrescrever campos preenchidos."
         ),
-    )
-    parser.add_argument(
-        "--normalize-units",
-        action="store_true",
-        help="Normaliza unidades ja salvas e remove variacoes brutas sem uso.",
     )
     parser.add_argument(
         "--list-categories",

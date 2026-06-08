@@ -1,16 +1,20 @@
 import re
-import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from io import BytesIO
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
 from cotacoes_ceasa.models import Category, Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
-from cotacoes_ceasa.normalizers.text import clean_text
+from cotacoes_ceasa.normalizers.text import (
+    clean_text,
+    normalize_key as _normalize_key,
+    slugify as _slugify,
+    strip_accents as _strip_accents,
+)
+from cotacoes_ceasa.parsers.pdf import extract_pdf_text
 
 
 DATE_LINK_PATTERN = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")
@@ -20,7 +24,9 @@ HEADER_KEYS = {
     "centraisdeabastecimentodecampinassa",
     "formulariodecotacaoceasacampinasboletimnumero",
     "cotacaorealizadaem",
+    "produtovariedade",
     "produtovariedadesubvariedadeclassificacaovalor",
+    "minimocomummaximo",
     "minimo",
     "valor",
     "comum",
@@ -114,16 +120,25 @@ class CeasaCampinasParser:
         category_slug: str,
         url_origem: str,
     ) -> list[Cotacao]:
-        text = self._extract_pdf_text(content) if isinstance(content, bytes) else content
+        text = extract_pdf_text(content) if isinstance(content, bytes) else content
         data_cotacao = self._extract_quote_date(text)
+
+        if data_cotacao is None:
+            raise ValueError(
+                "Layout antigo da CEASA Campinas sem suporte confiavel."
+            )
+
         current_category = category_slug
         cotacoes: list[Cotacao] = []
         pending_parts: list[str] = []
+        preceded_by_blank = True
+        previous_line_had_price = False
 
         for raw_line in text.splitlines():
             line = self._clean_pdf_line(raw_line)
 
             if not line:
+                preceded_by_blank = True
                 continue
 
             if PRICE_PATTERN.search(line):
@@ -139,18 +154,26 @@ class CeasaCampinasParser:
                 if cotacao is not None:
                     cotacoes.append(cotacao)
 
+                preceded_by_blank = False
+                previous_line_had_price = True
                 continue
 
-            if pending_parts:
-                pending_parts.append(line)
+            if previous_line_had_price and not preceded_by_blank:
+                previous_line_had_price = False
+                preceded_by_blank = False
                 continue
 
-            if self._is_section_line(line):
+            previous_line_had_price = False
+
+            if self._is_header_line(line):
+                pending_parts.clear()
+            elif preceded_by_blank and self._is_section_line(line):
                 current_category = _slugify(line)
-                continue
-
-            if not self._is_header_line(line):
+                pending_parts.clear()
+            else:
                 pending_parts.append(line)
+
+            preceded_by_blank = False
 
         return cotacoes
 
@@ -163,28 +186,6 @@ class CeasaCampinasParser:
                 return title
 
         return base_url.rstrip("/").rsplit("/", 1)[-1].replace("-", " ").title()
-
-    def _extract_pdf_text(self, content: bytes) -> str:
-        try:
-            from pypdf import PdfReader
-        except ModuleNotFoundError as error:
-            raise RuntimeError(
-                "Dependencia pypdf nao instalada. "
-                "Instale as dependencias atualizadas do projeto."
-            ) from error
-
-        reader = PdfReader(BytesIO(content))
-        texts: list[str] = []
-
-        for page in reader.pages:
-            try:
-                page_text = page.extract_text(extraction_mode="layout") or ""
-            except TypeError:
-                page_text = page.extract_text() or ""
-
-            texts.append(page_text)
-
-        return "\n".join(texts)
 
     def _extract_quote_date(self, text: str) -> date | None:
         normalized_text = _strip_accents(text)
@@ -297,17 +298,3 @@ def _parse_price(value: str) -> Decimal | None:
         return Decimal(cleaned_value)
     except InvalidOperation:
         return None
-
-
-def _normalize_key(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", _strip_accents(value).lower())
-
-
-def _slugify(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", _strip_accents(value).lower()).strip("-")
-
-
-def _strip_accents(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-
-    return normalized.encode("ascii", "ignore").decode("ascii")
