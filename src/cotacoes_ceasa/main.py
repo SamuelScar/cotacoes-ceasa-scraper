@@ -1,4 +1,5 @@
 import argparse
+from copy import copy
 from datetime import date, datetime
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from cotacoes_ceasa.raw_processing import (
 from cotacoes_ceasa.source_registry import (
     build_registered_collector,
     build_source_parser,
+    source_supports_history,
 )
 from cotacoes_ceasa.storage.raw_html import RawArchiveResult, RawHtmlStorage
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
@@ -70,6 +72,85 @@ def run(output: TerminalOutput) -> None:
         complement_prohort_and_report(args, output)
         return
 
+    if args.all_sources or args.download_and_process:
+        run_all_sources(args, config, output)
+        return
+
+    run_source(args, config, output)
+
+
+def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
+    """Executa a operacao solicitada para todas as fontes configuradas."""
+    if args.download_and_process:
+        download_args = copy(args)
+        download_args.download_and_process = False
+        run_all_sources_phase(download_args, config, output, "Download")
+
+        process_args = copy(args)
+        process_args.download_and_process = False
+        process_args.process_raw = True
+        process_args.save = False
+        process_args.parse = False
+        run_all_sources_phase(process_args, config, output, "Persistencia")
+        return
+
+    run_all_sources_phase(args, config, output, resolve_source_operation(args))
+
+
+def run_all_sources_phase(
+    args,
+    config: AppConfig,
+    output: TerminalOutput,
+    phase_name: str,
+) -> None:
+    """Executa uma fase para todas as fontes sem interromper o lote."""
+    output.header(
+        f"{phase_name} de todas as fontes",
+        (
+            ("Fontes configuradas", len(config.sources)),
+            ("Data limite", args.target_date or "ultima disponivel"),
+            ("Cotacoes anteriores", args.quotes_back),
+        ),
+    )
+    completed_count = 0
+    failed_count = 0
+
+    for source_slug in config.sources:
+        source_args = copy(args)
+        source_args.source = source_slug
+
+        if source_args.quotes_back and not source_supports_history(source_slug):
+            source_args.quotes_back = 0
+
+            if not source_args.process_raw:
+                output.info(
+                    f"{source_slug} | fonte sem historico; coletando somente a atual."
+                )
+
+        try:
+            run_source(source_args, config, output, show_summary=False)
+        except Exception as error:
+            failed_count += 1
+            output.warning(f"{source_slug} | {type(error).__name__}: {error}")
+            continue
+
+        completed_count += 1
+
+    output.summary(
+        (
+            ("Fontes concluidas", completed_count),
+            ("Fontes com falha", failed_count),
+        )
+    )
+
+
+def run_source(
+    args,
+    config: AppConfig,
+    output: TerminalOutput,
+    show_summary: bool = True,
+) -> None:
+    """Executa a operacao solicitada para uma fonte."""
     source_config = config.sources[args.source]
     operation = resolve_source_operation(args)
     output.header(
@@ -92,7 +173,8 @@ def run(output: TerminalOutput) -> None:
         for category in categories:
             output.success(f"{category.slug} | {category.name}")
 
-        output.summary((("Categorias", len(categories)),))
+        if show_summary:
+            output.summary((("Categorias", len(categories)),))
         return
 
     if args.process_raw:
@@ -111,13 +193,14 @@ def run(output: TerminalOutput) -> None:
             source_config=source_config,
         )
         output.success(f"{inserted_count} registro(s) novo(s) salvo(s).")
-        output.summary(
-            (
-                ("Cotacoes processadas", len(cotacoes)),
-                ("Registros novos", inserted_count),
-                ("Banco", args.database_path),
+        if show_summary:
+            output.summary(
+                (
+                    ("Cotacoes processadas", len(cotacoes)),
+                    ("Registros novos", inserted_count),
+                    ("Banco", args.database_path),
+                )
             )
-        )
         return
 
     if args.save:
@@ -135,13 +218,14 @@ def run(output: TerminalOutput) -> None:
             source_config=source_config,
         )
         output.success(f"{inserted_count} registro(s) novo(s) salvo(s).")
-        output.summary(
-            (
-                ("Cotacoes extraidas", len(cotacoes)),
-                ("Registros novos", inserted_count),
-                ("Banco", args.database_path),
+        if show_summary:
+            output.summary(
+                (
+                    ("Cotacoes extraidas", len(cotacoes)),
+                    ("Registros novos", inserted_count),
+                    ("Banco", args.database_path),
+                )
             )
-        )
         return
 
     if args.parse:
@@ -151,7 +235,8 @@ def run(output: TerminalOutput) -> None:
             quotes_back=args.quotes_back,
             output=output,
         )
-        output.summary((("Cotacoes extraidas", len(cotacoes)),))
+        if show_summary:
+            output.summary((("Cotacoes extraidas", len(cotacoes)),))
         return
 
     saved_files = download_and_report(
@@ -160,7 +245,8 @@ def run(output: TerminalOutput) -> None:
         quotes_back=args.quotes_back,
         output=output,
     )
-    output.summary((("Arquivos salvos", len(saved_files)),))
+    if show_summary:
+        output.summary((("Arquivos salvos", len(saved_files)),))
 
 
 def build_collector(args, config: AppConfig, source_config: SourceConfig):
@@ -342,6 +428,11 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         help="Fonte que sera coletada.",
     )
     parser.add_argument(
+        "--all-sources",
+        action="store_true",
+        help="Executa a operacao para todas as fontes configuradas.",
+    )
+    parser.add_argument(
         "--raw-dir",
         default=config.raw_dir,
         help="Diretorio onde o HTML bruto sera salvo.",
@@ -401,6 +492,11 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         "--process-raw",
         action="store_true",
         help="Processa HTML bruto salvo em disco e salva os registros no SQLite.",
+    )
+    parser.add_argument(
+        "--download-and-process",
+        action="store_true",
+        help="Baixa e depois processa os raws de todas as fontes.",
     )
     parser.add_argument(
         "--archive-raw-old",

@@ -48,11 +48,32 @@ Decisao: manter um `.env` local para os valores padrao da CLI e um `.env.example
 
 Motivo: a coleta precisa de configuracoes locais, como fonte, diretorio de HTML bruto e timeout HTTP. O `.env.example` documenta esses valores sem versionar configuracoes locais.
 
+### Usar servicos curtos para todas as fontes
+
+Decisao: manter os servicos Compose `baixar`, `salvar` e `tudo` como fluxo
+principal. Eles percorrem todas as fontes de `config/fontes.json` e leem data,
+janela historica, delay, timeout e caminhos do `.env`.
+
+Motivo: a operacao normal nao deve exigir loops PowerShell nem repeticao de
+flags por fonte. O servico `app` fica reservado para execucoes isoladas e
+diagnostico.
+
 ### Limitar ritmo de requisicoes
 
 Decisao: configurar um intervalo minimo entre requisicoes HTTP.
 
 Motivo: a coleta deve ser conservadora para reduzir risco de bloqueio e evitar carga desnecessaria nas fontes publicas.
+
+### Reutilizar respostas e recuar em falhas temporarias
+
+Decisao: manter um cache limitado durante cada execucao e aplicar backoff
+exponencial com jitter para falhas temporarias. Respeitar `Retry-After`,
+interromper imediatamente em `403` e interromper em `429` persistente.
+
+Motivo: a descoberta de datas e a coleta final podem consultar as mesmas
+paginas, formularios e relatorios. Reutilizar essas respostas reduz a carga
+nas fontes. Continuar requisitando depois de uma recusa aumenta o risco de
+bloqueio.
 
 ### Separar configuracao de fontes
 

@@ -148,6 +148,11 @@ def build_source_parser(source_slug: str) -> SourceParser:
     return _get_source_definition(source_slug).parser_type()
 
 
+def source_supports_history(source_slug: str) -> bool:
+    """Informa se a fonte aceita coleta de cotacoes anteriores."""
+    return _get_source_definition(source_slug).unsupported_history_error is None
+
+
 def _get_source_definition(source_slug: str) -> SourceDefinition:
     try:
         return SOURCE_DEFINITIONS[source_slug]

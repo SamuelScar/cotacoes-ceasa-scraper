@@ -101,7 +101,7 @@ Tarefas futuras:
 ## TODO antes da coleta completa
 
 - [x] Fazer uma revisao total do codigo, refatorando e melhorando a distribuicao de responsabilidades.
-- [ ] Revisar os metodos de coleta para reduzir o risco de bloqueio de IP durante o scraping.
+- [x] Revisar os metodos de coleta para reduzir o risco de bloqueio de IP durante o scraping (veja [Estrategias Anti-Bloqueio](estrategias-anti-bloqueio.md)).
 - [x] Melhorar e reorganizar o layout das saidas do terminal para deixar a execucao mais clara.
 - [ ] Revisar toda a documentacao, removendo conteudo inutil ou desatualizado e mantendo o que ajuda na operacao do projeto.
 - [ ] Versionar a pasta `data/` compactada no Git, descompactando antes de qualquer comando do container e compactando novamente ao encerrar, inclusive em falhas ou interrupcoes; ajustar o `.gitignore` e garantir substituicao atomica do arquivo compactado para evitar perda de dados.

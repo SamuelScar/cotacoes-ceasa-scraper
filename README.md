@@ -123,7 +123,7 @@ Buildar a imagem:
 docker compose build
 ```
 
-Baixar os arquivos brutos de todas as categorias:
+Baixar os arquivos brutos de todas as fontes:
 
 ```bash
 docker compose run --rm baixar
@@ -132,7 +132,7 @@ docker compose run --rm baixar
 Processar os arquivos brutos baixados e salvar no SQLite:
 
 ```bash
-docker compose run --rm banco
+docker compose run --rm salvar
 ```
 
 Baixar, processar e salvar no SQLite em um unico comando:

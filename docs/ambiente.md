@@ -21,7 +21,7 @@ cp .env.example .env
 
 Variaveis disponiveis:
 
-- `COTACOES_SOURCE`: fonte padrao da coleta.
+- `COTACOES_SOURCE`: fonte usada somente nos comandos avancados pelo servico `app`.
 - `COTACOES_SOURCES_FILE`: arquivo com as fontes disponiveis.
 - `COTACOES_RAW_DIR`: diretorio para salvar HTML bruto.
 - `COTACOES_DATABASE_PATH`: caminho do arquivo SQLite.
@@ -82,7 +82,7 @@ Dependencias principais:
 
 Ver comandos de execucao em [Comandos](comandos.md).
 
-Baixar os arquivos brutos de todas as categorias:
+Baixar os arquivos brutos de todas as fontes:
 
 ```bash
 docker compose run --rm baixar
@@ -91,7 +91,7 @@ docker compose run --rm baixar
 Processar os arquivos brutos baixados e salvar no SQLite:
 
 ```bash
-docker compose run --rm banco
+docker compose run --rm salvar
 ```
 
 Baixar, processar e salvar no SQLite em um unico comando:

@@ -51,7 +51,7 @@ Buildar a imagem:
 docker compose build
 ```
 
-Baixar os arquivos brutos de todas as categorias:
+Baixar os arquivos brutos de todas as fontes configuradas:
 
 ```bash
 docker compose run --rm baixar
@@ -60,10 +60,12 @@ docker compose run --rm baixar
 Processar os arquivos brutos baixados e salvar no SQLite:
 
 ```bash
-docker compose run --rm banco
+docker compose run --rm salvar
 ```
 
-O servico `banco` processa somente a fonte configurada em `COTACOES_SOURCE`.
+Os servicos `baixar`, `salvar` e `tudo` percorrem todas as fontes de
+`config/fontes.json`. Data limite, quantidade de cotacoes anteriores, delay,
+timeout e reutilizacao de raw sao lidos do `.env`.
 
 ### Recriar o banco completo
 
@@ -72,10 +74,7 @@ reprocesse os raws ativos de todas as fontes:
 
 ```powershell
 Remove-Item data\cotacoes.sqlite
-
-Get-ChildItem data\raw -Directory | ForEach-Object {
-    docker compose run --rm app --source $_.Name --process-raw
-}
+docker compose run --rm salvar
 ```
 
 O projeto nao migra estruturas antigas. A reconstrucao considera somente os
@@ -111,6 +110,8 @@ Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
 ## Flags da CLI
 
 - `--source`: escolhe qual fonte sera coletada, como `ceasa-pe`, `ceasa-mg` ou `ceasa-pr`.
+- `--all-sources`: executa a operacao para todas as fontes configuradas.
+- `--download-and-process`: baixa e processa os raws de todas as fontes.
 - `--list-categories`: lista as categorias disponiveis da fonte sem baixar nem salvar cotacoes.
 - `--parse`: baixa os dados brutos e extrai as cotacoes, mas nao salva no banco.
 - `--save`: baixa os dados, extrai as cotacoes e salva no SQLite.
@@ -126,9 +127,11 @@ Tambem e possivel passar argumentos diretamente para a CLI pelo servico `app`.
 - `--request-delay-seconds`: define o intervalo minimo entre uma requisicao e outra.
 - `--archive-raw-old`: compacta arquivos brutos antigos da pasta `old`.
 
-## Alterar fonte
+## Executar uma fonte isolada
 
-Os comandos principais usam a fonte configurada em `COTACOES_SOURCE`.
+Os comandos principais `baixar`, `salvar` e `tudo` sempre percorrem todas as
+fontes. `COTACOES_SOURCE` e `--source` existem somente para execucoes avancadas
+pelo servico `app`.
 
 ```env
 COTACOES_SOURCE=ceasa-mg
@@ -343,6 +346,10 @@ O intervalo minimo entre requisicoes vem do `.env`:
 COTACOES_REQUEST_DELAY_SECONDS=2.0
 ```
 
+O cliente adiciona ate 0,5 segundo de jitter ao intervalo, reutiliza respostas
+repetidas durante a mesma execucao e aplica backoff em falhas temporarias.
+Respostas `403` e respostas `429` persistentes encerram a coleta da fonte.
+
 Para evitar requisicoes repetidas quando o raw ja existe na pasta principal:
 
 ```env
@@ -365,3 +372,20 @@ Tambem pode ser alterado por comando:
 ```bash
 docker compose run --rm app --request-delay-seconds 3
 ```
+
+Para baixar as 100 ultimas datas disponiveis de todas as fontes com historico,
+configure:
+
+```env
+COTACOES_QUOTES_BACK=99
+```
+
+Depois execute somente:
+
+```bash
+docker compose run --rm tudo
+```
+
+Fontes sem historico ignoram `COTACOES_QUOTES_BACK` e coletam apenas a
+cotacao atual. Cada data encontrada e salva em `data/raw/` antes da descoberta
+continuar.
