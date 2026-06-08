@@ -109,6 +109,37 @@ Tarefas futuras:
 - [x] Fazer uma validacao completa antes de iniciar a coleta demorada, garantindo que fontes, processamento e persistencia funcionem corretamente.
 - [x] Revisar e reorganizar o modelo do banco, separando entrepostos, proveniencia, aliases de produto e apresentacoes de unidade.
 
+## Melhorias futuras
+
+### Download paralelo entre fontes
+
+Objetivo: reduzir a duracao de coletas longas executando fontes independentes
+simultaneamente, sem aumentar a quantidade de requisicoes concorrentes contra
+uma mesma CEASA.
+
+Direcao recomendada:
+
+- Usar `ThreadPoolExecutor`, pois o download e limitado principalmente por I/O.
+- Paralelizar somente fontes diferentes.
+- Manter categorias e datas da mesma fonte sequenciais.
+- Comecar com no maximo duas ou tres fontes simultaneas.
+- Configurar o limite por `COTACOES_MAX_PARALLEL_SOURCES`.
+- Manter uma instancia independente de coletor, `HttpClient`, cache e sessao
+  para cada fonte.
+- Manter o processamento e a persistencia no SQLite sequenciais para evitar
+  concorrencia e erros `database is locked`.
+- No servico `tudo`, baixar as fontes em paralelo e processar os raws
+  sequencialmente depois.
+- Organizar a saida do terminal por fonte para evitar mensagens misturadas.
+- Preservar delay, backoff, `Retry-After` e interrupcao individual em bloqueio.
+
+Antes de implementar:
+
+- Medir tempo, memoria e quantidade de requisicoes do fluxo sequencial.
+- Avaliar o consumo do cache HTTP por worker.
+- Verificar se fontes diferentes compartilham infraestrutura ou limites.
+- Validar primeiro com duas fontes e aumentar o limite somente se necessario.
+
 ## Decisoes iniciais
 
 - Python sera a opcao natural para o scraper pela disponibilidade de bibliotecas de coleta, parsing e tratamento de dados.
