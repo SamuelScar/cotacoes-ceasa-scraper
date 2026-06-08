@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from cotacoes_ceasa.models import Cotacao
+from cotacoes_ceasa.core.models import Cotacao
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 
 

@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 
 from bs4 import BeautifulSoup
 
-from cotacoes_ceasa.models import Category, Cotacao
+from cotacoes_ceasa.core.models import Category, Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
 from cotacoes_ceasa.normalizers.text import clean_text, normalize_key as _normalize_key
 

@@ -15,7 +15,7 @@ services:
 
   baixar:
     <<: *app
-    command: ["--all-sources"]
+    command: ["--all-sources", "--download-only"]
 
   salvar:
     <<: *app

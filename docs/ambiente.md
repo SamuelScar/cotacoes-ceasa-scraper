@@ -1,111 +1,59 @@
-# Ambiente de desenvolvimento
-
-Este documento registra como preparar o ambiente local do projeto.
+# Ambiente e configuracao
 
 ## Requisitos
 
 - Docker.
 - Docker Compose.
 
-O container usa Python 3.12 e instala as dependencias registradas em `requirements.txt`.
+O container usa Python 3.12 e instala as dependencias de `requirements.txt`.
 
-## Variaveis locais
-
-O projeto usa um arquivo `.env` local para configurar os valores padrao da CLI.
-
-Criar a partir do exemplo:
+## Preparacao
 
 ```bash
 cp .env.example .env
+docker compose build
 ```
 
-Variaveis disponiveis:
+O Compose monta a raiz do projeto em `/app`. Configuracoes e arquivos gerados
+em `data/` permanecem na maquina.
 
-- `COTACOES_SOURCE`: fonte usada somente nos comandos avancados pelo servico `app`.
-- `COTACOES_SOURCES_FILE`: arquivo com as fontes disponiveis.
-- `COTACOES_RAW_DIR`: diretorio para salvar HTML bruto.
-- `COTACOES_DATABASE_PATH`: caminho do arquivo SQLite.
-- `COTACOES_HTTP_TIMEOUT_SECONDS`: timeout das requisicoes HTTP.
-- `COTACOES_REQUEST_DELAY_SECONDS`: intervalo minimo entre requisicoes HTTP.
-- `COTACOES_REUSE_RAW_BEFORE_REQUEST`: quando `true`, usa HTML ja salvo na pasta raw principal antes de fazer nova requisicao.
-- `COTACOES_TARGET_DATE`: data limite da coleta. Se vazio, busca a ultima cotacao disponivel. Aceita `DD/MM/YYYY` ou `YYYY-MM-DD`.
-- `COTACOES_QUOTES_BACK`: quantidade de datas de cotacao anteriores para coletar a partir da data limite.
+## Variaveis locais
+
+O `.env` define os valores padrao da CLI. Quando existe uma opcao equivalente,
+argumentos passados ao servico `app` sobrescrevem esses valores.
+
+| Variavel | Uso |
+| --- | --- |
+| `COTACOES_SOURCE` | Fonte padrao para comandos avancados |
+| `COTACOES_SOURCES_FILE` | Arquivo JSON com as fontes |
+| `COTACOES_RAW_DIR` | Diretorio dos arquivos brutos |
+| `COTACOES_DATABASE_PATH` | Caminho do SQLite |
+| `COTACOES_HTTP_TIMEOUT_SECONDS` | Timeout de cada requisicao |
+| `COTACOES_REQUEST_DELAY_SECONDS` | Intervalo minimo entre requisicoes |
+| `COTACOES_REUSE_RAW_BEFORE_REQUEST` | Reutiliza raw ativo antes de baixar |
+| `COTACOES_PROHORT_URL` | URL do `ProhortDiario.txt` |
+| `COTACOES_TARGET_DATE` | Data limite em `DD/MM/YYYY` ou `YYYY-MM-DD` |
+| `COTACOES_QUOTES_BACK` | Quantidade de cotacoes anteriores |
 
 Exemplos:
 
 ```env
+# Ultima cotacao disponivel
 COTACOES_TARGET_DATE=
 COTACOES_QUOTES_BACK=0
-```
 
-Coleta somente a ultima cotacao disponivel.
-
-```env
+# Data limite e mais 30 cotacoes anteriores
 COTACOES_TARGET_DATE=29/05/2026
-COTACOES_QUOTES_BACK=0
-```
-
-Coleta somente a cotacao de `29/05/2026`.
-
-```env
-COTACOES_TARGET_DATE=
 COTACOES_QUOTES_BACK=30
 ```
 
-Coleta a ultima cotacao disponivel e mais 30 datas de cotacao anteriores encontradas. Isso nao significa 30 dias corridos.
+`COTACOES_QUOTES_BACK` conta datas de cotacao encontradas, nao dias corridos.
+No fluxo de todas as fontes, a janela e zerada para fontes sem historico. Em
+uma execucao isolada, informar `--quotes-back` para essas fontes gera erro.
 
-```env
-COTACOES_REUSE_RAW_BEFORE_REQUEST=true
-```
+Com `COTACOES_REUSE_RAW_BEFORE_REQUEST=true`, o coletor procura o arquivo
+correspondente diretamente em `data/raw/<fonte>/`. A busca nao usa `old/` nem
+arquivos compactados.
 
-Antes de baixar uma pagina de cotacao, tenta reutilizar o HTML correspondente em `data/raw/<fonte>/`. A busca nao considera `old/` nem arquivos compactados.
-
-O `.env` nao deve ser versionado. O arquivo versionavel e o `.env.example`.
-
-## Dependencias
-
-O projeto usa dependencias externas para leitura e parsing de HTML e PDF.
-
-As dependencias sao instaladas dentro da imagem Docker durante o build:
-
-```bash
-docker compose build
-```
-
-Dependencias principais:
-
-- `beautifulsoup4`: extracao de dados do HTML.
-- `lxml`: parser HTML usado pelo BeautifulSoup.
-- `pypdf`: extracao de texto dos PDFs da CEASA-PR.
-
-## Executar coleta
-
-Ver comandos de execucao em [Comandos](comandos.md).
-
-Baixar os arquivos brutos de todas as fontes:
-
-```bash
-docker compose run --rm baixar
-```
-
-Processar os arquivos brutos baixados e salvar no SQLite:
-
-```bash
-docker compose run --rm salvar
-```
-
-Baixar, processar e salvar no SQLite em um unico comando:
-
-```bash
-docker compose run --rm tudo
-```
-
-Compactar HTMLs antigos da pasta `old`:
-
-```bash
-docker compose run --rm compactar-old
-```
-
-Esse comando gera um novo `.zip` dentro de `data/raw/<fonte>/old/` e remove os `.html` compactados.
-
-O compose monta a raiz do projeto em `/app`. Com isso, o `.env`, `config/` e os arquivos gerados em `data/` ficam no mesmo diretorio do projeto.
+O `.env` e local e nao deve ser versionado. Atualize `.env.example` quando uma
+nova configuracao obrigatoria for adicionada.

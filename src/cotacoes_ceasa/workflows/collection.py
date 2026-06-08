@@ -1,10 +1,10 @@
 from datetime import date, timedelta
 from pathlib import Path
 
-from cotacoes_ceasa.contracts import SourceCollector
+from cotacoes_ceasa.cli.output import TerminalOutput
+from cotacoes_ceasa.core.contracts import SourceCollector
+from cotacoes_ceasa.core.models import Category, Cotacao
 from cotacoes_ceasa.http.client import HttpSourceBlockedError
-from cotacoes_ceasa.models import Category, Cotacao
-from cotacoes_ceasa.terminal import TerminalOutput
 
 
 def collect_and_report(
@@ -100,7 +100,6 @@ def download_and_report(
             downloaded_file = downloaded_files.get((category.slug, target_date))
 
             if downloaded_file is not None:
-                output.success(f"{category.slug} | salvo em {downloaded_file}")
                 continue
 
             try:
@@ -125,6 +124,7 @@ def resolve_quotation_dates(
     target_date: date | None,
     quotes_back: int,
     downloaded_files: dict[tuple[str, date | None], Path] | None = None,
+    output: TerminalOutput | None = None,
 ) -> list[date | None]:
     """Descobre datas de cotacao disponiveis voltando a partir da data limite."""
     if quotes_back < 0:
@@ -179,10 +179,16 @@ def resolve_quotation_dates(
                     continue
 
                 try:
-                    downloaded_files[download_key] = collector.download_category(
+                    downloaded_file = collector.download_category(
                         probe_category_slug,
                         quotation_date,
                     )
+                    downloaded_files[download_key] = downloaded_file
+
+                    if output is not None:
+                        output.success(
+                            f"{probe_category_slug} | salvo em {downloaded_file}"
+                        )
                 except HttpSourceBlockedError:
                     raise
                 except Exception:
@@ -225,6 +231,7 @@ def resolve_category_target_dates(
                 target_date=target_date,
                 quotes_back=quotes_back,
                 downloaded_files=downloaded_files,
+                output=output,
             )
 
         return target_dates_by_category
@@ -235,6 +242,7 @@ def resolve_category_target_dates(
         target_date=target_date,
         quotes_back=quotes_back,
         downloaded_files=downloaded_files,
+        output=output,
     )
 
     if collector.supports_target_dates:

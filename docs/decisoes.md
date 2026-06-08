@@ -1,304 +1,46 @@
 # Decisoes tecnicas
 
-Este documento registra decisoes tomadas durante o desenvolvimento do scraper.
-
-O objetivo e manter o historico de escolhas importantes sem depender apenas de conversas ou commits.
-
-## 2026-06-01
-
-### Comecar pela documentacao
-
-Decisao: antes de implementar o scraper, criar uma base documental com objetivo, fontes, modelo de dados e plano de implementacao.
-
-Motivo: o projeto envolve varias fontes com formatos diferentes. Documentar primeiro reduz retrabalho e ajuda a manter o escopo claro.
-
-### Priorizar fontes HTML ou API publica
-
-Decisao: a primeira versao deve priorizar fontes em HTML ou API publica.
-
-Motivo: fontes em PDF, planilhas baixadas manualmente ou paginas com bloqueios tendem a exigir tratamento especifico. Elas devem ficar para depois que o fluxo principal estiver funcionando.
-
-### Usar Python como base do scraper
-
-Decisao: usar Python para a implementacao inicial.
-
-Motivo: Python tem bibliotecas maduras para requisicoes HTTP, parsing de HTML, tratamento tabular e persistencia simples.
-
-### Usar SQLite como persistencia inicial
-
-Decisao: salvar os dados em SQLite desde a primeira versao.
-
-Motivo: o projeto precisa de um arquivo final consultavel e simples de manter. SQLite atende esse objetivo sem exigir servidor de banco.
-
-### Separar coletores por fonte
-
-Decisao: cada CEASA deve ter seu proprio coletor.
-
-Motivo: as fontes possuem estruturas diferentes. Separar os coletores evita acoplamento e facilita manutencao quando uma fonte muda.
-
-### Comecar pela CEASA-PE
-
-Decisao: iniciar pela coleta de HTML bruto da CEASA-PE.
-
-Motivo: a fonte possui paginas de cotacao separadas por categoria e tabelas proximas do modelo de dados desejado. Isso permite implementar uma primeira coleta simples antes do parser e da gravacao em SQLite.
-
-### Usar `.env` para valores locais
-
-Decisao: manter um `.env` local para os valores padrao da CLI e um `.env.example` versionavel.
-
-Motivo: a coleta precisa de configuracoes locais, como fonte, diretorio de HTML bruto e timeout HTTP. O `.env.example` documenta esses valores sem versionar configuracoes locais.
-
-### Usar servicos curtos para todas as fontes
-
-Decisao: manter os servicos Compose `baixar`, `salvar` e `tudo` como fluxo
-principal. Eles percorrem todas as fontes de `config/fontes.json` e leem data,
-janela historica, delay, timeout e caminhos do `.env`.
-
-Motivo: a operacao normal nao deve exigir loops PowerShell nem repeticao de
-flags por fonte. O servico `app` fica reservado para execucoes isoladas e
-diagnostico.
-
-### Limitar ritmo de requisicoes
-
-Decisao: configurar um intervalo minimo entre requisicoes HTTP.
-
-Motivo: a coleta deve ser conservadora para reduzir risco de bloqueio e evitar carga desnecessaria nas fontes publicas.
-
-### Reutilizar respostas e recuar em falhas temporarias
-
-Decisao: manter um cache limitado durante cada execucao e aplicar backoff
-exponencial com jitter para falhas temporarias. Respeitar `Retry-After`,
-interromper imediatamente em `403` e interromper em `429` persistente.
-
-Motivo: a descoberta de datas e a coleta final podem consultar as mesmas
-paginas, formularios e relatorios. Reutilizar essas respostas reduz a carga
-nas fontes. Continuar requisitando depois de uma recusa aumenta o risco de
-bloqueio.
-
-### Separar configuracao de fontes
-
-Decisao: mover a URL base da CEASA-PE para `config/fontes.json`.
-
-Motivo: fontes sao configuracoes do scraper, nao configuracoes locais de ambiente. Manter isso em arquivo proprio evita misturar lista de fontes com caminhos locais, timeouts e banco.
-
-### Descobrir categorias da CEASA-PE em tempo de execucao
-
-Decisao: remover a lista fixa de categorias da CEASA-PE e descobrir os links de categoria a partir da pagina base.
-
-Motivo: se a fonte adicionar, remover ou renomear categorias, o scraper deve acompanhar a estrutura disponivel sem exigir mudanca de codigo para o caso comum.
-
-### Gravar cotações normalizadas em SQLite
-
-Decisao: adicionar `SQLiteStorage` e o modo `--save` na CLI.
-
-Motivo: o projeto precisa manter o HTML bruto para auditoria, mas o resultado util deve ficar em um banco local consultavel. A tabela `cotacoes` usa uma chave hash para evitar duplicar registros iguais em execucoes repetidas.
-
-### Evoluir para schema relacional
-
-Decisao: substituir a tabela unica por tabelas normalizadas: `estados`, `ceasas`, `categorias`, `produtos`, `unidades` e `cotacoes`.
-
-Motivo: o processamento da CEASA-PE foi validado de ponta a ponta. Com isso, o banco pode seguir mais proximo do modelo planejado sem antecipar regras complexas de normalizacao.
-
-Atualizacao: a compatibilidade com bancos anteriores foi removida. O projeto
-considera somente o schema vigente e recria a base a partir dos arquivos brutos
-ativos quando a estrutura muda.
-
-### Coletar datas de cotacao anteriores
-
-Decisao: adicionar `COTACOES_TARGET_DATE`, `COTACOES_QUOTES_BACK`, `--target-date` e `--quotes-back`.
-
-Motivo: a CEASA-PE permite consultar cotacoes antigas pelo parametro `data`. A configuracao deve representar datas de cotacao disponiveis, nao dias corridos. Exemplo: `--quotes-back 30` coleta a data limite e mais 30 datas anteriores que realmente tenham cotacao.
-
-Detalhe: quando `COTACOES_TARGET_DATE` fica vazio, o scraper deve buscar a ultima cotacao disponivel. Informar `COTACOES_TARGET_DATE=01/02/2026` nao significa coletar de fevereiro ate hoje; significa usar `01/02/2026` como data limite.
-
-### Continuar em falha parcial por categoria
-
-Decisao: ao processar multiplas categorias, uma categoria sem tabela nao derruba a execucao inteira.
-
-Motivo: em 29/05/2026, `flores` e `organicos` nao retornaram tabela, mas as demais categorias tinham cotacoes validas. O scraper deve registrar o erro e salvar o que foi coletado com sucesso.
-
-### Manter somente o raw mais recente na pasta principal
-
-Decisao: ao salvar HTML bruto, manter em `data/raw/<fonte>/` somente o arquivo mais recente por fonte, categoria, data de cotacao consultada e dia de execucao. Arquivos anteriores do mesmo grupo sao movidos para `data/raw/<fonte>/old/`.
-
-Motivo: a pasta principal deve ficar facil de inspecionar durante o desenvolvimento, sem perder totalmente os arquivos antigos gerados no mesmo dia.
-
-### Compactar raws antigos sob demanda
-
-Decisao: disponibilizar um comando para compactar os `.html` soltos de `data/raw/<fonte>/old/` em um novo `.zip` dentro da propria pasta `old`, removendo os `.html` originais depois da compactacao.
-
-Motivo: a pasta `old` tende a crescer com o tempo. A compactacao sob demanda preserva o historico bruto sem deixar muitos arquivos HTML soltos acumulados no diretorio.
-
-### Reutilizar raw ativo antes de requisitar
-
-Decisao: permitir que `COTACOES_REUSE_RAW_BEFORE_REQUEST=true` faca a coleta reutilizar o HTML correspondente em `data/raw/<fonte>/` antes de abrir uma nova requisicao HTTP.
-
-Motivo: a opcao reduz requests repetidas durante desenvolvimento e reprocessamento. A busca fica limitada a pasta raw principal para evitar misturar historico antigo ou arquivos compactados no fluxo normal de coleta.
-
-### Implementar CEASA-MG pela ultima cotacao
-
-Decisao: implementar a CEASA-MG a partir da tabela de preco mais comum da
-ultima cotacao. Cada coluna de cidade vira uma cotacao separada para seu
-entreposto.
-
-Motivo: a fonte nao expoe categorias nem acesso confiavel a cotacoes
-anteriores. As cidades representam mercados, nao a procedencia dos produtos.
-
-### Normalizar unidades sem perder o valor original
-
-Decisao: a normalizacao de unidades deve preservar a unidade original da fonte e gerar campos derivados para analise.
-
-Motivo: a CEASA-PE mistura unidade, embalagem e quantidade no mesmo texto. Exemplos: `Kg`, `Cx.20Kg`, `Cx.30 Dz`, `Molho 0,350 Kg`, `Cx12Unid.1L`. Se o scraper apenas sobrescrever esse texto por uma sigla simples, parte da informacao comercial sera perdida.
-
-Implementacao: `unidades` guarda somente a medida canonica. A cotacao preserva
-`unidade_original` e recebe os campos derivados `unidade_normalizada`,
-`embalagem`, `quantidade_minima`, `quantidade_maxima` e `detalhe_unidade`.
-Atualizacao: o comando corretivo para registros ja salvos foi removido. Quando
-a estrutura ou a normalizacao mudar, o banco deve ser recriado a partir dos
-arquivos brutos ativos.
-
-### Recriar o banco em vez de migrar estruturas antigas
-
-Decisao: considerar somente o schema SQLite vigente e remover conversoes,
-adicoes de colunas e comandos corretivos para bancos anteriores.
-
-Motivo: os arquivos brutos preservam a fonte original e permitem reconstruir a
-base de forma previsivel. Manter migracoes locais aumentaria a complexidade e
-poderia conservar dados inconsistentes de estruturas abandonadas.
-
-## 2026-06-02
-
-### Implementar CEASA-PR por PDFs diarios
-
-Decisao: implementar a CEASA-PR pela pagina anual unificada, onde cada cidade, mes e dia aponta para um PDF diario.
-
-Motivo: a estrutura a partir de 2022 concentra as cidades em paginas anuais. Como os nomes dos arquivos PDF variam por cidade, o scraper deve localizar o link no HTML em vez de montar a URL por padrao de nome.
-
-Detalhe: para esta fonte, as categorias do projeto representam as cidades descobertas na pagina anual. O parser usa `pypdf` para extrair o texto dos PDFs e mapear produto, tipo, unidade, situacao de mercado, precos e procedencia para o modelo normalizado.
-
-### Implementar CEASA Campinas por links de PDF
-
-Decisao: implementar a CEASA Campinas a partir da pagina de cotacoes anteriores, onde cada data aponta para um PDF.
-
-Motivo: a fonte publica as cotacoes em uma lista paginada de datas. Como os links estao no HTML e podem mudar ao longo do tempo, o scraper deve descobrir os PDFs pela propria pagina em vez de montar URLs manualmente.
-
-Detalhe: o coletor busca o PDF mais recente ate a data limite. O parser usa as secoes encontradas dentro do PDF como categorias dos registros, sem manter lista fixa de grupos de produtos. Na validacao de 2026-06-07, a ultima cotacao extraiu 316 registros, duas datas publicadas resultaram em 630 registros e a navegacao para 2025 extraiu 312 registros.
-
-### Avaliar PROHORT antes de novos scrapers individuais
-
-Decisao: antes de implementar novas fontes individuais, comparar a fonte local com o `ProhortDiario.txt` da CONAB usando criterios de longevidade, detalhes uteis e velocidade de atualizacao.
-
-Motivo: o PROHORT cobre muitas CEASAs em formato padronizado desde 2022, mas nao substitui automaticamente as fontes individuais. Algumas fontes locais podem ter historico mais antigo, campos mais detalhados ou atualizacao mais rapida.
-
-Detalhe: quando PROHORT e fonte individual cobrirem a mesma CEASA/data, as fontes podem ser combinadas. O PROHORT pode servir como base nacional padronizada, enquanto a fonte individual complementa com detalhes como minimo, maximo, classificacao, procedencia ou situacao de mercado.
-
-## 2026-06-03
-
-### Complementar dados com PROHORT em comando separado
-
-Decisao: manter os scrapers individuais como fonte principal e adicionar um comando separado para complementar registros ja salvos com o PROHORT.
-
-Motivo: o fluxo diario nao deve gerar dois resultados diferentes para a mesma cotacao. A fonte individual continua mandando no registro; o PROHORT entra depois apenas para preencher campos vazios quando houver correspondencia confiavel.
-
-Detalhe: o complemento nao sobrescreve valores preenchidos. O comando compara CEASA, data, produto e unidade, e registra `fonte_complemento`, `url_complemento` e `data_complemento` quando algum campo e preenchido. Quando o PROHORT tem um produto do mesmo dia e da mesma CEASA que ainda nao existe na fonte principal, ele insere uma cotacao complementar sem minimo, maximo, classificacao ou situacao de mercado. Quando a categoria da fonte principal nao for conhecida, usa a categoria `prohort-complemento`.
-
-### Implementar CEASA-CE por boletins atuais
-
-Decisao: escolher a CEASA-CE como proxima fonte individual.
-
-Motivo: a pagina oficial de boletins lista links diretos para PDFs por entreposto e categoria, sem formulario por produto. Os PDFs trazem data, unidade, preco minimo, comum, maximo, procedencia e situacao de mercado, oferecendo mais detalhe que o PROHORT para uso como fonte principal.
-
-Detalhe: a primeira versao coleta boletins atuais descobertos em `boletim.php`. Nao foi implementado historico por data para esta fonte. Na validacao de 2026-06-07, os nove boletins disponiveis extrairam 544 registros.
-
-### Implementar CEASA-GO por PDFs diarios
-
-Decisao: adicionar a CEASA-GO como nova fonte individual ainda pendente.
-
-Motivo: a pagina oficial organiza cotacoes por ano, mes e PDF diario. O boletim informa preco mais comum, maximo e minimo, permitindo complementar a cobertura de fontes estaduais sem depender apenas do PROHORT.
-
-Detalhe: a primeira versao encontra o PDF mais recente ate a data limite, salva o bruto em `data/raw/ceasa-go/` e usa as secoes internas do PDF como categorias dos registros. Na validacao de 2026-06-07, a ultima cotacao extraiu 233 registros, duas datas publicadas resultaram em 466 registros e a navegacao para 2025 extraiu 252 registros.
-
-## 2026-06-06
-
-### Implementar CEASA-RJ por PDFs diarios
-
-Decisao: escolher a CEASA-RJ como proxima fonte individual.
-
-Motivo: a pagina oficial organiza as cotacoes por ano, mes e dia, com links diretos para PDFs diarios. Os boletins trazem preco minimo, modal e maximo, alem de tipo e embalagem.
-
-Detalhe: o coletor encontra o PDF mais recente ate a data limite e suporta `--quotes-back`. As secoes numeradas do boletim sao usadas como categorias. Na validacao, a ultima cotacao disponivel extraiu 155 registros; a coleta de 2026-06-03 e uma data anterior extraiu 310 registros; a navegacao para 2025-12-31 extraiu 150 registros.
-
-### Implementar CEASA-BA por PDFs diarios
-
-Decisao: escolher a CEASA-BA como proxima fonte individual.
-
-Motivo: a pagina oficial publica uma lista historica de boletins com links diretos para PDFs. Os boletins trazem categoria, unidade, procedencia, preco minimo, comum e maximo, alem da situacao de mercado.
-
-Detalhe: o coletor encontra o PDF mais recente ate a data limite e suporta `--quotes-back`. Na validacao, a ultima cotacao disponivel extraiu 98 registros; a coleta de 2026-06-03 e uma data anterior extraiu 185 registros; a navegacao para 2025 extraiu 90 registros.
-
-### Implementar CEASA-DF pelo boletim SIMA atual
-
-Decisao: escolher a CEASA-DF como proxima fonte individual.
-
-Motivo: a pagina oficial publica um link direto para o boletim SIMA atual em PDF, com classificacao, situacao de mercado e precos minimo, comum e maximo.
-
-Detalhe: a primeira versao coleta apenas o boletim atual porque a pagina oficial nao expoe uma lista historica direta. O parser separa as duas colunas do PDF de forma adaptativa por pagina antes de extrair os registros. Na validacao, foram extraidas 91 cotacoes sem nomes suspeitos.
-
-### Manter CEASA-MG somente com a ultima cotacao
-
-Decisao: manter a CEASA-MG sem suporte a cotacoes anteriores.
-
-Motivo: nao foi identificado acesso confiavel a historico por data na fonte individual. O fluxo atual ja atende a coleta da ultima cotacao publicada por cidade.
-
-### Implementar CEAGESP-SP pelo formulario da capital
-
-Decisao: escolher a CEAGESP-SP como proxima fonte individual.
-
-Motivo: a pagina oficial publica as categorias e datas disponiveis e retorna uma tabela HTML com produto, classificacao, unidade e precos minimo, comum e maximo.
-
-Detalhe: o coletor envia a categoria e a data pelo formulario oficial. A primeira versao cobre o Entreposto da Capital e suporta `--target-date` e `--quotes-back` dentro da janela recente exposta pela pagina. Na validacao, a ultima cotacao disponivel extraiu 557 registros; duas datas publicadas resultaram em 1.129 registros.
-
-## 2026-06-07
-
-### Implementar CEASA-ES pelo formulario legado
-
-Decisao: implementar a CEASA-ES pelo sistema legado vinculado na pagina oficial de boletins.
-
-Motivo: o formulario permite selecionar tres mercados, expoe datas historicas e retorna um relatorio HTML completo com produto, embalagem, precos minimo, comum e maximo, alem da situacao de mercado.
-
-Detalhe: o coletor mantem a sessao exigida pelo Scriptcase, seleciona a ultima data disponivel ate a data limite e suporta `--target-date` e `--quotes-back` com datas independentes por mercado. Grande Vitoria expoe 1.221 datas de 2021-07-01 a 2026-06-03, Noroeste expoe 856 datas de 2010-09-01 a 2024-12-20 e Cachoeiro expoe 180 datas de 2015-07-02 a 2018-08-27. Na validacao de 2026-06-07, as ultimas cotacoes extrairam 289 registros e duas datas de cada mercado resultaram em 574 registros.
-
-## 2026-06-08
-
-### Separar identidade comercial, proveniencia e versoes
-
-Decisao: reorganizar o SQLite em `estados`, `ceasas`, `entrepostos`,
-`categorias`, `produtos`, `produto_aliases`, `unidades`,
-`apresentacoes_unidade`, `coletas` e `cotacoes`.
-
-Motivo: o modelo anterior misturava cidades com categorias ou procedencias,
-repetia detalhes de unidade em todas as cotacoes e nao identificava com
-precisao qual arquivo bruto originou cada registro.
-
-Detalhe: a identidade comercial nao inclui preco nem coleta. Cada publicacao
-permanece como uma versao auditavel ligada a uma coleta, enquanto reprocessar o
-mesmo raw continua idempotente. O banco antigo nao e convertido; ele e
-reconstruido a partir dos raws ativos.
-
-### Rejeitar layouts sem interpretacao confiavel
-
-Decisao: nao persistir o layout antigo de duas colunas da CEASA Campinas
-quando a data da cotacao nao puder ser identificada.
-
-Motivo: a extracao textual desse formato mistura colunas e produzia produtos,
-categorias, datas e precos incorretos. Ignorar o arquivo com aviso e mais
-confiavel que manter registros aparentemente validos e semanticamente errados.
-
-### Nao corrigir automaticamente a ordem dos precos
-
-Decisao: validar datas, existencia de algum preco e valores nao negativos, mas
-nao impor que `preco_minimo <= preco_comum <= preco_maximo`.
-
-Motivo: algumas fontes publicam valores fora dessa ordem. Sem uma regra
-confiavel por fonte, trocar ou descartar esses valores esconderia o conteudo
-original. O raw e a coleta permanecem registrados para auditoria.
+Este documento registra somente decisoes vigentes que afetam a manutencao ou a
+operacao do projeto.
+
+## Coleta
+
+- Cada fonte possui coletor e parser proprios.
+- Categorias, datas e links devem ser descobertos na fonte quando possivel.
+- CEASA-MG, CEASA-CE e CEASA-DF coletam somente a publicacao atual.
+- `quotes_back` conta datas de cotacao encontradas, nao dias corridos.
+- Falhas pontuais de categoria nao interrompem as demais categorias.
+- Layouts sem interpretacao confiavel sao rejeitados em vez de persistidos.
+
+## Acesso HTTP
+
+- O cliente aplica delay, jitter, cache por execucao e backoff.
+- HTTP 403 e HTTP 429 persistente interrompem a fonte.
+- O projeto nao implementa mecanismos para contornar bloqueios.
+
+## Arquivos brutos
+
+- HTMLs e PDFs sao preservados antes do processamento.
+- A pasta principal mantem o raw ativo mais recente de cada grupo por dia.
+- Versoes anteriores do mesmo grupo vao para `old/`.
+- Reprocessamento considera somente raws ativos.
+- Compactacao de HTMLs antigos e executada sob demanda.
+
+## Persistencia
+
+- SQLite e o resultado consolidado do projeto.
+- O schema separa fontes, entrepostos, produtos, aliases, unidades,
+  apresentacoes, coletas e cotacoes.
+- O raw e seu hash identificam a proveniencia do registro.
+- Identidade comercial e versao observada usam chaves diferentes.
+- O banco e recriado a partir dos raws quando o schema muda; nao ha migracoes
+  de estruturas antigas.
+
+## Qualidade dos dados
+
+- Nomes originais e apresentacoes comerciais sao preservados.
+- Normalizacoes agressivas exigem evidencia de equivalencia.
+- Precos negativos sao rejeitados.
+- A ordem entre preco minimo, comum e maximo nao e corrigida automaticamente.
+- PROHORT complementa o resultado sem sobrescrever campos preenchidos.
+- Correspondencias ambiguas do PROHORT nao alteram o banco.

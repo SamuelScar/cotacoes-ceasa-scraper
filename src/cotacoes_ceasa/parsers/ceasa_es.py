@@ -5,7 +5,7 @@ from datetime import date
 
 from bs4 import BeautifulSoup
 
-from cotacoes_ceasa.models import Category, Cotacao
+from cotacoes_ceasa.core.models import Category, Cotacao
 from cotacoes_ceasa.normalizers.date import parse_br_date
 from cotacoes_ceasa.normalizers.money import parse_brl_money
 from cotacoes_ceasa.normalizers.text import clean_text, slugify as _slugify

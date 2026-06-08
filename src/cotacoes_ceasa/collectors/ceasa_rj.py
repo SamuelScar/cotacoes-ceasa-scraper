@@ -3,7 +3,7 @@ from datetime import date
 from pathlib import Path
 
 from cotacoes_ceasa.http.client import HttpClient
-from cotacoes_ceasa.models import Category, Cotacao
+from cotacoes_ceasa.core.models import Category, Cotacao
 from cotacoes_ceasa.parsers.ceasa_rj import CeasaRjParser, CeasaRjQuoteLink
 from cotacoes_ceasa.storage.raw_html import RawHtmlStorage
 

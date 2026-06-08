@@ -20,7 +20,7 @@ from cotacoes_ceasa.collectors.ceagesp_sp import (
     CEAGESP_SP_HEADERS,
     CeagespSpCollector,
 )
-from cotacoes_ceasa.contracts import SourceCollector, SourceParser
+from cotacoes_ceasa.core.contracts import SourceCollector, SourceParser
 from cotacoes_ceasa.http.client import HttpClient
 from cotacoes_ceasa.parsers.ceasa_ba import CeasaBaParser
 from cotacoes_ceasa.parsers.ceasa_campinas import CeasaCampinasParser

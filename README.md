@@ -1,178 +1,76 @@
 # Cotacoes CEASA Scraper
 
-Projeto para coletar cotacoes publicas de CEASAs brasileiras, padronizar os dados e consolidar as informacoes em uma base unica para consulta e analise historica.
+Coleta cotacoes publicas de CEASAs brasileiras, preserva os arquivos brutos e
+consolida os registros em um banco SQLite normalizado.
 
-## Objetivo
+## Fluxo do projeto
 
-Construir um scraper simples e extensivel para extrair cotacoes de produtos hortifrutigranjeiros em diferentes centrais de abastecimento do Brasil.
+1. Descobrir categorias e datas disponiveis em cada fonte.
+2. Baixar HTMLs ou PDFs para `data/raw/<fonte>/`.
+3. Processar os arquivos brutos com o parser da fonte.
+4. Salvar cotacoes, proveniencia e versoes em `data/cotacoes.sqlite`.
+5. Opcionalmente complementar campos vazios com o PROHORT.
 
-O foco inicial foi trabalhar com fontes publicas em HTML ou APIs abertas. Com a base funcionando, o projeto tambem passou a tratar PDFs quando a fonte oferece uma estrutura estavel.
+Os coletores individuais continuam sendo a fonte principal. O PROHORT nao
+sobrescreve valores ja preenchidos.
 
-## O que sera feito
+## Inicio rapido
 
-- Identificar e acessar fontes publicas de cotacoes de CEASAs e centrais de abastecimento.
-- Extrair dados de produtos hortifrutigranjeiros.
-- Normalizar nomes de produtos, unidades, estados e valores.
-- Armazenar os registros em SQLite.
-- Manter a coleta extensivel para novas fontes.
-
-## Dados esperados
-
-Cada cotacao deve seguir um formato padrao, independentemente da fonte:
-
-- CEASA de origem.
-- Estado e cidade.
-- Produto.
-- Unidade.
-- Data da cotacao.
-- Preco minimo.
-- Preco comum.
-- Preco maximo.
-- Procedencia, classificacao e situacao de mercado, quando existirem.
-- URL de origem.
-- Data da coleta.
-
-## Fontes previstas
-
-- CEASA-PE: https://www.ceasape.org.br/cotacao
-- CEASA-MG: https://minas1.ceasa.mg.gov.br/ceasainternet/cst_precosmaiscomumMG/cst_precosmaiscomumMG.php
-- CEASA-PR: https://www.ceasa.pr.gov.br/Pagina/Cotacao-Diaria-de-Precos
-- CEAGESP-SP: https://ceagesp.gov.br/cotacoes/
-- CEASA-RJ: https://www.rj.gov.br/ceasa/Cota%C3%A7%C3%A3o
-- CEASA-DF: https://www.portal.ceasadf.com.br/informacao-mercado
-- CEASA Campinas: https://www.ceasacampinas.com.br/cotacoes-anteriores
-- CEASA-GO: https://goias.gov.br/ceasa/cotacoes-diarias/
-- CEASA-BA: https://www.ba.gov.br/sde/boletim-informativo-ceasa
-- CEASA-CE: https://files.ceasa-ce.com.br/unsima/boletim_diario/boletim.php
-- CEASA-ES: https://ceasa.es.gov.br/boletim
-
-## Escopo e restricoes
-
-- Priorizar fontes com dados HTML ou API publica.
-- Tratar tabelas e paginas estaveis primeiro.
-- Fontes em PDF podem ser tratadas quando tiverem links publicos e estrutura estavel.
-- Coletar o maior numero possivel de fontes viaveis, respeitando o formato e a disponibilidade de cada CEASA.
-- Usar SQLite como arquivo final de armazenamento.
-
-## Modelo de dados atual
-
-A versao atual usa SQLite com tabelas normalizadas:
-
-- `estados`
-- `ceasas`
-- `categorias`
-- `produtos`
-- `unidades`
-- `cotacoes`
-
-Detalhes em [Modelo de dados](docs/modelo-dados.md).
-
-## Exemplo de registro
-
-- CEASA: CEAGESP-SP.
-- Produto: Banana Prata.
-- Unidade: kg.
-- Data da cotacao: 27/05/2026.
-- Preco minimo: 4,50.
-- Preco comum: 5,20.
-- Preco maximo: 6,00.
-- Fonte: pagina da CEAGESP.
-- Data da coleta: 27/05/2026.
-
-## Documentacao
-
-- [Ambiente de desenvolvimento](docs/ambiente.md)
-- [Comandos](docs/comandos.md)
-- [Fontes de dados](docs/fontes.md)
-- [Avaliacao de fontes](docs/avaliacao-fontes.md)
-- [Progresso das fontes](docs/progresso-fontes.md)
-- [Modelo de dados](docs/modelo-dados.md)
-- [Plano de implementacao](docs/plano-implementacao.md)
-- [Decisoes tecnicas](docs/decisoes.md)
-- [Arquitetura](docs/arquitetura.md)
-
-## Estrategia inicial
-
-1. Mapear as fontes e classificar a viabilidade de cada uma.
-2. Criar a estrutura minima do projeto.
-3. Implementar a coleta inicial da CEASA-PE.
-4. Salvar os dados em SQLite.
-5. Expandir para novas fontes mantendo o mesmo formato de saida.
-
-## Principios do projeto
-
-- Manter o codigo simples e legivel.
-- Separar coleta, extracao, normalizacao e persistencia.
-- Documentar decisoes tecnicas importantes.
-- Priorizar fontes estaveis antes de lidar com casos complexos.
-- Evitar refatoracoes grandes sem necessidade.
-
-## Ambiente com Docker
-
-O projeto roda via Docker para manter os mesmos comandos no Windows e no Linux.
-
-Copiar o arquivo de exemplo de variaveis locais:
+Requisitos: Docker e Docker Compose.
 
 ```bash
 cp .env.example .env
-```
-
-Buildar a imagem:
-
-```bash
 docker compose build
-```
-
-Baixar os arquivos brutos de todas as fontes:
-
-```bash
-docker compose run --rm baixar
-```
-
-Processar os arquivos brutos baixados e salvar no SQLite:
-
-```bash
-docker compose run --rm salvar
-```
-
-Baixar, processar e salvar no SQLite em um unico comando:
-
-```bash
 docker compose run --rm tudo
 ```
 
-Compactar HTMLs antigos da pasta `old`:
+O servico `tudo` baixa os arquivos brutos de todas as fontes configuradas,
+processa os raws ativos e salva o resultado no SQLite.
 
-```bash
-docker compose run --rm compactar-old
-```
+Comandos principais:
 
-Esse comando gera um novo `.zip` em `data/raw/<fonte>/old/` e remove os `.html` que entraram no arquivo compactado.
+| Comando | Operacao |
+| --- | --- |
+| `docker compose run --rm baixar` | Baixa raws de todas as fontes |
+| `docker compose run --rm salvar` | Reprocessa raws ativos e salva no SQLite |
+| `docker compose run --rm tudo` | Baixa, processa e salva |
+| `docker compose run --rm complementar-prohort` | Complementa o banco com PROHORT |
+| `docker compose run --rm compactar-old` | Compacta HTMLs antigos |
+| `docker compose run --rm app --help` | Exibe todas as opcoes da CLI |
 
-Complementar cotacoes ja salvas com o PROHORT:
+## Janela de coleta
 
-```bash
-docker compose run --rm complementar-prohort
-```
+`COTACOES_TARGET_DATE` define a data limite. Quando fica vazio, cada fonte busca
+a ultima cotacao disponivel.
 
-Esse comando nao substitui o fluxo principal. Ele deve ser executado depois dos scrapers individuais. Quando encontra uma correspondencia confiavel no PROHORT, preenche campos vazios; quando o PROHORT tem produto do mesmo dia e da mesma CEASA que a fonte principal nao trouxe, insere uma cotacao complementar.
-
-Para evitar downloads repetidos quando o raw ja existe na pasta principal:
+`COTACOES_QUOTES_BACK` informa quantas datas de cotacao anteriores devem ser
+coletadas. O valor nao representa dias corridos:
 
 ```env
-COTACOES_REUSE_RAW_BEFORE_REQUEST=true
+COTACOES_TARGET_DATE=
+COTACOES_QUOTES_BACK=99
 ```
 
-Executar a ajuda da CLI:
+Essa configuracao solicita a ultima data disponivel e mais 99 cotacoes
+anteriores nas fontes que oferecem historico. CEASA-MG, CEASA-CE e CEASA-DF
+coletam somente a publicacao atual.
 
-```bash
-docker compose run --rm app --help
-```
+## Arquivos gerados
 
-O diretorio do projeto e montado em `/app`, entao arquivos gerados em `data/` ficam salvos na maquina.
+- `data/raw/<fonte>/`: raws ativos usados no reprocessamento.
+- `data/raw/<fonte>/old/`: versoes anteriores geradas no mesmo dia.
+- `data/cotacoes.sqlite`: banco consolidado.
 
-As dependencias externas ficam registradas no `requirements.txt` e no `pyproject.toml`.
+O processamento ignora `old/` e arquivos `.zip`. Quando o schema ou uma regra
+de normalizacao mudar, exclua o SQLite e reconstrua o banco a partir dos raws
+ativos.
 
-## Resultado esperado
+## Documentacao
 
-Uma base SQLite integrada de cotacoes que permita comparar precos entre estados e consultar historico de produtos hortifrutigranjeiros comercializados no atacado.
+- [Ambiente e configuracao](docs/ambiente.md)
+- [Comandos](docs/comandos.md)
+- [Fontes e limitacoes](docs/fontes.md)
+- [Modelo de dados](docs/modelo-dados.md)
+- [Estrategias contra bloqueio](docs/estrategias-anti-bloqueio.md)
+- [Decisoes tecnicas](docs/decisoes.md)
+- [Pendencias](docs/pendencias.md)

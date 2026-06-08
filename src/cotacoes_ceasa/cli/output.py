@@ -1,8 +1,25 @@
+import os
+import sys
 from dataclasses import dataclass, field
 from typing import Iterable
 
 
 LINE_WIDTH = 72
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+BLUE = "\033[34m"
+CYAN = "\033[36m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+
+LEVEL_COLORS = {
+    "INFO": CYAN,
+    "OK": GREEN,
+    "AVISO": YELLOW,
+    "ERRO": RED,
+}
 
 
 @dataclass
@@ -11,6 +28,7 @@ class TerminalOutput:
 
     warning_count: int = 0
     error_count: int = 0
+    use_colors: bool = field(default_factory=lambda: _supports_colors(sys.stdout))
     _section_count: int = field(default=0, init=False, repr=False)
 
     def header(
@@ -18,17 +36,18 @@ class TerminalOutput:
         operation: str,
         details: Iterable[tuple[str, object]] = (),
     ) -> None:
-        print("=" * LINE_WIDTH)
-        print("COTACOES CEASA")
-        print("=" * LINE_WIDTH)
+        self._print(self._color("=" * LINE_WIDTH, CYAN))
+        self._print(self._color("COTACOES CEASA", BOLD + CYAN))
+        self._print(self._color("=" * LINE_WIDTH, CYAN))
         self._print_rows((("Operacao", operation), *details))
-        print()
+        self._print()
 
     def section(self, title: str) -> None:
         if self._section_count:
-            print()
+            self._print()
 
-        print(f"-- {title} " + "-" * max(LINE_WIDTH - len(title) - 4, 0))
+        line = f"-- {title} " + "-" * max(LINE_WIDTH - len(title) - 4, 0)
+        self._print(self._color(line, BOLD + BLUE))
         self._section_count += 1
 
     def info(self, message: str) -> None:
@@ -47,7 +66,7 @@ class TerminalOutput:
 
     def summary(self, rows: Iterable[tuple[str, object]] = ()) -> None:
         if not self._section_count:
-            print()
+            self._print()
 
         self.section("Resumo")
 
@@ -64,7 +83,8 @@ class TerminalOutput:
         self._print_rows(rows)
 
     def _message(self, level: str, message: str) -> None:
-        print(f"[{level:<5}] {message}")
+        label = self._color(f"[{level:<5}]", LEVEL_COLORS[level] + BOLD)
+        self._print(f"{label} {message}")
 
     def _print_rows(self, rows: Iterable[tuple[str, object]]) -> None:
         prepared_rows = [(label, str(value)) for label, value in rows]
@@ -75,4 +95,20 @@ class TerminalOutput:
         label_width = max(len(label) for label, _ in prepared_rows)
 
         for label, value in prepared_rows:
-            print(f"{label:<{label_width}} : {value}")
+            padded_label = self._color(f"{label:<{label_width}}", BOLD)
+            separator = self._color(":", DIM)
+            self._print(f"{padded_label} {separator} {value}")
+
+    def _color(self, text: str, color: str) -> str:
+        return f"{color}{text}{RESET}" if self.use_colors else text
+
+    def _print(self, text: str = "") -> None:
+        print(text, flush=True)
+
+
+def _supports_colors(stream) -> bool:
+    return (
+        stream.isatty()
+        and os.getenv("TERM") != "dumb"
+        and "NO_COLOR" not in os.environ
+    )

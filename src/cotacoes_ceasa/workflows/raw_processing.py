@@ -5,9 +5,9 @@ from hashlib import sha256
 from pathlib import Path
 from urllib.parse import urlencode
 
-from cotacoes_ceasa.contracts import SourceParser
-from cotacoes_ceasa.models import Cotacao
-from cotacoes_ceasa.terminal import TerminalOutput
+from cotacoes_ceasa.cli.output import TerminalOutput
+from cotacoes_ceasa.core.contracts import SourceParser
+from cotacoes_ceasa.core.models import Cotacao
 
 
 RAW_FILE_PATTERN = re.compile(

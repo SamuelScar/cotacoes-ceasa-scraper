@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-from cotacoes_ceasa.models import Cotacao
+from cotacoes_ceasa.core.models import Cotacao
 from cotacoes_ceasa.normalizers.text import slugify
 from cotacoes_ceasa.normalizers.unit import NormalizedUnit, normalize_unit
 

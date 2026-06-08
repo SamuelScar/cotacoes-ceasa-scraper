@@ -2,7 +2,7 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol
 
-from cotacoes_ceasa.models import Category, Cotacao
+from cotacoes_ceasa.core.models import Category, Cotacao
 
 
 class SourceCollector(Protocol):

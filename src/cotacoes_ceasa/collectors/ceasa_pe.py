@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from cotacoes_ceasa.http.client import HttpClient
-from cotacoes_ceasa.models import Category, Cotacao
+from cotacoes_ceasa.core.models import Category, Cotacao
 from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
 from cotacoes_ceasa.storage.raw_html import RawHtmlStorage
 
