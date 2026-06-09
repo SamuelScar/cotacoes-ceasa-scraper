@@ -13,6 +13,7 @@ fonte recusa o acesso. Ele nao tenta contornar bloqueios.
 - Respeito ao cabecalho `Retry-After`.
 - Interrupcao imediata em HTTP 403.
 - Interrupcao em HTTP 429 persistente.
+- Interrupcao da fonte em falhas HTTP ou de conexao persistentes.
 
 O cache em memoria nao continua entre execucoes. Para reutilizar raws ativos,
 configure:
@@ -32,6 +33,9 @@ docker compose run --rm salvar
 
 Cada raw encontrado e salvo durante o download. Se uma fonte falhar, as demais
 continuam no fluxo de todas as fontes.
+
+Se `tudo` for interrompido antes da fase de persistencia, execute `salvar`
+depois para processar os raws preservados.
 
 Com `COTACOES_INCREMENTAL_HISTORY=true`, uma nova execucao historica continua
 antes do raw ativo mais antigo e evita solicitar novamente toda a janela mais

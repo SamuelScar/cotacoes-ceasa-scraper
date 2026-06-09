@@ -1,5 +1,22 @@
 # Pendencias
 
+## Progresso da execucao
+
+Exibir o progresso dos comandos longos, principalmente `tudo`, para permitir
+acompanhar quanto da execucao ja foi concluido.
+
+A saida deve informar:
+
+- percentual geral concluido;
+- fase atual, como download ou persistencia;
+- fonte e categoria atuais;
+- quantidade concluida e total conhecido;
+- tempo decorrido e estimativa de tempo restante, quando confiavel.
+
+O calculo deve considerar que algumas fontes descobrem categorias e datas
+durante a execucao. Nesses casos, o total e o percentual podem ser atualizados
+conforme novos itens forem descobertos, sem apresentar uma estimativa enganosa.
+
 ## Dados compactados e Git LFS
 
 A pasta `data/` deve manter a estrutura atual durante a execucao, mas ser

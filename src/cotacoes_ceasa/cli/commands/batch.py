@@ -66,9 +66,20 @@ def run_all_sources_phase(
     )
     completed_count = 0
     failed_count = 0
+    skipped_count = 0
     downloaded_files: dict[str, list[Path]] = {}
 
     for source_slug in config.sources:
+        if (
+            raw_files_by_source is not None
+            and source_slug not in raw_files_by_source
+        ):
+            skipped_count += 1
+            output.warning(
+                f"{source_slug} | persistencia ignorada porque o download falhou."
+            )
+            continue
+
         source_args = copy(args)
         source_args.source = source_slug
 
@@ -107,6 +118,7 @@ def run_all_sources_phase(
         (
             ("Fontes concluidas", completed_count),
             ("Fontes com falha", failed_count),
+            ("Fontes ignoradas", skipped_count),
         ),
         report_title=f"{phase_name} de todas as fontes",
     )

@@ -19,6 +19,14 @@ class HttpSourceBlockedError(RuntimeError):
     """Indica que a fonte recusou ou limitou novas requisicoes."""
 
 
+class HttpRequestError(RuntimeError):
+    """Indica falha HTTP persistente que nao representa ausencia de cotacao."""
+
+
+class HttpResourceNotFoundError(ValueError):
+    """Indica que a fonte nao possui o recurso historico solicitado."""
+
+
 @dataclass
 class HttpClient:
     """Cliente HTTP conservador com cache, intervalo minimo e backoff."""
@@ -99,12 +107,18 @@ class HttpClient:
                         f"Fonte recusou a requisicao ao baixar {url}: HTTP 403."
                     ) from error
 
+                if error.code in {404, 410}:
+                    raise HttpResourceNotFoundError(
+                        f"Recurso historico nao encontrado ao baixar {url}: "
+                        f"HTTP {error.code}."
+                    ) from error
+
                 if error.code in RETRYABLE_HTTP_STATUS_CODES:
                     if attempt == self.max_attempts - 1:
                         error_type = (
                             HttpSourceBlockedError
                             if error.code == 429
-                            else RuntimeError
+                            else HttpRequestError
                         )
                         raise error_type(
                             f"Erro HTTP persistente ao baixar {url}: {error.code}"
@@ -116,25 +130,32 @@ class HttpClient:
                     self._wait_before_retry(attempt, retry_after)
                     continue
 
-                raise RuntimeError(
+                raise HttpRequestError(
                     f"Erro HTTP ao baixar {url}: {error.code}"
                 ) from error
             except RemoteDisconnected as error:
                 if attempt == self.max_attempts - 1:
-                    raise RuntimeError(
+                    raise HttpRequestError(
                         f"Conexao encerrada pela fonte ao baixar {url}."
                     ) from error
 
                 self._wait_before_retry(attempt)
             except URLError as error:
                 if attempt == self.max_attempts - 1:
-                    raise RuntimeError(
+                    raise HttpRequestError(
                         f"Erro de conexao ao baixar {url}: {error.reason}"
                     ) from error
 
                 self._wait_before_retry(attempt)
+            except (ConnectionError, TimeoutError) as error:
+                if attempt == self.max_attempts - 1:
+                    raise HttpRequestError(
+                        f"Conexao interrompida ao baixar {url}: {error}"
+                    ) from error
 
-        raise RuntimeError(f"Nao foi possivel baixar {url}.")
+                self._wait_before_retry(attempt)
+
+        raise HttpRequestError(f"Nao foi possivel baixar {url}.")
 
     def _wait_before_request(self) -> None:
         if self._last_request_at == 0:

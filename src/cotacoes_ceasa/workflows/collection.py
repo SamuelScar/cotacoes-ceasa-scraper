@@ -4,7 +4,7 @@ from pathlib import Path
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.core.contracts import SourceCollector
 from cotacoes_ceasa.core.models import Category, Cotacao
-from cotacoes_ceasa.http.client import HttpSourceBlockedError
+from cotacoes_ceasa.http.client import HttpRequestError, HttpSourceBlockedError
 from cotacoes_ceasa.workflows.raw_processing import find_oldest_raw_target_date
 
 
@@ -62,7 +62,7 @@ def collect_and_report(
                     category.slug,
                     target_date,
                 )
-            except HttpSourceBlockedError:
+            except (HttpRequestError, HttpSourceBlockedError):
                 raise
             except Exception as error:
                 output.warning(
@@ -120,7 +120,7 @@ def download_and_report(
 
             try:
                 file_path = collector.download_category(category.slug, target_date)
-            except HttpSourceBlockedError:
+            except (HttpRequestError, HttpSourceBlockedError):
                 raise
             except Exception as error:
                 output.warning(
@@ -139,6 +139,7 @@ def resolve_quotation_dates(
     probe_category_slug: str,
     target_date: date | None,
     quotes_back: int | None,
+    allow_empty_history: bool = False,
     downloaded_files: dict[tuple[str, date | None], Path] | None = None,
     output: TerminalOutput | None = None,
 ) -> list[date | None]:
@@ -172,7 +173,7 @@ def resolve_quotation_dates(
                 candidate_date,
                 save_raw=False,
             )
-        except HttpSourceBlockedError:
+        except (HttpRequestError, HttpSourceBlockedError):
             raise
         except Exception:
             empty_attempts += 1
@@ -183,6 +184,7 @@ def resolve_quotation_dates(
                 empty_attempts,
                 output,
                 probe_category_slug,
+                allow_empty_history,
             ):
                 return found_dates
 
@@ -224,7 +226,7 @@ def resolve_quotation_dates(
                         output.success(
                             f"{probe_category_slug} | salvo em {downloaded_file}"
                         )
-                except HttpSourceBlockedError:
+                except (HttpRequestError, HttpSourceBlockedError):
                     raise
                 except Exception:
                     continue
@@ -238,6 +240,7 @@ def resolve_quotation_dates(
             empty_attempts,
             output,
             probe_category_slug,
+            allow_empty_history,
         ):
             return found_dates
 
@@ -259,6 +262,7 @@ def _infinite_history_exhausted(
     empty_attempts: int,
     output: TerminalOutput | None,
     category_slug: str,
+    allow_empty_history: bool,
 ) -> bool:
     if (
         expected_count is not None
@@ -267,6 +271,15 @@ def _infinite_history_exhausted(
         return False
 
     if not found_dates:
+        if allow_empty_history:
+            if output is not None:
+                output.info(
+                    f"{category_slug} | nenhum dado historico adicional encontrado "
+                    f"apos {INFINITE_HISTORY_EMPTY_ATTEMPTS} tentativa(s)."
+                )
+
+            return True
+
         raise RuntimeError(
             f"Nenhuma data de cotacao encontrada para {category_slug} apos "
             f"{INFINITE_HISTORY_EMPTY_ATTEMPTS} tentativas."
@@ -300,7 +313,10 @@ def resolve_category_target_dates(
             if output is not None:
                 output.info(f"{category.slug} | buscando datas disponiveis.")
 
-            category_target_date = resolve_incremental_target_date(
+            (
+                category_target_date,
+                allow_empty_history,
+            ) = resolve_incremental_target_date(
                 raw_dir=raw_dir,
                 source_slug=source_slug,
                 category_slug=category.slug,
@@ -314,13 +330,14 @@ def resolve_category_target_dates(
                 probe_category_slug=category.slug,
                 target_date=category_target_date,
                 quotes_back=quotes_back,
+                allow_empty_history=allow_empty_history,
                 downloaded_files=downloaded_files,
                 output=output,
             )
 
         return target_dates_by_category
 
-    target_date = resolve_incremental_target_date(
+    target_date, allow_empty_history = resolve_incremental_target_date(
         raw_dir=raw_dir,
         source_slug=source_slug,
         category_slug=None,
@@ -334,6 +351,7 @@ def resolve_category_target_dates(
         probe_category_slug=categories[0].slug,
         target_date=target_date,
         quotes_back=quotes_back,
+        allow_empty_history=allow_empty_history,
         downloaded_files=downloaded_files,
         output=output,
     )
@@ -354,10 +372,10 @@ def resolve_incremental_target_date(
     quotes_back: int | None,
     incremental_history: bool,
     output: TerminalOutput | None,
-) -> date | None:
+) -> tuple[date | None, bool]:
     """Define a data inicial anterior ao raw historico mais antigo."""
     if target_date is not None or quotes_back == 0 or not incremental_history:
-        return target_date
+        return target_date, False
 
     oldest_raw_date = find_oldest_raw_target_date(
         raw_dir,
@@ -373,7 +391,7 @@ def resolve_incremental_target_date(
                 "iniciando pela cotacao mais recente."
             )
 
-        return None
+        return None, False
 
     incremental_target_date = oldest_raw_date - timedelta(days=1)
 
@@ -385,7 +403,7 @@ def resolve_incremental_target_date(
             f"(raw mais antigo: {oldest_raw_date.isoformat()})."
         )
 
-    return incremental_target_date
+    return incremental_target_date, True
 
 
 def format_target_dates(target_dates: list[date | None]) -> str:

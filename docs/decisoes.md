@@ -13,6 +13,8 @@ operacao do projeto.
   mais antiga, evitando execucao sem fim em fontes com historico esgotado.
 - O modo historico incremental continua antes do raw ativo mais antigo quando
   `quotes_back` solicita historico e nenhuma data limite manual foi informada.
+- Uma continuacao incremental sem novas datas encerra normalmente quando o
+  historico ja estiver esgotado.
 - `quotes_back=0` sempre preserva a coleta da publicacao atual, mesmo com o modo
   incremental ativo.
 - Falhas pontuais de categoria nao interrompem as demais categorias.
@@ -21,7 +23,7 @@ operacao do projeto.
 ## Acesso HTTP
 
 - O cliente aplica delay, jitter, cache por execucao e backoff.
-- HTTP 403 e HTTP 429 persistente interrompem a fonte.
+- HTTP 403, HTTP 429 e falhas de conexao persistentes interrompem a fonte.
 - O projeto nao implementa mecanismos para contornar bloqueios.
 
 ## Arquivos brutos

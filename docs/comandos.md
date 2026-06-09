@@ -79,6 +79,8 @@ baixados e salva o resultado.
 
 O fluxo `tudo` processa somente os arquivos selecionados pelo download da
 execucao atual. Assim, `quotes_back` tambem limita o volume da persistencia.
+Se a execucao for interrompida ainda durante o download, os raws ja baixados
+permanecem em disco. Execute `docker compose run --rm salvar` para persisti-los.
 
 ## Parametros uteis
 
