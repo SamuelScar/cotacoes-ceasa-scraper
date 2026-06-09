@@ -21,14 +21,23 @@ somente diferencas que afetam a operacao.
 historico. Nos comandos que percorrem todas as fontes, a janela e zerada
 automaticamente para CEASA-MG, CEASA-CE e CEASA-DF.
 
+O valor `infinito` busca datas da mais nova para a mais antiga e encerra depois
+de 366 tentativas consecutivas sem encontrar uma cotacao anterior.
+
+Com `COTACOES_INCREMENTAL_HISTORY=true`, fontes com historico iniciam antes do
+raw ativo mais antigo quando `COTACOES_TARGET_DATE` esta vazio. A CEASA-ES usa
+o raw mais antigo de cada mercado porque suas datas sao independentes.
+
 ## PROHORT
 
-O `ProhortDiario.txt` da CONAB e usado somente pelo comando de complemento. Os
-scrapers individuais permanecem como origem principal porque podem fornecer
-historico mais longo, dados mais recentes ou campos ausentes no PROHORT.
+O `ProhortDiario.txt` da CONAB e usado somente como complemento. Os scrapers
+individuais permanecem como origem principal porque podem fornecer historico
+mais longo, dados mais recentes ou campos ausentes no PROHORT.
 
 O complemento compara CEASA, data, produto e unidade. Correspondencias
 ambiguas ou sem mapeamento confiavel nao alteram registros existentes.
+A URL fica em `config/prohort.json` e `COTACOES_COMPLEMENT_PROHORT` decide se o
+complemento roda automaticamente depois da persistencia.
 
 ## Adicionar uma fonte
 

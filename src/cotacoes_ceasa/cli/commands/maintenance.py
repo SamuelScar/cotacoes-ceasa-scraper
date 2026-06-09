@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from cotacoes_ceasa.cli.output import TerminalOutput
+from cotacoes_ceasa.config import AppConfig
 from cotacoes_ceasa.storage.raw_html import RawArchiveResult, RawHtmlStorage
 from cotacoes_ceasa.workflows.prohort import (
     ProhortComplementer,
@@ -16,12 +17,15 @@ def run_archive_command(args, output: TerminalOutput) -> None:
     archive_raw_old_and_report(RawHtmlStorage(Path(args.raw_dir)), output)
 
 
-def run_prohort_command(args, output: TerminalOutput) -> None:
+def run_prohort_command(args, config: AppConfig, output: TerminalOutput) -> None:
     output.header(
         "Complementar cotacoes com PROHORT",
-        (("Banco", args.database_path),),
+        (
+            ("Banco", args.database_path),
+            ("Configuracao", config.prohort_file),
+        ),
     )
-    complement_prohort_and_report(args, output)
+    complement_prohort_and_report(args, config.prohort_url, output)
 
 
 def archive_raw_old_and_report(
@@ -54,6 +58,7 @@ def format_archive_result(result: RawArchiveResult) -> str:
 
 def complement_prohort_and_report(
     args,
+    prohort_url: str,
     output: TerminalOutput | None = None,
 ) -> None:
     output = output or TerminalOutput()
@@ -61,7 +66,7 @@ def complement_prohort_and_report(
     output.info("Lendo cotacoes salvas e buscando correspondencias confiaveis.")
     result = ProhortComplementer(
         database_path=Path(args.database_path),
-        prohort_url=args.prohort_url,
+        prohort_url=prohort_url,
         timeout_seconds=args.http_timeout_seconds,
     ).complement()
 

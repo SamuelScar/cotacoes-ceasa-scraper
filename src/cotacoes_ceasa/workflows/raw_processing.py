@@ -29,19 +29,32 @@ def process_raw_and_report(
     source_slug: str,
     base_url: str,
     output: TerminalOutput | None = None,
+    raw_files: list[Path] | None = None,
 ) -> list[Cotacao]:
     """Processa arquivos brutos salvos em disco e retorna cotacoes normalizadas."""
     output = output or TerminalOutput()
-    raw_files = list_raw_files(raw_dir, source_slug)
+    selected_raw_files = (
+        list_raw_files(raw_dir, source_slug)
+        if raw_files is None
+        else sorted(raw_files)
+    )
 
-    if not raw_files:
+    if not selected_raw_files and raw_files is None:
         raise RuntimeError(f"Nenhum arquivo bruto encontrado em {raw_dir / source_slug}.")
 
     cotacoes: list[Cotacao] = []
     output.section("Processamento de arquivos brutos")
-    output.info(f"{len(raw_files)} arquivo(s) encontrado(s) em {raw_dir / source_slug}.")
+    if raw_files is None:
+        output.info(
+            f"{len(selected_raw_files)} arquivo(s) encontrado(s) "
+            f"em {raw_dir / source_slug}."
+        )
+    else:
+        output.info(
+            f"{len(selected_raw_files)} arquivo(s) selecionado(s) nesta coleta."
+        )
 
-    for file_path in raw_files:
+    for file_path in selected_raw_files:
         try:
             metadata = parse_raw_document_metadata(file_path)
             url_origem = build_raw_source_url(
@@ -96,6 +109,31 @@ def list_raw_files(raw_dir: Path, source_slug: str) -> list[Path]:
         for file_path in source_raw_dir.glob("*.*")
         if file_path.is_file() and file_path.suffix.lower() in {".html", ".pdf"}
     )
+
+
+def find_oldest_raw_target_date(
+    raw_dir: Path,
+    source_slug: str,
+    category_slug: str | None = None,
+) -> date | None:
+    """Busca a data historica mais antiga representada nos raws ativos."""
+    target_dates: list[date] = []
+
+    for file_path in list_raw_files(raw_dir, source_slug):
+        try:
+            metadata = parse_raw_document_metadata(file_path)
+        except ValueError:
+            continue
+
+        if metadata.target_date is None:
+            continue
+
+        if category_slug is not None and metadata.category_slug != category_slug:
+            continue
+
+        target_dates.append(metadata.target_date)
+
+    return min(target_dates) if target_dates else None
 
 
 def parse_raw_file_metadata(file_path: Path) -> tuple[str, date | None]:

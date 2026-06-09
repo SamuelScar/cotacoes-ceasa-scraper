@@ -50,6 +50,9 @@ class CeasaPeParser:
         table = soup.find("table")
 
         if table is None:
+            if soup.select_one(".sem-registro") is not None:
+                return []
+
             raise ValueError("Tabela de cotacoes da CEASA-PE nao encontrada.")
 
         cotacoes: list[Cotacao] = []

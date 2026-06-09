@@ -6,22 +6,25 @@ from pathlib import Path
 
 ENV_FILE = Path(".env")
 SOURCES_FILE = Path("config/fontes.json")
+PROHORT_FILE = Path("config/prohort.json")
 
 
 @dataclass(frozen=True)
 class AppConfig:
     """Configuracoes padrao usadas pela CLI do projeto."""
 
-    source: str
     sources_file: str
     raw_dir: str
     database_path: str
     http_timeout_seconds: int
     request_delay_seconds: float
     reuse_raw_before_request: bool
+    incremental_history: bool
+    complement_prohort: bool
+    prohort_file: str
     prohort_url: str
     target_date: str | None
-    quotes_back: int
+    quotes_back: int | None
     sources: dict[str, "SourceConfig"]
 
 
@@ -40,9 +43,9 @@ def load_config(env_file: Path = ENV_FILE) -> AppConfig:
     """Carrega configuracoes do `.env` local e permite sobrescrita pelo ambiente."""
     load_env_file(env_file)
     sources_file = os.getenv("COTACOES_SOURCES_FILE", str(SOURCES_FILE))
+    prohort_file = str(PROHORT_FILE)
 
     return AppConfig(
-        source=os.getenv("COTACOES_SOURCE", "ceasa-pe"),
         sources_file=sources_file,
         raw_dir=os.getenv("COTACOES_RAW_DIR", "data/raw"),
         database_path=os.getenv("COTACOES_DATABASE_PATH", "data/cotacoes.sqlite"),
@@ -52,13 +55,18 @@ def load_config(env_file: Path = ENV_FILE) -> AppConfig:
             "COTACOES_REUSE_RAW_BEFORE_REQUEST",
             False,
         ),
-        prohort_url=os.getenv(
-            "COTACOES_PROHORT_URL",
-            "https://portaldeinformacoes.conab.gov.br/downloads/arquivos/"
-            "ProhortDiario.txt",
+        incremental_history=_get_bool_env(
+            "COTACOES_INCREMENTAL_HISTORY",
+            False,
         ),
+        complement_prohort=_get_bool_env(
+            "COTACOES_COMPLEMENT_PROHORT",
+            False,
+        ),
+        prohort_file=prohort_file,
+        prohort_url=load_prohort_url(Path(prohort_file)),
         target_date=_get_optional_env("COTACOES_TARGET_DATE"),
-        quotes_back=_get_int_env("COTACOES_QUOTES_BACK", 0),
+        quotes_back=_get_quotes_back_env("COTACOES_QUOTES_BACK", 0),
         sources=load_sources(Path(sources_file)),
     )
 
@@ -77,6 +85,17 @@ def load_sources(sources_file: Path) -> dict[str, SourceConfig]:
         )
         for slug, source in data.items()
     }
+
+
+def load_prohort_url(prohort_file: Path) -> str:
+    """Carrega a URL versionada do arquivo de configuracao do PROHORT."""
+    data = json.loads(prohort_file.read_text(encoding="utf-8"))
+    url = str(data.get("url", "")).strip()
+
+    if not url:
+        raise ValueError(f"URL do PROHORT ausente em {prohort_file}.")
+
+    return url
 
 
 def load_env_file(env_file: Path) -> None:
@@ -118,6 +137,25 @@ def _get_int_env(name: str, default: int) -> int:
         return int(value)
     except ValueError as error:
         raise ValueError(f"Valor invalido para {name}: {value}") from error
+
+
+def _get_quotes_back_env(name: str, default: int) -> int | None:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    normalized_value = value.strip().lower()
+
+    if normalized_value in {"infinito", "infinite"}:
+        return None
+
+    try:
+        return int(normalized_value)
+    except ValueError as error:
+        raise ValueError(
+            f"Valor invalido para {name}: {value}. Use um numero ou infinito."
+        ) from error
 
 
 def _get_float_env(name: str, default: float) -> float:

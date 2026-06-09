@@ -113,12 +113,12 @@ def build_registered_collector(
     request_delay_seconds: float,
     reuse_raw_before_request: bool,
     target_date: date | None,
-    quotes_back: int,
+    quotes_back: int | None,
 ) -> SourceCollector:
     """Constroi o coletor registrado para a fonte informada."""
     definition = _get_source_definition(source_slug)
 
-    if quotes_back and definition.unsupported_history_error:
+    if history_requested(quotes_back) and definition.unsupported_history_error:
         raise ValueError(definition.unsupported_history_error)
 
     http_client_options: dict[str, Any] = {
@@ -151,6 +151,10 @@ def build_source_parser(source_slug: str) -> SourceParser:
 def source_supports_history(source_slug: str) -> bool:
     """Informa se a fonte aceita coleta de cotacoes anteriores."""
     return _get_source_definition(source_slug).unsupported_history_error is None
+
+
+def history_requested(quotes_back: int | None) -> bool:
+    return quotes_back is None or quotes_back > 0
 
 
 def _get_source_definition(source_slug: str) -> SourceDefinition:

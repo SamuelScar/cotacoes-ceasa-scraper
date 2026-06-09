@@ -9,6 +9,12 @@ operacao do projeto.
 - Categorias, datas e links devem ser descobertos na fonte quando possivel.
 - CEASA-MG, CEASA-CE e CEASA-DF coletam somente a publicacao atual.
 - `quotes_back` conta datas de cotacao encontradas, nao dias corridos.
+- `quotes_back=infinito` encerra apos 366 tentativas consecutivas sem uma data
+  mais antiga, evitando execucao sem fim em fontes com historico esgotado.
+- O modo historico incremental continua antes do raw ativo mais antigo quando
+  `quotes_back` solicita historico e nenhuma data limite manual foi informada.
+- `quotes_back=0` sempre preserva a coleta da publicacao atual, mesmo com o modo
+  incremental ativo.
 - Falhas pontuais de categoria nao interrompem as demais categorias.
 - Layouts sem interpretacao confiavel sao rejeitados em vez de persistidos.
 
@@ -23,7 +29,8 @@ operacao do projeto.
 - HTMLs e PDFs sao preservados antes do processamento.
 - A pasta principal mantem o raw ativo mais recente de cada grupo por dia.
 - Versoes anteriores do mesmo grupo vao para `old/`.
-- Reprocessamento considera somente raws ativos.
+- `tudo` processa somente os raws selecionados na coleta atual.
+- `salvar` reprocessa todos os raws ativos e ignora `old/` e `.zip`.
 - Compactacao de HTMLs antigos e executada sob demanda.
 
 ## Persistencia
@@ -44,3 +51,6 @@ operacao do projeto.
 - A ordem entre preco minimo, comum e maximo nao e corrigida automaticamente.
 - PROHORT complementa o resultado sem sobrescrever campos preenchidos.
 - Correspondencias ambiguas do PROHORT nao alteram o banco.
+- A URL do PROHORT fica versionada em `config/prohort.json`.
+- `COTACOES_COMPLEMENT_PROHORT` controla a execucao automatica depois de
+  qualquer fluxo que salva no SQLite.

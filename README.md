@@ -12,7 +12,8 @@ consolida os registros em um banco SQLite normalizado.
 5. Opcionalmente complementar campos vazios com o PROHORT.
 
 Os coletores individuais continuam sendo a fonte principal. O PROHORT nao
-sobrescreve valores ja preenchidos.
+sobrescreve valores ja preenchidos. Sua URL fica versionada em
+`config/prohort.json`.
 
 ## Inicio rapido
 
@@ -25,7 +26,12 @@ docker compose run --rm tudo
 ```
 
 O servico `tudo` baixa os arquivos brutos de todas as fontes configuradas,
-processa os raws ativos e salva o resultado no SQLite.
+processa somente os raws selecionados nessa coleta e salva o resultado no SQLite. Com
+`COTACOES_COMPLEMENT_PROHORT=true`, ele tambem executa o complemento PROHORT ao
+final.
+
+Por padrao, a CLI executa todas as fontes presentes em `config/fontes.json`.
+Use `--source <fonte>` somente quando quiser executar uma fonte especifica.
 
 Comandos principais:
 
@@ -33,7 +39,7 @@ Comandos principais:
 | --- | --- |
 | `docker compose run --rm baixar` | Baixa raws de todas as fontes |
 | `docker compose run --rm salvar` | Reprocessa raws ativos e salva no SQLite |
-| `docker compose run --rm tudo` | Baixa, processa e salva |
+| `docker compose run --rm tudo` | Baixa, processa os raws da coleta e salva |
 | `docker compose run --rm complementar-prohort` | Complementa o banco com PROHORT |
 | `docker compose run --rm compactar-old` | Compacta HTMLs antigos |
 | `docker compose run --rm app --help` | Exibe todas as opcoes da CLI |
@@ -44,26 +50,37 @@ Comandos principais:
 a ultima cotacao disponivel.
 
 `COTACOES_QUOTES_BACK` informa quantas datas de cotacao anteriores devem ser
-coletadas. O valor nao representa dias corridos:
+coletadas. O valor nao representa dias corridos e tambem aceita `infinito`:
 
 ```env
 COTACOES_TARGET_DATE=
-COTACOES_QUOTES_BACK=99
+COTACOES_QUOTES_BACK=infinito
 ```
 
-Essa configuracao solicita a ultima data disponivel e mais 99 cotacoes
-anteriores nas fontes que oferecem historico. CEASA-MG, CEASA-CE e CEASA-DF
-coletam somente a publicacao atual.
+Essa configuracao busca todas as datas encontradas, da mais nova para a mais
+antiga, nas fontes que oferecem historico. A busca termina depois de 366
+tentativas consecutivas sem encontrar uma data mais antiga. CEASA-MG, CEASA-CE
+e CEASA-DF coletam somente a publicacao atual.
+
+Com `COTACOES_INCREMENTAL_HISTORY=true`, pedidos de historico continuam antes
+do raw ativo mais antigo. `COTACOES_TARGET_DATE` manual tem prioridade e
+`COTACOES_QUOTES_BACK=0` continua buscando a publicacao atual.
 
 ## Arquivos gerados
 
 - `data/raw/<fonte>/`: raws ativos usados no reprocessamento.
 - `data/raw/<fonte>/old/`: versoes anteriores geradas no mesmo dia.
 - `data/cotacoes.sqlite`: banco consolidado.
+- `data/relatorios/coleta_<data_e_hora>.md`: relatorio completo de cada coleta.
 
 O processamento ignora `old/` e arquivos `.zip`. Quando o schema ou uma regra
 de normalizacao mudar, exclua o SQLite e reconstrua o banco a partir dos raws
 ativos.
+
+Cada relatorio apresenta primeiro um resumo executivo, resultados consolidados,
+alertas principais e as configuracoes efetivamente usadas. Em seguida, registra
+resultados por fonte, avisos, erros e o historico cronologico completo. O
+arquivo tambem e gerado quando a coleta termina com erro ou e interrompida.
 
 ## Documentacao
 

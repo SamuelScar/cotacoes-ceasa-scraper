@@ -33,6 +33,11 @@ docker compose run --rm salvar
 Cada raw encontrado e salvo durante o download. Se uma fonte falhar, as demais
 continuam no fluxo de todas as fontes.
 
+Com `COTACOES_INCREMENTAL_HISTORY=true`, uma nova execucao historica continua
+antes do raw ativo mais antigo e evita solicitar novamente toda a janela mais
+recente. `COTACOES_REUSE_RAW_BEFORE_REQUEST` continua reservado para reutilizar
+datas que forem solicitadas novamente.
+
 ## Praticas nao adotadas
 
 O projeto nao usa rotacao de IP, proxies, troca de fingerprint, rotacao de

@@ -15,15 +15,15 @@ services:
 
   baixar:
     <<: *app
-    command: ["--all-sources", "--download-only"]
+    command: ["--download-only"]
 
   salvar:
     <<: *app
-    command: ["--all-sources", "--process-raw"]
+    command: ["--process-raw"]
 
   tudo:
     <<: *app
-    command: ["--all-sources", "--download-and-process"]
+    command: ["--download-and-process"]
 
   compactar-old:
     <<: *app

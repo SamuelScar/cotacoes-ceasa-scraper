@@ -5,12 +5,19 @@ from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.core.contracts import SourceCollector
 from cotacoes_ceasa.core.models import Category, Cotacao
 from cotacoes_ceasa.http.client import HttpSourceBlockedError
+from cotacoes_ceasa.workflows.raw_processing import find_oldest_raw_target_date
+
+
+INFINITE_HISTORY_EMPTY_ATTEMPTS = 366
 
 
 def collect_and_report(
     collector: SourceCollector,
     target_date: date | None,
-    quotes_back: int,
+    quotes_back: int | None,
+    raw_dir: Path,
+    source_slug: str,
+    incremental_history: bool = False,
     output: TerminalOutput | None = None,
 ) -> list[Cotacao]:
     """Coleta cotacoes e imprime um resumo por categoria."""
@@ -25,6 +32,9 @@ def collect_and_report(
         categories,
         target_date,
         quotes_back,
+        raw_dir,
+        source_slug,
+        incremental_history,
         output,
     )
     cotacoes: list[Cotacao] = []
@@ -71,7 +81,10 @@ def collect_and_report(
 def download_and_report(
     collector: SourceCollector,
     target_date: date | None,
-    quotes_back: int,
+    quotes_back: int | None,
+    raw_dir: Path,
+    source_slug: str,
+    incremental_history: bool = False,
     output: TerminalOutput | None = None,
 ) -> list[Path]:
     """Baixa arquivos brutos para a janela de datas configurada."""
@@ -87,6 +100,9 @@ def download_and_report(
         categories,
         target_date,
         quotes_back,
+        raw_dir,
+        source_slug,
+        incremental_history,
         output,
         downloaded_files,
     )
@@ -122,12 +138,12 @@ def resolve_quotation_dates(
     collector: SourceCollector,
     probe_category_slug: str,
     target_date: date | None,
-    quotes_back: int,
+    quotes_back: int | None,
     downloaded_files: dict[tuple[str, date | None], Path] | None = None,
     output: TerminalOutput | None = None,
 ) -> list[date | None]:
     """Descobre datas de cotacao disponiveis voltando a partir da data limite."""
-    if quotes_back < 0:
+    if quotes_back is not None and quotes_back < 0:
         raise ValueError("--quotes-back nao pode ser negativo.")
 
     if target_date is None and quotes_back == 0:
@@ -138,12 +154,18 @@ def resolve_quotation_dates(
     if quotes_back == 0:
         return [target_date]
 
-    expected_count = quotes_back + 1
+    expected_count = quotes_back + 1 if quotes_back is not None else None
     found_dates: list[date] = []
     candidate_date = target_date
-    max_attempts = max(expected_count * 4, 30)
+    attempt_count = 0
+    empty_attempts = 0
+    max_attempts = (
+        max(expected_count * 4, 30) if expected_count is not None else None
+    )
 
-    for _ in range(max_attempts):
+    while max_attempts is None or attempt_count < max_attempts:
+        attempt_count += 1
+
         try:
             cotacoes = collector.collect_category(
                 probe_category_slug,
@@ -153,6 +175,17 @@ def resolve_quotation_dates(
         except HttpSourceBlockedError:
             raise
         except Exception:
+            empty_attempts += 1
+
+            if _infinite_history_exhausted(
+                expected_count,
+                found_dates,
+                empty_attempts,
+                output,
+                probe_category_slug,
+            ):
+                return found_dates
+
             candidate_date -= timedelta(days=1)
             continue
 
@@ -168,8 +201,10 @@ def resolve_quotation_dates(
             if quotation_date not in found_dates:
                 found_dates.append(quotation_date)
 
-                if len(found_dates) <= expected_count:
+                if expected_count is None or len(found_dates) <= expected_count:
                     new_dates.append(quotation_date)
+
+        empty_attempts = 0 if new_dates else empty_attempts + 1
 
         if downloaded_files is not None:
             for quotation_date in new_dates:
@@ -194,8 +229,17 @@ def resolve_quotation_dates(
                 except Exception:
                     continue
 
-        if len(found_dates) >= expected_count:
+        if expected_count is not None and len(found_dates) >= expected_count:
             return found_dates[:expected_count]
+
+        if _infinite_history_exhausted(
+            expected_count,
+            found_dates,
+            empty_attempts,
+            output,
+            probe_category_slug,
+        ):
+            return found_dates
 
         candidate_date = (
             min(quotation_dates) - timedelta(days=1)
@@ -209,11 +253,42 @@ def resolve_quotation_dates(
     )
 
 
+def _infinite_history_exhausted(
+    expected_count: int | None,
+    found_dates: list[date],
+    empty_attempts: int,
+    output: TerminalOutput | None,
+    category_slug: str,
+) -> bool:
+    if (
+        expected_count is not None
+        or empty_attempts < INFINITE_HISTORY_EMPTY_ATTEMPTS
+    ):
+        return False
+
+    if not found_dates:
+        raise RuntimeError(
+            f"Nenhuma data de cotacao encontrada para {category_slug} apos "
+            f"{INFINITE_HISTORY_EMPTY_ATTEMPTS} tentativas."
+        )
+
+    if output is not None:
+        output.info(
+            f"{category_slug} | historico encerrado apos "
+            f"{INFINITE_HISTORY_EMPTY_ATTEMPTS} tentativa(s) sem data mais antiga."
+        )
+
+    return True
+
+
 def resolve_category_target_dates(
     collector: SourceCollector,
     categories: tuple[Category, ...],
     target_date: date | None,
-    quotes_back: int,
+    quotes_back: int | None,
+    raw_dir: Path,
+    source_slug: str,
+    incremental_history: bool,
     output: TerminalOutput | None = None,
     downloaded_files: dict[tuple[str, date | None], Path] | None = None,
 ) -> dict[str, list[date | None]]:
@@ -225,10 +300,19 @@ def resolve_category_target_dates(
             if output is not None:
                 output.info(f"{category.slug} | buscando datas disponiveis.")
 
+            category_target_date = resolve_incremental_target_date(
+                raw_dir=raw_dir,
+                source_slug=source_slug,
+                category_slug=category.slug,
+                target_date=target_date,
+                quotes_back=quotes_back,
+                incremental_history=incremental_history,
+                output=output,
+            )
             target_dates_by_category[category.slug] = resolve_quotation_dates(
                 collector=collector,
                 probe_category_slug=category.slug,
-                target_date=target_date,
+                target_date=category_target_date,
                 quotes_back=quotes_back,
                 downloaded_files=downloaded_files,
                 output=output,
@@ -236,6 +320,15 @@ def resolve_category_target_dates(
 
         return target_dates_by_category
 
+    target_date = resolve_incremental_target_date(
+        raw_dir=raw_dir,
+        source_slug=source_slug,
+        category_slug=None,
+        target_date=target_date,
+        quotes_back=quotes_back,
+        incremental_history=incremental_history,
+        output=output,
+    )
     target_dates = resolve_quotation_dates(
         collector=collector,
         probe_category_slug=categories[0].slug,
@@ -251,6 +344,48 @@ def resolve_category_target_dates(
         )
 
     return {category.slug: target_dates for category in categories}
+
+
+def resolve_incremental_target_date(
+    raw_dir: Path,
+    source_slug: str,
+    category_slug: str | None,
+    target_date: date | None,
+    quotes_back: int | None,
+    incremental_history: bool,
+    output: TerminalOutput | None,
+) -> date | None:
+    """Define a data inicial anterior ao raw historico mais antigo."""
+    if target_date is not None or quotes_back == 0 or not incremental_history:
+        return target_date
+
+    oldest_raw_date = find_oldest_raw_target_date(
+        raw_dir,
+        source_slug,
+        category_slug,
+    )
+
+    if oldest_raw_date is None:
+        if output is not None:
+            scope = category_slug or source_slug
+            output.info(
+                f"{scope} | nenhum raw historico encontrado; "
+                "iniciando pela cotacao mais recente."
+            )
+
+        return None
+
+    incremental_target_date = oldest_raw_date - timedelta(days=1)
+
+    if output is not None:
+        scope = category_slug or source_slug
+        output.info(
+            f"{scope} | historico incremental iniciando em "
+            f"{incremental_target_date.isoformat()} "
+            f"(raw mais antigo: {oldest_raw_date.isoformat()})."
+        )
+
+    return incremental_target_date
 
 
 def format_target_dates(target_dates: list[date | None]) -> str:

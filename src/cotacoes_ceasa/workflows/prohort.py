@@ -13,11 +13,6 @@ from cotacoes_ceasa.core.models import Cotacao
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 
 
-PROHORT_URL = (
-    "https://portaldeinformacoes.conab.gov.br/downloads/arquivos/"
-    "ProhortDiario.txt"
-)
-
 SOURCE_CEASA_NAMES = {
     "ceasa-pe": "CEASA/PE - RECIFE",
     "ceasa-campinas": "CEASA/SP - CAMPINAS",
@@ -79,7 +74,7 @@ class ProhortComplementer:
     def __init__(
         self,
         database_path: Path,
-        prohort_url: str = PROHORT_URL,
+        prohort_url: str,
         timeout_seconds: int = 120,
     ) -> None:
         self.database_path = database_path

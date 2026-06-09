@@ -1,9 +1,11 @@
 from copy import copy
+from pathlib import Path
 
 from cotacoes_ceasa.cli.commands.source import resolve_source_operation, run_source
 from cotacoes_ceasa.cli.output import TerminalOutput
+from cotacoes_ceasa.cli.parser import format_incremental_history, format_quotes_back
 from cotacoes_ceasa.config import AppConfig
-from cotacoes_ceasa.sources.registry import source_supports_history
+from cotacoes_ceasa.sources.registry import history_requested, source_supports_history
 
 
 def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
@@ -11,13 +13,28 @@ def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
     if args.download_and_process:
         download_args = copy(args)
         download_args.download_and_process = False
-        run_all_sources_phase(download_args, config, output, "Download")
+        download_args.download_only = True
+        download_args.process_raw = False
+        download_args.save = False
+        downloaded_files = run_all_sources_phase(
+            download_args,
+            config,
+            output,
+            "Download",
+        )
 
         process_args = copy(args)
         process_args.download_and_process = False
+        process_args.download_only = False
         process_args.process_raw = True
         process_args.save = False
-        run_all_sources_phase(process_args, config, output, "Persistencia")
+        run_all_sources_phase(
+            process_args,
+            config,
+            output,
+            "Persistencia",
+            raw_files_by_source=downloaded_files,
+        )
         return
 
     run_all_sources_phase(args, config, output, resolve_source_operation(args))
@@ -28,24 +45,36 @@ def run_all_sources_phase(
     config: AppConfig,
     output: TerminalOutput,
     phase_name: str,
-) -> None:
+    raw_files_by_source: dict[str, list[Path]] | None = None,
+) -> dict[str, list[Path]]:
     """Executa uma fase para todas as fontes sem interromper o lote."""
     output.header(
         f"{phase_name} de todas as fontes",
         (
             ("Fontes configuradas", len(config.sources)),
             ("Data limite", args.target_date or "ultima disponivel"),
-            ("Cotacoes anteriores", args.quotes_back),
+            ("Cotacoes anteriores", format_quotes_back(args.quotes_back)),
+            (
+                "Historico incremental",
+                format_incremental_history(
+                    config.incremental_history and not args.process_raw,
+                    args.target_date,
+                    args.quotes_back,
+                ),
+            ),
         ),
     )
     completed_count = 0
     failed_count = 0
+    downloaded_files: dict[str, list[Path]] = {}
 
     for source_slug in config.sources:
         source_args = copy(args)
         source_args.source = source_slug
 
-        if source_args.quotes_back and not source_supports_history(source_slug):
+        if history_requested(source_args.quotes_back) and not source_supports_history(
+            source_slug
+        ):
             source_args.quotes_back = 0
 
             if not source_args.process_raw:
@@ -54,17 +83,31 @@ def run_all_sources_phase(
                 )
 
         try:
-            run_source(source_args, config, output, show_summary=False)
+            source_files = run_source(
+                source_args,
+                config,
+                output,
+                show_summary=False,
+                raw_files=(
+                    raw_files_by_source.get(source_slug, [])
+                    if raw_files_by_source is not None
+                    else None
+                ),
+            )
         except Exception as error:
             failed_count += 1
             output.warning(f"{source_slug} | {type(error).__name__}: {error}")
             continue
 
         completed_count += 1
+        if source_files is not None:
+            downloaded_files[source_slug] = source_files
 
     output.summary(
         (
             ("Fontes concluidas", completed_count),
             ("Fontes com falha", failed_count),
-        )
+        ),
+        report_title=f"{phase_name} de todas as fontes",
     )
+    return downloaded_files
