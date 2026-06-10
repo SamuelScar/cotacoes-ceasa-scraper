@@ -27,6 +27,7 @@ argumentos passados ao servico `app` sobrescrevem esses valores.
 | `COTACOES_SOURCES_FILE` | Arquivo JSON com as fontes |
 | `COTACOES_RAW_DIR` | Diretorio dos arquivos brutos |
 | `COTACOES_DATABASE_PATH` | Caminho do SQLite |
+| `COTACOES_SUPABASE_DATABASE_URL` | Connection string PostgreSQL do Supabase |
 | `COTACOES_HTTP_TIMEOUT_SECONDS` | Timeout de cada requisicao |
 | `COTACOES_REQUEST_DELAY_SECONDS` | Intervalo minimo entre requisicoes |
 | `COTACOES_REUSE_RAW_BEFORE_REQUEST` | Reutiliza raw ativo antes de baixar |

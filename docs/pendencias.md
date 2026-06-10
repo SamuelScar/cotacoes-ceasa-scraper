@@ -17,6 +17,35 @@ O calculo deve considerar que algumas fontes descobrem categorias e datas
 durante a execucao. Nesses casos, o total e o percentual podem ser atualizados
 conforme novos itens forem descobertos, sem apresentar uma estimativa enganosa.
 
+## Coletas historicas parciais
+
+Quando uma fonte encontra apenas parte da quantidade de datas solicitada, os
+raws validos ja baixados devem ser preservados e persistidos. A fonte nao deve
+ser tratada como falha total somente porque nao atingiu o tamanho completo da
+janela configurada.
+
+A implementacao deve:
+
+- diferenciar fonte concluida, parcialmente concluida, com falha e ignorada;
+- persistir os raws validos baixados antes de uma falha ou esgotamento parcial;
+- manter a falha de conexao ou bloqueio registrada sem descartar resultados
+  anteriores validos;
+- informar por fonte quantos raws foram baixados, persistidos e ficaram
+  aguardando persistencia;
+- separar os totais consolidados por fase, sem somar novamente a mesma fonte no
+  download e na persistencia;
+- aplicar retry para respostas incompletas, como `IncompleteRead`, respeitando o
+  backoff e o limite de tentativas existentes;
+- documentar que janelas incrementais menores, como
+  `COTACOES_QUOTES_BACK=99`, reduzem o risco de perder uma fase inteira;
+- manter `COTACOES_QUOTES_BACK=infinito` como opcao para buscar ate o fim do
+  historico disponivel sem exigir uma quantidade fixa de datas.
+
+O fluxo `tudo` deve continuar processando automaticamente os raws validos de
+uma fonte parcialmente concluida. O comando `salvar` permanece como recuperacao
+para raws ativos que nao foram persistidos durante uma execucao interrompida ou
+com falha.
+
 ## Dados compactados e Git LFS
 
 A pasta `data/` deve manter a estrutura atual durante a execucao, mas ser
@@ -154,3 +183,23 @@ uma alternativa mais simples: executar `docker compose run --rm tudo` por
 agendamento externo, como cron ou systemd timer. Um servico crawler dedicado
 passa a ser interessante quando forem necessarios intervalos por fonte,
 retentativas coordenadas, estado persistente e observabilidade continua.
+
+## Relatorio obrigatorio para todos os comandos
+
+Qualquer comando executado no terminal referente ao
+`cotacoes-ceasa-scraper` deve gerar um relatorio e salva-lo em
+`data/relatorios/`.
+
+A regra deve abranger comandos de coleta, processamento, manutencao,
+sincronizacao, consulta e todos os comandos adicionados futuramente.
+
+Cada relatorio deve registrar, quando aplicavel:
+
+- comando e argumentos executados;
+- configuracoes efetivas, sem expor credenciais;
+- inicio, fim e duracao;
+- operacoes realizadas e resultados numericos;
+- avisos e erros;
+- status final.
+
+O relatorio deve ser salvo mesmo quando o comando falhar ou for interrompido.

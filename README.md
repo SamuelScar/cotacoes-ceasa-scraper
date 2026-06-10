@@ -41,6 +41,7 @@ Comandos principais:
 | `docker compose run --rm salvar` | Reprocessa raws ativos e salva no SQLite |
 | `docker compose run --rm tudo` | Baixa, processa os raws da coleta e salva |
 | `docker compose run --rm complementar-prohort` | Complementa o banco com PROHORT |
+| `docker compose run --rm sincronizar-supabase` | Sincroniza o SQLite com o Supabase |
 | `docker compose run --rm compactar-old` | Compacta HTMLs antigos |
 | `docker compose run --rm app --help` | Exibe todas as opcoes da CLI |
 
@@ -88,6 +89,7 @@ arquivo tambem e gerado quando a coleta termina com erro ou e interrompida.
 - [Comandos](docs/comandos.md)
 - [Fontes e limitacoes](docs/fontes.md)
 - [Modelo de dados](docs/modelo-dados.md)
+- [Sincronizacao com Supabase](docs/supabase.md)
 - [Estrategias contra bloqueio](docs/estrategias-anti-bloqueio.md)
 - [Decisoes tecnicas](docs/decisoes.md)
 - [Pendencias](docs/pendencias.md)

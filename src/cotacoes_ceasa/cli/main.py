@@ -4,6 +4,7 @@ from cotacoes_ceasa.cli.commands.batch import run_all_sources
 from cotacoes_ceasa.cli.commands.maintenance import (
     run_archive_command,
     run_prohort_command,
+    run_supabase_sync_command,
 )
 from cotacoes_ceasa.cli.commands.source import (
     run_source,
@@ -48,7 +49,12 @@ def run(output: TerminalOutput) -> None:
     if args.base_url and args.source is None:
         raise ValueError("--base-url exige --source.")
 
-    if not (args.archive_raw_old or args.complement_prohort or args.list_categories):
+    if not (
+        args.archive_raw_old
+        or args.complement_prohort
+        or args.sync_supabase
+        or args.list_categories
+    ):
         output.enable_collection_report(build_report_configuration(args, config))
 
     if args.archive_raw_old:
@@ -57,6 +63,10 @@ def run(output: TerminalOutput) -> None:
 
     if args.complement_prohort:
         run_prohort_command(args, config, output)
+        return
+
+    if args.sync_supabase:
+        run_supabase_sync_command(args, config, output)
         return
 
     if args.source is None:

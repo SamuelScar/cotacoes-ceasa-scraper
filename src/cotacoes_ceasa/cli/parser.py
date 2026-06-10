@@ -141,6 +141,11 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--sync-supabase",
+        action="store_true",
+        help="Sincroniza o banco SQLite com o PostgreSQL do Supabase.",
+    )
+    parser.add_argument(
         "--list-categories",
         action="store_true",
         help="Lista categorias descobertas nas fontes selecionadas.",

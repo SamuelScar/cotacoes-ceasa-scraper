@@ -3,6 +3,7 @@ from pathlib import Path
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.config import AppConfig
 from cotacoes_ceasa.storage.raw_html import RawArchiveResult, RawHtmlStorage
+from cotacoes_ceasa.storage.supabase import SupabaseSynchronizer
 from cotacoes_ceasa.workflows.prohort import (
     ProhortComplementer,
     ProhortComplementResult,
@@ -26,6 +27,31 @@ def run_prohort_command(args, config: AppConfig, output: TerminalOutput) -> None
         ),
     )
     complement_prohort_and_report(args, config.prohort_url, output)
+
+
+def run_supabase_sync_command(
+    args,
+    config: AppConfig,
+    output: TerminalOutput,
+) -> None:
+    if not config.supabase_database_url:
+        raise ValueError("COTACOES_SUPABASE_DATABASE_URL nao configurada no .env.")
+
+    output.header(
+        "Sincronizar SQLite com Supabase",
+        (("Banco local", args.database_path),),
+    )
+    output.section("Sincronizacao")
+    output.info("Criando schema e enviando registros para o Supabase.")
+    result = SupabaseSynchronizer(
+        sqlite_path=Path(args.database_path),
+        database_url=config.supabase_database_url,
+    ).sync()
+
+    for table_name, count in result.table_counts.items():
+        output.success(f"{table_name}: {count} registro(s) sincronizado(s).")
+
+    output.summary((("Registros sincronizados", result.total_count),))
 
 
 def archive_raw_old_and_report(
