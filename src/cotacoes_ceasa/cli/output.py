@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from cotacoes_ceasa.cli.report import CollectionReport
+from cotacoes_ceasa.cli.report import ExecutionReport
 
 
 LINE_WIDTH = 72
@@ -35,28 +35,39 @@ class TerminalOutput:
     error_count: int = 0
     use_colors: bool = field(default_factory=lambda: _supports_colors(sys.stdout))
     _section_count: int = field(default=0, init=False, repr=False)
-    _collection_report: CollectionReport | None = field(
+    _execution_report: ExecutionReport | None = field(
         default=None,
         init=False,
         repr=False,
     )
 
-    def enable_collection_report(
+    def enable_execution_report(
         self,
         configuration: Iterable[tuple[str, object]] = (),
     ) -> None:
-        self._collection_report = CollectionReport()
-        self._collection_report.record_configuration(configuration)
+        self._execution_report = ExecutionReport()
+        self._execution_report.record_configuration(configuration)
 
-    @property
-    def collection_report_enabled(self) -> bool:
-        return self._collection_report is not None
+    def configure_execution_report(
+        self,
+        report_name: str,
+        report_title: str,
+        configuration: Iterable[tuple[str, object]],
+    ) -> None:
+        if self._execution_report is None:
+            raise RuntimeError("Relatorio de execucao nao foi habilitado.")
 
-    def write_collection_report(self, report_dir: Path) -> Path:
-        if self._collection_report is None:
-            raise RuntimeError("Relatorio de coleta nao foi habilitado.")
+        self._execution_report.configure(report_name, report_title, configuration)
 
-        return self._collection_report.write(report_dir)
+    def write_execution_report(self, report_dir: Path) -> Path:
+        if self._execution_report is None:
+            raise RuntimeError("Relatorio de execucao nao foi habilitado.")
+
+        return self._execution_report.write(report_dir)
+
+    def set_execution_status(self, status: str) -> None:
+        if self._execution_report is not None:
+            self._execution_report.set_final_status(status)
 
     def report_saved(self, file_path: Path) -> None:
         label = self._color(f"[{'OK':<5}]", GREEN + BOLD)
@@ -69,8 +80,8 @@ class TerminalOutput:
     ) -> None:
         prepared_details = tuple(details)
 
-        if self._collection_report is not None:
-            self._collection_report.record_operation(operation, prepared_details)
+        if self._execution_report is not None:
+            self._execution_report.record_operation(operation, prepared_details)
 
         self._print(self._color("=" * LINE_WIDTH, CYAN))
         self._print(self._color("COTACOES CEASA", BOLD + CYAN))
@@ -79,8 +90,8 @@ class TerminalOutput:
         self._print()
 
     def section(self, title: str) -> None:
-        if self._collection_report is not None:
-            self._collection_report.record_section(title)
+        if self._execution_report is not None:
+            self._execution_report.record_section(title)
 
         if self._section_count:
             self._print()
@@ -132,15 +143,15 @@ class TerminalOutput:
         rows: Iterable[tuple[str, object]],
         report_title: str | None = None,
     ) -> None:
-        if self._collection_report is not None:
-            self._collection_report.record_summary(rows, report_title)
+        if self._execution_report is not None:
+            self._execution_report.record_summary(rows, report_title)
 
     def _message(self, level: str, message: str, counted: bool) -> None:
         if counted:
             self._increment_count(level)
 
-        if self._collection_report is not None:
-            self._collection_report.record_message(level, message, counted)
+        if self._execution_report is not None:
+            self._execution_report.record_message(level, message, counted)
 
         label = self._color(f"[{level:<5}]", LEVEL_COLORS[level] + BOLD)
         self._print(f"{label} {message}")

@@ -24,19 +24,30 @@ permanece inalterada.
 A saida usa cores em terminais interativos e informa cada raw assim que ele e
 salvo. Para desativar as cores, execute o container com `-e NO_COLOR=1`.
 
-Cada execucao de coleta gera automaticamente um relatorio Markdown em
-`data/relatorios/`. O relatorio inclui:
+Cada comando gera automaticamente um relatorio Markdown proprio em
+`data/relatorios/`. O nome identifica o fluxo executado, como
+`download_<data_e_hora>.md`, `persistencia_<data_e_hora>.md` ou
+`sincronizacao_supabase_<data_e_hora>.md`.
+
+O relatorio registra somente as operacoes pertencentes ao comando solicitado.
+Por exemplo, `baixar` registra apenas o download, `salvar` registra somente o
+processamento e a persistencia, e `tudo` registra as fases de download e
+persistencia separadamente no mesmo arquivo.
+
+Cada relatorio inclui:
 
 - inicio, fim, duracao e status final;
-- configuracoes efetivamente usadas na coleta;
+- comando, argumentos, fluxo solicitado e escopo;
+- configuracoes efetivamente usadas, sem expor credenciais;
 - resumo executivo com resultados consolidados e alertas principais;
 - totais de informacoes, acertos, avisos e erros;
-- resultados numericos de cada fonte e fase executada;
+- resultados numericos de cada operacao, fonte e fase executada;
 - lista completa de avisos e erros;
-- historico cronologico de todos os eventos registrados durante a coleta.
+- historico cronologico de todos os eventos registrados durante a execucao.
 
-O relatorio tambem e salvo quando a coleta termina com erro ou e interrompida.
-Comandos de manutencao e `--list-categories` nao geram relatorio de coleta.
+O relatorio tambem e salvo quando o comando termina com erro ou e interrompido.
+A regra inclui coleta, processamento, manutencao, sincronizacao, consultas e
+novos comandos adicionados futuramente.
 
 ## Selecionar fontes
 

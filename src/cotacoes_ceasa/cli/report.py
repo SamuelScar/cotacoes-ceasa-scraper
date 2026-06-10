@@ -22,10 +22,13 @@ class ReportSummary:
 
 
 @dataclass
-class CollectionReport:
-    """Registra uma execucao de coleta e gera seu relatorio detalhado."""
+class ExecutionReport:
+    """Registra uma execucao da CLI e gera seu relatorio detalhado."""
 
     started_at: datetime = field(default_factory=lambda: datetime.now().astimezone())
+    report_name: str = "execucao"
+    report_title: str = "Execucao nao identificada"
+    final_status: str | None = None
     events: list[ReportEvent] = field(default_factory=list)
     summaries: list[ReportSummary] = field(default_factory=list)
     configuration: tuple[tuple[str, str], ...] = ()
@@ -37,7 +40,7 @@ class CollectionReport:
             "ERRO": 0,
         }
     )
-    _current_operation: str = field(default="Coleta", init=False, repr=False)
+    _current_operation: str = field(default="Execucao", init=False, repr=False)
     _current_details: tuple[tuple[str, str], ...] = field(
         default=(),
         init=False,
@@ -58,8 +61,21 @@ class CollectionReport:
     def record_configuration(self, rows: Iterable[tuple[str, object]]) -> None:
         self.configuration = _prepare_rows(rows)
 
+    def configure(
+        self,
+        report_name: str,
+        report_title: str,
+        configuration: Iterable[tuple[str, object]],
+    ) -> None:
+        self.report_name = report_name
+        self.report_title = report_title
+        self.record_configuration(configuration)
+
     def record_section(self, title: str) -> None:
         self._record_event("SECAO", title, "")
+
+    def set_final_status(self, status: str) -> None:
+        self.final_status = status
 
     def record_message(self, level: str, message: str, counted: bool) -> None:
         if counted:
@@ -90,7 +106,7 @@ class CollectionReport:
         finished_at = datetime.now().astimezone()
         report_dir.mkdir(parents=True, exist_ok=True)
         file_path = report_dir / (
-            f"coleta_{self.started_at.strftime('%Y%m%d_%H%M%S_%f')}.md"
+            f"{self.report_name}_{self.started_at.strftime('%Y%m%d_%H%M%S_%f')}.md"
         )
         file_path.write_text(
             self._build_markdown(finished_at),
@@ -120,7 +136,7 @@ class CollectionReport:
         duration_seconds = (finished_at - self.started_at).total_seconds()
         warning_count = self.message_counts["AVISO"]
         error_count = self.message_counts["ERRO"]
-        status = (
+        status = self.final_status or (
             "Encerrada com erro"
             if error_count
             else "Concluida com avisos"
@@ -131,7 +147,7 @@ class CollectionReport:
             event.event_type == "OPERACAO" for event in self.events
         )
         lines = [
-            "# Relatorio de coleta",
+            f"# Relatorio de execucao: {self.report_title}",
             "",
             "## Resumo executivo",
             "",
@@ -250,13 +266,13 @@ class CollectionReport:
         )
 
     def _append_configuration(self, lines: list[str]) -> None:
-        lines.extend(["## Configuracao utilizada", ""])
+        lines.extend(["## Solicitacao e configuracao efetiva", ""])
 
         if not self.configuration:
-            lines.extend(["Nenhuma configuracao foi registrada.", ""])
+            lines.extend(["Nenhuma solicitacao ou configuracao foi registrada.", ""])
             return
 
-        lines.extend(["| Configuracao | Valor efetivo |", "| --- | --- |"])
+        lines.extend(["| Item | Valor efetivo |", "| --- | --- |"])
 
         for label, value in self.configuration:
             lines.append(f"| {_escape_table(label)} | `{_escape_table(value)}` |")

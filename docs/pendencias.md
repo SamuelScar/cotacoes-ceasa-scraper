@@ -1,5 +1,15 @@
 # Pendencias
 
+## Resumo rapido
+
+| Pendencia | Resumo |
+| --- | --- |
+| [Progresso da execucao](#progresso-da-execucao) | Exibir percentual, fase atual, itens concluidos, tempo decorrido e estimativa confiavel nos comandos longos. |
+| [Coletas historicas parciais](#coletas-historicas-parciais) | Preservar e persistir raws validos mesmo quando uma fonte conclui apenas parte do historico solicitado. |
+| [Dados compactados e Git LFS](#dados-compactados-e-git-lfs) | Versionar os dados como arquivo compactado com Git LFS e controlar descompactacao, validacao e substituicao segura. |
+| [Paralelismo entre fontes](#paralelismo-entre-fontes) | Executar downloads de fontes independentes em paralelo, mantendo requisicoes internas e persistencia SQLite sequenciais. |
+| [Execucao continua como crawler](#execucao-continua-como-crawler) | Avaliar e implementar execucoes periodicas para coletar e persistir somente dados novos. |
+
 ## Progresso da execucao
 
 Exibir o progresso dos comandos longos, principalmente `tudo`, para permitir
@@ -183,23 +193,3 @@ uma alternativa mais simples: executar `docker compose run --rm tudo` por
 agendamento externo, como cron ou systemd timer. Um servico crawler dedicado
 passa a ser interessante quando forem necessarios intervalos por fonte,
 retentativas coordenadas, estado persistente e observabilidade continua.
-
-## Relatorio obrigatorio para todos os comandos
-
-Qualquer comando executado no terminal referente ao
-`cotacoes-ceasa-scraper` deve gerar um relatorio e salva-lo em
-`data/relatorios/`.
-
-A regra deve abranger comandos de coleta, processamento, manutencao,
-sincronizacao, consulta e todos os comandos adicionados futuramente.
-
-Cada relatorio deve registrar, quando aplicavel:
-
-- comando e argumentos executados;
-- configuracoes efetivas, sem expor credenciais;
-- inicio, fim e duracao;
-- operacoes realizadas e resultados numericos;
-- avisos e erros;
-- status final.
-
-O relatorio deve ser salvo mesmo quando o comando falhar ou for interrompido.

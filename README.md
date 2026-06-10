@@ -72,16 +72,18 @@ do raw ativo mais antigo. `COTACOES_TARGET_DATE` manual tem prioridade e
 - `data/raw/<fonte>/`: raws ativos usados no reprocessamento.
 - `data/raw/<fonte>/old/`: versoes anteriores geradas no mesmo dia.
 - `data/cotacoes.sqlite`: banco consolidado.
-- `data/relatorios/coleta_<data_e_hora>.md`: relatorio completo de cada coleta.
+- `data/relatorios/<fluxo>_<data_e_hora>.md`: relatorio completo de cada comando.
 
 O processamento ignora `old/` e arquivos `.zip`. Quando o schema ou uma regra
 de normalizacao mudar, exclua o SQLite e reconstrua o banco a partir dos raws
 ativos.
 
-Cada relatorio apresenta primeiro um resumo executivo, resultados consolidados,
-alertas principais e as configuracoes efetivamente usadas. Em seguida, registra
-resultados por fonte, avisos, erros e o historico cronologico completo. O
-arquivo tambem e gerado quando a coleta termina com erro ou e interrompida.
+Cada relatorio apresenta primeiro o comando solicitado, o escopo, um resumo
+executivo, resultados consolidados, alertas principais e as configuracoes
+efetivamente usadas sem credenciais. Em seguida, registra somente as operacoes
+realizadas pelo comando, com resultados por fonte e fase, avisos, erros e o
+historico cronologico completo. O arquivo tambem e gerado quando a execucao
+termina com erro ou e interrompida.
 
 ## Documentacao
 

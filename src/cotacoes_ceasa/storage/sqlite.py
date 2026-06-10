@@ -184,32 +184,104 @@ class SQLiteStorage:
         source_slug: str,
         default_market: str,
     ) -> int:
-        inserted_count = 0
         processado_em = datetime.now().isoformat(timespec="seconds")
+        coletas_cache: dict[str, tuple[int, str]] = {}
+        entrepostos_cache: dict[
+            tuple[int, str | None],
+            tuple[int | None, str | None, str | None],
+        ] = {}
+        categorias_cache: dict[str, int] = {}
+        produtos_aliases_cache: dict[tuple[str, str], tuple[int, str]] = {}
+        unidades_cache: dict[str, tuple[int, str | None]] = {}
+        apresentacoes_cache: dict[str | None, tuple[int | None, str | None]] = {}
+        rows: list[tuple[object | None, ...]] = []
 
         for cotacao in cotacoes:
             self._validate_cotacao(cotacao)
-            coleta_id, coleta_key = self._get_or_create_coleta(
-                connection,
-                cotacao,
-                ceasa_id,
-                source_slug,
-                processado_em,
+            coleta_key = self._build_collection_key(
+                cotacao=cotacao,
+                source_slug=source_slug,
+                processado_em=processado_em,
             )
-            entreposto_id, entreposto_slug = self._get_or_create_entreposto(
-                connection,
-                ceasa_id,
-                cotacao.entreposto or self._default_market(default_market),
-            )
-            categoria_id = self._get_or_create_categoria(connection, cotacao.categoria)
-            produto_alias_id, product_key = self._get_or_create_product_alias(
-                connection,
+            coleta = coletas_cache.get(coleta_key)
+            if coleta is None:
+                coleta = self._get_or_create_coleta(
+                    connection,
+                    cotacao,
+                    ceasa_id,
+                    source_slug,
+                    processado_em,
+                )
+                coletas_cache[coleta_key] = coleta
+            coleta_id, coleta_key = coleta
+
+            market_name = cotacao.entreposto or self._default_market(default_market)
+            market_slug = slugify(market_name) if market_name is not None else None
+            entreposto_cache_key = (ceasa_id, market_slug)
+            entreposto = entrepostos_cache.get(entreposto_cache_key)
+            if entreposto is None or entreposto[2] != market_name:
+                entreposto_id, entreposto_slug = self._get_or_create_entreposto(
+                    connection,
+                    ceasa_id,
+                    market_name,
+                )
+                entreposto = (entreposto_id, entreposto_slug, market_name)
+                entrepostos_cache[entreposto_cache_key] = entreposto
+            entreposto_id, entreposto_slug, _ = entreposto
+
+            categoria_id = categorias_cache.get(cotacao.categoria)
+            if categoria_id is None:
+                categoria_id = self._get_or_create_categoria(
+                    connection,
+                    cotacao.categoria,
+                )
+                categorias_cache[cotacao.categoria] = categoria_id
+
+            product_cache_key = (
+                self._normalize_name(cotacao.produto),
                 cotacao.produto,
             )
-            presentation_id, presentation_key = self._get_or_create_presentation(
-                connection,
-                normalize_unit(cotacao.unidade),
-            )
+            product_alias = produtos_aliases_cache.get(product_cache_key)
+            if product_alias is None:
+                product_alias = self._get_or_create_product_alias(
+                    connection,
+                    cotacao.produto,
+                )
+                produtos_aliases_cache[product_cache_key] = product_alias
+            produto_alias_id, product_key = product_alias
+
+            normalized_unit = normalize_unit(cotacao.unidade)
+            unidade_id = None
+            if normalized_unit.original is not None:
+                unidade = (
+                    unidades_cache.get(normalized_unit.symbol)
+                    if normalized_unit.symbol is not None
+                    else None
+                )
+                if unidade is None or unidade[1] != normalized_unit.description:
+                    unidade_id = self._get_or_create_unidade(
+                        connection,
+                        normalized_unit,
+                    )
+                    if normalized_unit.symbol is not None and unidade_id is not None:
+                        unidades_cache[normalized_unit.symbol] = (
+                            unidade_id,
+                            normalized_unit.description,
+                        )
+                else:
+                    unidade_id = unidade[0]
+
+            presentation_key = self._build_presentation_key(normalized_unit)
+            presentation = apresentacoes_cache.get(presentation_key)
+            if presentation is None:
+                presentation = self._get_or_create_presentation(
+                    connection,
+                    normalized_unit,
+                    unidade_id,
+                )
+                apresentacoes_cache[presentation_key] = presentation
+            presentation_id, presentation_key = presentation
+
             identity_key = self._build_identity_key(
                 source_slug=source_slug,
                 market_slug=entreposto_slug,
@@ -219,30 +291,7 @@ class SQLiteStorage:
                 cotacao=cotacao,
             )
             unique_key = self._build_unique_key(identity_key, coleta_key, cotacao)
-            cursor = connection.execute(
-                """
-                INSERT INTO cotacoes (
-                    chave_unica,
-                    chave_identidade,
-                    coleta_id,
-                    entreposto_id,
-                    categoria_id,
-                    produto_alias_id,
-                    apresentacao_unidade_id,
-                    data_cotacao,
-                    preco_minimo,
-                    preco_comum,
-                    preco_maximo,
-                    procedencia,
-                    classificacao,
-                    situacao_mercado,
-                    fonte_complemento,
-                    url_complemento,
-                    data_complemento
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (chave_unica) DO NOTHING
-                """,
+            rows.append(
                 (
                     unique_key,
                     identity_key,
@@ -265,11 +314,38 @@ class SQLiteStorage:
                         if cotacao.data_complemento is not None
                         else None
                     ),
-                ),
+                )
             )
-            inserted_count += cursor.rowcount
 
-        return inserted_count
+        changes_before = connection.total_changes
+        connection.executemany(
+            """
+            INSERT INTO cotacoes (
+                chave_unica,
+                chave_identidade,
+                coleta_id,
+                entreposto_id,
+                categoria_id,
+                produto_alias_id,
+                apresentacao_unidade_id,
+                data_cotacao,
+                preco_minimo,
+                preco_comum,
+                preco_maximo,
+                procedencia,
+                classificacao,
+                situacao_mercado,
+                fonte_complemento,
+                url_complemento,
+                data_complemento
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (chave_unica) DO NOTHING
+            """,
+            rows,
+        )
+
+        return connection.total_changes - changes_before
 
     def _validate_cotacao(self, cotacao: Cotacao) -> None:
         if cotacao.data_cotacao is None:
@@ -291,19 +367,11 @@ class SQLiteStorage:
         source_slug: str,
         processado_em: str,
     ) -> tuple[int, str]:
-        baixado_em = (
-            cotacao.baixado_em.isoformat(timespec="seconds")
-            if cotacao.baixado_em is not None
-            else None
-        )
-        collection_key = self._hash_values(
-            (
-                source_slug,
-                cotacao.arquivo_raw,
-                cotacao.hash_raw,
-                cotacao.url_origem,
-                baixado_em or processado_em,
-            )
+        baixado_em = self._format_datetime(cotacao.baixado_em)
+        collection_key = self._build_collection_key(
+            cotacao=cotacao,
+            source_slug=source_slug,
+            processado_em=processado_em,
         )
         connection.execute(
             """
@@ -425,22 +493,12 @@ class SQLiteStorage:
         self,
         connection: sqlite3.Connection,
         unit: NormalizedUnit,
+        unidade_id: int | None,
     ) -> tuple[int | None, str | None]:
         if unit.original is None:
             return None, None
 
-        unidade_id = self._get_or_create_unidade(connection, unit)
-        presentation_key = self._hash_values(
-            (
-                unit.original,
-                unit.normalized,
-                unit.symbol,
-                unit.packaging,
-                self._decimal_to_db(unit.quantity_min),
-                self._decimal_to_db(unit.quantity_max),
-                unit.detail,
-            )
-        )
+        presentation_key = self._build_presentation_key(unit)
         connection.execute(
             """
             INSERT INTO apresentacoes_unidade (
@@ -476,6 +534,38 @@ class SQLiteStorage:
                 presentation_key,
             ),
             presentation_key,
+        )
+
+    def _build_collection_key(
+        self,
+        cotacao: Cotacao,
+        source_slug: str,
+        processado_em: str,
+    ) -> str:
+        return self._hash_values(
+            (
+                source_slug,
+                cotacao.arquivo_raw,
+                cotacao.hash_raw,
+                cotacao.url_origem,
+                self._format_datetime(cotacao.baixado_em) or processado_em,
+            )
+        )
+
+    def _build_presentation_key(self, unit: NormalizedUnit) -> str | None:
+        if unit.original is None:
+            return None
+
+        return self._hash_values(
+            (
+                unit.original,
+                unit.normalized,
+                unit.symbol,
+                unit.packaging,
+                self._decimal_to_db(unit.quantity_min),
+                self._decimal_to_db(unit.quantity_max),
+                unit.detail,
+            )
         )
 
     def _get_or_create_ceasa(
@@ -601,6 +691,9 @@ class SQLiteStorage:
 
     def _decimal_to_db(self, value: Decimal | None) -> str | None:
         return str(value) if value is not None else None
+
+    def _format_datetime(self, value: datetime | None) -> str | None:
+        return value.isoformat(timespec="seconds") if value is not None else None
 
     def _normalize_name(self, value: str) -> str:
         return " ".join(value.lower().split())

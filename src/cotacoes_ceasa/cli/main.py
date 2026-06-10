@@ -1,3 +1,5 @@
+import shlex
+import sys
 from pathlib import Path
 
 from cotacoes_ceasa.cli.commands.batch import run_all_sources
@@ -23,22 +25,31 @@ REPORT_DIR = Path("data/relatorios")
 
 
 def main() -> None:
-    """Executa comandos de coleta disponiveis no projeto."""
+    """Executa os comandos disponiveis no projeto."""
     output = TerminalOutput()
+    output.enable_execution_report(build_initial_report_configuration())
 
     try:
         try:
             run(output)
         except KeyboardInterrupt:
+            output.set_execution_status("Interrompida pelo usuario")
             output.error("Execucao interrompida pelo usuario.")
             output.summary()
             raise SystemExit(130)
+        except SystemExit as error:
+            if error.code not in {None, 0}:
+                output.set_execution_status("Encerrada com erro")
+                output.error(f"CLI encerrada com codigo {error.code}.")
+                output.summary()
+            raise
         except Exception as error:
+            output.set_execution_status("Encerrada com erro")
             output.error(f"{type(error).__name__}: {error}")
             output.summary()
             raise SystemExit(1)
     finally:
-        save_collection_report(output)
+        save_execution_report(output)
 
 
 def run(output: TerminalOutput) -> None:
@@ -46,16 +57,14 @@ def run(output: TerminalOutput) -> None:
     config = load_config()
     args = build_parser(config).parse_args()
 
+    output.configure_execution_report(
+        report_name=resolve_report_name(args),
+        report_title=resolve_report_flow(args),
+        configuration=build_report_configuration(args, config),
+    )
+
     if args.base_url and args.source is None:
         raise ValueError("--base-url exige --source.")
-
-    if not (
-        args.archive_raw_old
-        or args.complement_prohort
-        or args.sync_supabase
-        or args.list_categories
-    ):
-        output.enable_collection_report(build_report_configuration(args, config))
 
     if args.archive_raw_old:
         run_archive_command(args, output)
@@ -96,34 +105,85 @@ def build_report_configuration(
     args,
     config: AppConfig,
 ) -> tuple[tuple[str, object], ...]:
+    rows = [
+        *build_initial_report_configuration(),
+        ("Fluxo solicitado", resolve_report_flow(args)),
+        (
+            "Origem da configuracao",
+            ".env, arquivos de configuracao e argumentos CLI",
+        ),
+    ]
+
+    if args.archive_raw_old:
+        rows.extend(
+            [
+                ("Escopo solicitado", "arquivos antigos de todas as fontes"),
+                ("COTACOES_RAW_DIR", args.raw_dir),
+                ("Acesso HTTP", "nao"),
+                ("Persistencia SQLite", "nao"),
+            ]
+        )
+        return tuple(rows)
+
+    if args.complement_prohort:
+        rows.extend(
+            [
+                ("Escopo solicitado", "complemento PROHORT"),
+                ("COTACOES_DATABASE_PATH", args.database_path),
+                ("Configuracao PROHORT", config.prohort_file),
+                ("URL PROHORT", config.prohort_url),
+                ("COTACOES_HTTP_TIMEOUT_SECONDS", args.http_timeout_seconds),
+                ("Acesso HTTP", "sim"),
+                ("Persistencia SQLite", "sim"),
+            ]
+        )
+        return tuple(rows)
+
+    if args.sync_supabase:
+        rows.extend(
+            [
+                ("Escopo solicitado", "sincronizacao SQLite para Supabase"),
+                ("COTACOES_DATABASE_PATH", args.database_path),
+                (
+                    "COTACOES_SUPABASE_DATABASE_URL configurada",
+                    "sim" if config.supabase_database_url else "nao",
+                ),
+                ("Leitura SQLite", "sim"),
+                ("Persistencia SQLite", "nao"),
+                ("Conexao externa", "Supabase PostgreSQL"),
+            ]
+        )
+        return tuple(rows)
+
     all_sources = args.source is None
     saves_database = args.save or args.process_raw or args.download_and_process
     automatic_prohort = config.complement_prohort and saves_database
     accesses_source_http = not args.process_raw
     accesses_http = accesses_source_http or automatic_prohort
-    source_slugs = (
-        ", ".join(config.sources) if all_sources else args.source
+    source_slugs = ", ".join(config.sources) if all_sources else args.source
+    rows.extend(
+        [
+            ("Escopo solicitado", "todas as fontes" if all_sources else args.source),
+            ("Fontes solicitadas", source_slugs),
+            ("Fontes configuradas", len(config.sources)),
+            ("COTACOES_SOURCES_FILE", config.sources_file),
+            ("Acesso HTTP", "sim" if accesses_http else "nao"),
+            ("Persistencia SQLite", "sim" if saves_database else "nao"),
+        ]
     )
-    rows: list[tuple[str, object]] = [
-        ("Origem", ".env, arquivos de configuracao e argumentos CLI"),
-        ("Fluxo", resolve_report_flow(args)),
-        ("Escopo", "todas as fontes" if all_sources else args.source),
-        ("Fontes executadas", source_slugs),
-        ("Fontes configuradas", len(config.sources)),
-        ("COTACOES_SOURCES_FILE", config.sources_file),
-        ("COTACOES_RAW_DIR", args.raw_dir),
-        ("Acesso HTTP", "sim" if accesses_http else "nao"),
-        ("Persistencia SQLite", "sim" if saves_database else "nao"),
-        ("COTACOES_COMPLEMENT_PROHORT", config.complement_prohort),
-        (
-            "Complemento PROHORT automatico efetivo",
-            "sim" if automatic_prohort else "nao",
-        ),
-        ("Configuracao PROHORT", config.prohort_file),
-    ]
+
+    if not args.list_categories:
+        rows.append(("COTACOES_RAW_DIR", args.raw_dir))
 
     if saves_database:
         rows.append(("COTACOES_DATABASE_PATH", args.database_path))
+        rows.append(("COTACOES_COMPLEMENT_PROHORT", config.complement_prohort))
+        rows.append(
+            (
+                "Complemento PROHORT automatico efetivo",
+                "sim" if automatic_prohort else "nao",
+            )
+        )
 
     if args.download_and_process:
         rows.append(("Escopo do processamento raw", "somente raws desta coleta"))
@@ -131,35 +191,45 @@ def build_report_configuration(
         rows.append(("Escopo do processamento raw", "todos os raws ativos"))
 
     if automatic_prohort:
+        rows.append(("Configuracao PROHORT", config.prohort_file))
         rows.append(("URL PROHORT", config.prohort_url))
+
+        if not accesses_source_http:
+            rows.append(("COTACOES_HTTP_TIMEOUT_SECONDS", args.http_timeout_seconds))
 
     if accesses_source_http:
         rows.extend(
             [
-                ("COTACOES_TARGET_DATE", args.target_date or "ultima disponivel"),
-                ("COTACOES_QUOTES_BACK", format_quotes_back(args.quotes_back)),
                 ("COTACOES_HTTP_TIMEOUT_SECONDS", args.http_timeout_seconds),
                 ("COTACOES_REQUEST_DELAY_SECONDS", args.request_delay_seconds),
                 (
                     "COTACOES_REUSE_RAW_BEFORE_REQUEST",
                     config.reuse_raw_before_request,
                 ),
-                (
-                    "COTACOES_INCREMENTAL_HISTORY",
-                    config.incremental_history,
-                ),
-                (
-                    "Historico incremental efetivo",
-                    format_incremental_history(
-                        config.incremental_history,
-                        args.target_date,
-                        args.quotes_back,
-                    ),
-                ),
             ]
         )
 
-        if args.quotes_back is None:
+        if not args.list_categories:
+            rows.extend(
+                [
+                    ("COTACOES_TARGET_DATE", args.target_date or "ultima disponivel"),
+                    ("COTACOES_QUOTES_BACK", format_quotes_back(args.quotes_back)),
+                    (
+                        "COTACOES_INCREMENTAL_HISTORY",
+                        config.incremental_history,
+                    ),
+                    (
+                        "Historico incremental efetivo",
+                        format_incremental_history(
+                            config.incremental_history,
+                            args.target_date,
+                            args.quotes_back,
+                        ),
+                    ),
+                ]
+            )
+
+        if not args.list_categories and args.quotes_back is None:
             rows.append(
                 (
                     "Encerramento do modo infinito",
@@ -176,27 +246,100 @@ def build_report_configuration(
 
 
 def resolve_report_flow(args) -> str:
+    if args.archive_raw_old:
+        return "Compactar arquivos antigos"
+
+    if args.complement_prohort:
+        return "Complementar cotacoes com PROHORT"
+
+    if args.sync_supabase:
+        return "Sincronizar SQLite com Supabase"
+
+    if args.list_categories:
+        return "Listar categorias"
+
     if args.download_and_process:
-        return "baixar e processar"
+        return "Baixar raws, processar e salvar cotacoes"
 
     if args.download_only:
-        return "baixar raws"
+        return "Baixar raws"
 
     if args.process_raw:
-        return "processar raws e salvar"
+        return "Processar raws e salvar cotacoes"
 
     if args.save:
-        return "coletar e salvar"
+        return "Coletar e salvar cotacoes"
 
-    return "coletar e extrair"
+    return "Coletar e extrair cotacoes"
 
 
-def save_collection_report(output: TerminalOutput) -> None:
-    if not output.collection_report_enabled:
-        return
+def resolve_report_name(args) -> str:
+    if args.archive_raw_old:
+        return "compactacao"
 
+    if args.complement_prohort:
+        return "complemento_prohort"
+
+    if args.sync_supabase:
+        return "sincronizacao_supabase"
+
+    if args.list_categories:
+        return "consulta_categorias"
+
+    if args.download_and_process:
+        return "download_e_persistencia"
+
+    if args.download_only:
+        return "download"
+
+    if args.process_raw:
+        return "persistencia"
+
+    if args.save:
+        return "coleta_e_persistencia"
+
+    return "coleta"
+
+
+def build_initial_report_configuration() -> tuple[tuple[str, object], ...]:
+    arguments = _sanitize_arguments(sys.argv[1:])
+    command = shlex.join([sys.argv[0], *arguments])
+
+    return (
+        ("Comando executado", command),
+        ("Ponto de entrada", sys.argv[0]),
+        ("Argumentos recebidos", shlex.join(arguments) if arguments else "(nenhum)"),
+    )
+
+
+def _sanitize_arguments(arguments: list[str]) -> list[str]:
+    sensitive_names = ("password", "token", "secret", "api-key", "database-url")
+    sanitized: list[str] = []
+    mask_next = False
+
+    for argument in arguments:
+        if mask_next:
+            sanitized.append("***")
+            mask_next = False
+            continue
+
+        option, separator, _ = argument.partition("=")
+        is_sensitive = option.startswith("--") and any(
+            name in option.lower() for name in sensitive_names
+        )
+
+        if is_sensitive and separator:
+            sanitized.append(f"{option}=***")
+        else:
+            sanitized.append(argument)
+            mask_next = is_sensitive
+
+    return sanitized
+
+
+def save_execution_report(output: TerminalOutput) -> None:
     try:
-        report_path = output.write_collection_report(REPORT_DIR)
+        report_path = output.write_execution_report(REPORT_DIR)
     except Exception as error:
         output.error(f"Nao foi possivel salvar o relatorio: {error}")
         return
