@@ -26,30 +26,10 @@ permanece inalterada.
 A saida usa cores em terminais interativos e informa cada raw assim que ele e
 salvo. Para desativar as cores, execute o container com `-e NO_COLOR=1`.
 
-Cada comando gera automaticamente um relatorio Markdown proprio em
-`data/relatorios/`. O nome identifica o fluxo executado, como
-`download_<data_e_hora>.md`, `persistencia_<data_e_hora>.md` ou
-`sincronizacao_supabase_<data_e_hora>.md`.
-
-O relatorio registra somente as operacoes pertencentes ao comando solicitado.
-Por exemplo, `baixar` registra apenas o download, `salvar` registra somente o
-processamento e a persistencia, e `tudo` registra as fases de download e
-persistencia separadamente no mesmo arquivo.
-
-Cada relatorio inclui:
-
-- inicio, fim, duracao e status final;
-- comando, argumentos, fluxo solicitado e escopo;
-- configuracoes efetivamente usadas, sem expor credenciais;
-- resumo executivo com resultados consolidados e alertas principais;
-- totais de informacoes, acertos, avisos e erros;
-- resultados numericos de cada operacao, fonte e fase executada;
-- lista completa de avisos e erros;
-- historico cronologico de todos os eventos registrados durante a execucao.
-
-O relatorio tambem e salvo quando o comando termina com erro ou e interrompido.
-A regra inclui coleta, processamento, manutencao, sincronizacao, consultas e
-novos comandos adicionados futuramente.
+Cada comando gera um relatorio em `data/relatorios/`, inclusive quando termina
+com erro ou e interrompido. O arquivo registra somente as fases executadas e
+inclui configuracoes sem credenciais, duracao, resultados por fonte, alertas,
+erros e historico cronologico.
 
 ## Selecionar fontes
 
@@ -77,7 +57,7 @@ docker compose run --rm app --source ceasa-pe --list-categories
 
 Fontes e limitacoes de historico estao em [Fontes e limitacoes](fontes.md).
 
-## Diferenca entre os modos
+## Modos do servico `app`
 
 | Comando isolado | Baixa raw | Extrai cotacoes | Salva no SQLite |
 | --- | --- | --- | --- |
@@ -85,11 +65,9 @@ Fontes e limitacoes de historico estao em [Fontes e limitacoes](fontes.md).
 | `app --source <fonte> --save` | Sim | Sim | Sim |
 | `app --source <fonte> --process-raw` | Nao | Sim | Sim |
 
-O comportamento padrao baixa o raw e valida a extracao sem alterar o banco.
-Use `--save` quando quiser concluir o fluxo e persistir as cotacoes.
-
-`--process-raw` nao acessa a fonte. Ele reprocessa os arquivos ativos ja
-baixados e salva o resultado.
+O comportamento padrao valida a extracao sem alterar o banco. `--save`
+persiste as cotacoes e `--process-raw` reprocessa os arquivos ativos sem
+acessar a fonte.
 
 O fluxo `tudo` processa somente os arquivos selecionados pelo download da
 execucao atual. Assim, `quotes_back` tambem limita o volume da persistencia.
@@ -142,8 +120,8 @@ estao presentes antes de excluir o SQLite.
 
 ## Complemento PROHORT
 
-Para complementar automaticamente depois de `salvar`, `tudo` ou uma coleta
-isolada com `--save`, configure:
+Para complementar automaticamente depois de qualquer fluxo que salva no
+SQLite, configure:
 
 ```env
 COTACOES_COMPLEMENT_PROHORT=true
@@ -156,12 +134,8 @@ demanda:
 docker compose run --rm complementar-prohort
 ```
 
-Ele:
-
-- preenche `preco_comum` vazio quando encontra correspondencia confiavel;
-- nao sobrescreve campos preenchidos;
-- pode inserir produtos ausentes para uma CEASA e data ja presentes no banco;
-- marca os registros afetados com a origem do complemento.
+O complemento preenche dados apenas quando encontra correspondencia confiavel,
+nao sobrescreve campos preenchidos e registra sua origem.
 
 A URL do arquivo `ProhortDiario.txt` fica em `config/prohort.json`.
 

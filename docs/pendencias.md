@@ -5,10 +5,12 @@
 | Pendencia | Resumo |
 | --- | --- |
 | [Progresso da execucao](#progresso-da-execucao) | Exibir percentual, fase atual, itens concluidos, tempo decorrido e estimativa confiavel nos comandos longos. |
-| [Coletas historicas parciais](#coletas-historicas-parciais) | Preservar e persistir raws validos mesmo quando uma fonte conclui apenas parte do historico solicitado. |
+| [Coletas historicas parciais](#coletas-historicas-parciais) | Fazer o comando `tudo` salvar no banco os arquivos baixados antes de uma fonte falhar. |
 | [Dados compactados e Git LFS](#dados-compactados-e-git-lfs) | Versionar os dados como arquivo compactado com Git LFS e controlar descompactacao, validacao e substituicao segura. |
 | [Paralelismo entre fontes](#paralelismo-entre-fontes) | Executar downloads de fontes independentes em paralelo, mantendo requisicoes internas e persistencia SQLite sequenciais. |
 | [Execucao continua como crawler](#execucao-continua-como-crawler) | Avaliar e implementar execucoes periodicas para coletar e persistir somente dados novos. |
+| [Desempenho do processamento de raws](#desempenho-do-processamento-de-raws) | Medir e reduzir o custo do processamento, principalmente na extracao de PDFs e nas fontes mais lentas. |
+| [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
 
 ## Progresso da execucao
 
@@ -29,40 +31,25 @@ conforme novos itens forem descobertos, sem apresentar uma estimativa enganosa.
 
 ## Coletas historicas parciais
 
-Quando uma fonte encontra apenas parte da quantidade de datas solicitada, os
-raws validos ja baixados devem ser preservados e persistidos. A fonte nao deve
-ser tratada como falha total somente porque nao atingiu o tamanho completo da
-janela configurada.
+Atualmente, os arquivos baixados antes de uma falha permanecem em `data/raw/`,
+mas o comando `tudo` nao os salva automaticamente no banco. Para aproveitar
+esses arquivos, e necessario executar `docker compose run --rm salvar`.
 
-A implementacao deve:
+O comando `tudo` deve processar e salvar esses arquivos antes de continuar para
+a proxima fonte, mantendo a falha registrada no relatorio.
 
-- diferenciar fonte concluida, parcialmente concluida, com falha e ignorada;
-- persistir os raws validos baixados antes de uma falha ou esgotamento parcial;
-- manter a falha de conexao ou bloqueio registrada sem descartar resultados
-  anteriores validos;
-- informar por fonte quantos raws foram baixados, persistidos e ficaram
-  aguardando persistencia;
-- separar os totais consolidados por fase, sem somar novamente a mesma fonte no
-  download e na persistencia;
-- aplicar retry para respostas incompletas, como `IncompleteRead`, respeitando o
-  backoff e o limite de tentativas existentes;
-- documentar que janelas incrementais menores, como
-  `COTACOES_QUOTES_BACK=99`, reduzem o risco de perder uma fase inteira;
-- manter `COTACOES_QUOTES_BACK=infinito` como opcao para buscar ate o fim do
-  historico disponivel sem exigir uma quantidade fixa de datas.
+Exemplo: se uma fonte baixar 80 arquivos e falhar no seguinte, os 80 arquivos
+devem ser persistidos pelo próprio `tudo`. O relatorio deve informar quantos
+arquivos foram baixados e persistidos antes da falha.
 
-O fluxo `tudo` deve continuar processando automaticamente os raws validos de
-uma fonte parcialmente concluida. O comando `salvar` permanece como recuperacao
-para raws ativos que nao foram persistidos durante uma execucao interrompida ou
-com falha.
+O comando `salvar` permanece como recuperacao para execucoes interrompidas
+antes que o `tudo` consiga iniciar a persistencia.
 
 ## Dados compactados e Git LFS
 
 A pasta `data/` deve manter a estrutura atual durante a execucao, mas ser
-versionada como um unico arquivo compactado para evitar milhares de raws no
-repositorio. Como esse arquivo crescera continuamente e cada alteracao de um
-arquivo binario pode aumentar muito o historico normal do Git, ele deve ser
-armazenado com Git LFS.
+versionada como `data.tar.gz` com Git LFS para evitar milhares de raws no
+repositorio Git comum.
 
 Fluxo proposto:
 
@@ -97,19 +84,14 @@ Cuidados necessarios:
 - considerar armazenamento externo quando o volume deixar de ser adequado
   ate mesmo para Git LFS.
 
-O Git LFS evita que o repositorio Git comum carregue os dados completos, mas
-continua armazenando cada versao enviada de `data.tar.gz`. Portanto, ele reduz
-o peso do clone normal, mas nao elimina o crescimento do armazenamento remoto.
+O Git LFS reduz o peso do clone normal, mas continua armazenando cada versao
+enviada e nao elimina o crescimento do armazenamento remoto.
 
 ## Paralelismo entre fontes
 
-A coleta de todas as fontes atualmente ocorre de forma sequencial. Executar
-fontes independentes em paralelo pode reduzir bastante o tempo total, pois boa
-parte da execucao fica aguardando respostas HTTP.
-
-O paralelismo deve ocorrer somente entre fontes. As requisicoes internas de
-cada fonte devem continuar sequenciais para preservar cookies, navegacao,
-ordem de descoberta e o intervalo configurado entre requisicoes.
+Executar fontes independentes em paralelo pode reduzir o tempo total. O
+paralelismo deve ocorrer somente entre fontes; requisicoes internas e
+persistencia SQLite devem continuar sequenciais.
 
 Fluxo proposto:
 
@@ -140,18 +122,13 @@ Cuidados necessarios:
 - permitir cancelar a execucao e encerrar os workers corretamente;
 - medir o impacto antes de aumentar o paralelismo.
 
-O objetivo nao e aumentar agressivamente o numero de requisicoes para uma
-mesma CEASA. O ganho deve vir da espera simultanea por fontes diferentes.
+O ganho deve vir da espera simultanea por fontes diferentes, sem aumentar
+agressivamente as requisicoes para uma mesma CEASA.
 
 ## Execucao continua como crawler
 
-Transformar o scraper em um crawler significa manter um processo responsavel
-por verificar periodicamente todas as fontes, coletar somente dados novos,
-persistir os resultados e continuar aguardando a proxima execucao.
-
-O crawler deve reutilizar os fluxos existentes em vez de implementar outra
-logica de coleta. Ele seria apenas responsavel por agendar e coordenar chamadas
-equivalentes ao comando `tudo`.
+Um crawler deve agendar e coordenar chamadas equivalentes ao comando `tudo`,
+reutilizando os fluxos existentes para coletar e persistir somente dados novos.
 
 Fluxo proposto:
 
@@ -188,22 +165,17 @@ Cuidados necessarios:
 - encerrar corretamente durante compactacao, download ou persistencia;
 - separar erros temporarios de falhas que exigem manutencao do coletor.
 
-Antes de manter um processo Python permanentemente ativo, deve ser avaliada
-uma alternativa mais simples: executar `docker compose run --rm tudo` por
-agendamento externo, como cron ou systemd timer. Um servico crawler dedicado
-passa a ser interessante quando forem necessarios intervalos por fonte,
-retentativas coordenadas, estado persistente e observabilidade continua.
+Antes de manter um processo Python ativo, deve ser avaliado o agendamento
+externo de `docker compose run --rm tudo`. Um crawler dedicado passa a ser
+interessante quando forem necessarios intervalos por fonte, retentativas
+coordenadas, estado persistente e observabilidade continua.
 
 ## Desempenho do processamento de raws
 
 Melhorar o desempenho do processamento de raws, principalmente nas fontes com
 grande volume de arquivos e nos parsers de PDF.
 
-Foi realizado um estudo do relatorio
-`data/relatorios/persistencia_20260610_204715_856649.md` para identificar o
-gargalo da persistencia completa iniciada em `2026-06-10T20:47:15+00:00`.
-
-Resultados encontrados:
+O relatorio `data/relatorios/persistencia_20260610_204715_856649.md` mostrou:
 
 - duracao total de `1h53min54s`;
 - processamento dos raws: `1h30min34s`, aproximadamente `79,5%` do total;
@@ -243,10 +215,13 @@ raws.
 
 ## Aprimorar sincronizacao incremental com Supabase
 
-Os modos incremental e completo, com envio em lotes e retomada, ja estao
-disponiveis. Melhorias futuras:
+Atualmente, a sincronizacao incremental envia registros novos e atualiza as
+tabelas pequenas de referencia. Porem, ela nao detecta correcoes feitas em
+coletas ou cotacoes que ja haviam sido enviadas ao Supabase.
 
-- detectar e atualizar alteracoes em coletas e cotacoes antigas usando chaves
-  unicas de negocio;
-- detalhar nos relatorios quantos registros foram inseridos, atualizados ou
-  ignorados por tabela.
+Exemplo: se o preco de uma cotacao antiga for corrigido no SQLite local, a
+sincronizacao incremental nao atualiza essa cotacao no Supabase. Atualmente, e
+necessario executar a substituicao completa para enviar a correcao.
+
+A sincronizacao incremental deve identificar e atualizar esses registros
+antigos sem precisar substituir todo o banco remoto.
