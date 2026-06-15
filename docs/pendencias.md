@@ -225,3 +225,11 @@ necessario executar a substituicao completa para enviar a correcao.
 
 A sincronizacao incremental deve identificar e atualizar esses registros
 antigos sem precisar substituir todo o banco remoto.
+
+## Pendencias menores
+
+### Centralizar dependencias no pyproject.toml
+
+Remover a duplicacao de dependencias entre `requirements.txt` e
+`pyproject.toml`. Ajustar o Dockerfile para instalar o projeto com
+`pip install .` e remover o `requirements.txt`.
