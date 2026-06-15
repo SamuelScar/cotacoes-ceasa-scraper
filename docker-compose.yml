@@ -36,3 +36,17 @@ services:
   sincronizar-supabase:
     <<: *app
     command: ["--sync-supabase"]
+
+  substituir-supabase:
+    <<: *app
+    command: ["--replace-supabase"]
+
+  migrar-supabase-pgloader:
+    image: dimitri/pgloader:latest
+    working_dir: /app
+    environment:
+      COTACOES_SUPABASE_DATABASE_URL: ${COTACOES_SUPABASE_DATABASE_URL}
+      TZ: America/Sao_Paulo
+    volumes:
+      - .:/app
+    entrypoint: ["/bin/sh", "/app/scripts/migrar_supabase_pgloader.sh"]

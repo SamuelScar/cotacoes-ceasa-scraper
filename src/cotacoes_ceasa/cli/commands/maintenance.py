@@ -33,19 +33,34 @@ def run_supabase_sync_command(
     args,
     config: AppConfig,
     output: TerminalOutput,
+    mode: str,
 ) -> None:
     if not config.supabase_database_url:
         raise ValueError("COTACOES_SUPABASE_DATABASE_URL nao configurada no .env.")
 
     output.header(
-        "Sincronizar SQLite com Supabase",
-        (("Banco local", args.database_path),),
+        (
+            "Adicionar novos registros ao Supabase"
+            if mode == "incremental"
+            else "Substituir snapshot do Supabase"
+        ),
+        (
+            ("Banco local", args.database_path),
+            ("Modo", mode),
+        ),
     )
     output.section("Sincronizacao")
-    output.info("Criando schema e enviando registros para o Supabase.")
+    output.info(
+        "Adicionando novos registros em lotes."
+        if mode == "incremental"
+        else "Substituindo o snapshot remoto em lotes."
+    )
     result = SupabaseSynchronizer(
         sqlite_path=Path(args.database_path),
         database_url=config.supabase_database_url,
+        mode=mode,
+        batch_size=args.supabase_batch_size,
+        progress=output.info,
     ).sync()
 
     for table_name, count in result.table_counts.items():

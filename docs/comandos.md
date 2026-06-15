@@ -10,7 +10,9 @@ Estes sao os comandos usados na operacao normal:
 | `docker compose run --rm salvar` | Processa raws ativos e salva no SQLite |
 | `docker compose run --rm tudo` | Baixa e persiste somente os raws da coleta |
 | `docker compose run --rm complementar-prohort` | Complementa o banco com PROHORT |
-| `docker compose run --rm sincronizar-supabase` | Sincroniza o SQLite com o Supabase |
+| `docker compose run --rm sincronizar-supabase` | Adiciona novos registros ao Supabase |
+| `docker compose run --rm substituir-supabase` | Substitui completamente o Supabase |
+| `docker compose run --rm migrar-supabase-pgloader` | Executa migracao completa excepcional |
 | `docker compose run --rm compactar-old` | Compacta HTMLs soltos de `old/` |
 
 Data limite, janela historica, caminhos, delay e timeout sao lidos do `.env`.

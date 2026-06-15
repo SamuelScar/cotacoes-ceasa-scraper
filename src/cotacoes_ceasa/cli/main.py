@@ -75,7 +75,11 @@ def run(output: TerminalOutput) -> None:
         return
 
     if args.sync_supabase:
-        run_supabase_sync_command(args, config, output)
+        run_supabase_sync_command(args, config, output, mode="incremental")
+        return
+
+    if args.replace_supabase:
+        run_supabase_sync_command(args, config, output, mode="full")
         return
 
     if args.source is None:
@@ -139,15 +143,27 @@ def build_report_configuration(
         )
         return tuple(rows)
 
-    if args.sync_supabase:
+    if args.sync_supabase or args.replace_supabase:
         rows.extend(
             [
-                ("Escopo solicitado", "sincronizacao SQLite para Supabase"),
+                (
+                    "Escopo solicitado",
+                    (
+                        "adicionar novos registros ao Supabase"
+                        if args.sync_supabase
+                        else "substituir snapshot do Supabase"
+                    ),
+                ),
+                (
+                    "Modo de sincronizacao",
+                    "incremental" if args.sync_supabase else "completa",
+                ),
                 ("COTACOES_DATABASE_PATH", args.database_path),
                 (
                     "COTACOES_SUPABASE_DATABASE_URL configurada",
                     "sim" if config.supabase_database_url else "nao",
                 ),
+                ("COTACOES_SUPABASE_BATCH_SIZE", args.supabase_batch_size),
                 ("Leitura SQLite", "sim"),
                 ("Persistencia SQLite", "nao"),
                 ("Conexao externa", "Supabase PostgreSQL"),
@@ -253,7 +269,10 @@ def resolve_report_flow(args) -> str:
         return "Complementar cotacoes com PROHORT"
 
     if args.sync_supabase:
-        return "Sincronizar SQLite com Supabase"
+        return "Adicionar novos registros ao Supabase"
+
+    if args.replace_supabase:
+        return "Substituir snapshot do Supabase"
 
     if args.list_categories:
         return "Listar categorias"
@@ -281,7 +300,10 @@ def resolve_report_name(args) -> str:
         return "complemento_prohort"
 
     if args.sync_supabase:
-        return "sincronizacao_supabase"
+        return "sincronizacao_supabase_incremental"
+
+    if args.replace_supabase:
+        return "sincronizacao_supabase_completa"
 
     if args.list_categories:
         return "consulta_categorias"

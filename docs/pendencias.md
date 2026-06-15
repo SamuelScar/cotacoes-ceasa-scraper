@@ -193,3 +193,60 @@ uma alternativa mais simples: executar `docker compose run --rm tudo` por
 agendamento externo, como cron ou systemd timer. Um servico crawler dedicado
 passa a ser interessante quando forem necessarios intervalos por fonte,
 retentativas coordenadas, estado persistente e observabilidade continua.
+
+## Desempenho do processamento de raws
+
+Melhorar o desempenho do processamento de raws, principalmente nas fontes com
+grande volume de arquivos e nos parsers de PDF.
+
+Foi realizado um estudo do relatorio
+`data/relatorios/persistencia_20260610_204715_856649.md` para identificar o
+gargalo da persistencia completa iniciada em `2026-06-10T20:47:15+00:00`.
+
+Resultados encontrados:
+
+- duracao total de `1h53min54s`;
+- processamento dos raws: `1h30min34s`, aproximadamente `79,5%` do total;
+- persistencia no SQLite: `19min07s`, aproximadamente `16,8%` do total;
+- complemento PROHORT: `3min35s`, aproximadamente `3,1%` do total;
+- CEASA-PR, CEASA-PE e CEASA-ES concentraram aproximadamente `85%` da
+  execucao;
+- a CEASA-PR consumiu aproximadamente `50min12s`, principalmente durante o
+  processamento de `618` PDFs.
+
+O estudo confirmou que o principal gargalo esta no processamento dos raws. O
+parser, principalmente a extracao e interpretacao dos PDFs, provavelmente
+representa uma parte relevante desse custo, mas o fluxo deve ser medido por
+etapa antes das otimizacoes.
+
+Medicoes necessarias:
+
+- listagem e leitura dos arquivos;
+- extracao de texto dos PDFs;
+- parser especifico de cada fonte;
+- normalizacao e criacao das cotacoes;
+- persistencia no SQLite.
+
+Melhorias a avaliar:
+
+- ignorar raws que ja foram processados e persistidos sem alteracao;
+- manter uma opcao explicita para reprocessamento completo;
+- armazenar ou reutilizar texto extraido de PDFs quando o raw nao mudar;
+- processar raws independentes em paralelo com limite configuravel;
+- reduzir trabalho repetido dentro dos parsers e normalizadores;
+- priorizar a investigacao dos PDFs da CEASA-PR;
+- registrar duracao por fonte, arquivo e etapa nos relatorios.
+
+Qualquer otimizacao deve preservar os resultados atuais dos parsers, a
+proveniencia dos registros e a capacidade de reconstruir o banco a partir dos
+raws.
+
+## Aprimorar sincronizacao incremental com Supabase
+
+Os modos incremental e completo, com envio em lotes e retomada, ja estao
+disponiveis. Melhorias futuras:
+
+- detectar e atualizar alteracoes em coletas e cotacoes antigas usando chaves
+  unicas de negocio;
+- detalhar nos relatorios quantos registros foram inseridos, atualizados ou
+  ignorados por tabela.

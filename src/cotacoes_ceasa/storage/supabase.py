@@ -1,6 +1,7 @@
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Literal
 
 import psycopg
 from psycopg import sql
@@ -18,6 +19,11 @@ TABLES = (
     "coletas",
     "cotacoes",
 )
+
+TABLES_REVERSE = tuple(reversed(TABLES))
+REFERENCE_TABLES = TABLES[:8]
+SYNC_MODES = ("full", "incremental")
+SyncMode = Literal["full", "incremental"]
 
 POSTGRES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS estados (
@@ -131,6 +137,25 @@ ALTER TABLE unidades ENABLE ROW LEVEL SECURITY;
 ALTER TABLE apresentacoes_unidade ENABLE ROW LEVEL SECURITY;
 ALTER TABLE coletas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cotacoes ENABLE ROW LEVEL SECURITY;
+
+CREATE TABLE IF NOT EXISTS cotacoes_sync_runs (
+    id SMALLINT PRIMARY KEY CHECK (id = 1),
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    current_table TEXT,
+    last_id BIGINT NOT NULL DEFAULT 0,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS cotacoes_sync_watermarks (
+    table_name TEXT PRIMARY KEY,
+    last_id BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE cotacoes_sync_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cotacoes_sync_watermarks ENABLE ROW LEVEL SECURITY;
 """
 
 
@@ -147,11 +172,19 @@ class SupabaseSyncResult:
 class SupabaseSynchronizer:
     sqlite_path: Path
     database_url: str
+    mode: SyncMode
     batch_size: int = 5_000
+    progress: Callable[[str], None] | None = None
 
     def sync(self) -> SupabaseSyncResult:
         if not self.sqlite_path.exists():
             raise FileNotFoundError(f"Banco SQLite nao encontrado em {self.sqlite_path}.")
+
+        if self.mode not in SYNC_MODES:
+            raise ValueError(f"Modo de sincronizacao invalido: {self.mode}")
+
+        if self.batch_size <= 0:
+            raise ValueError("O tamanho do lote do Supabase deve ser maior que zero.")
 
         table_counts: dict[str, int] = {}
 
@@ -161,48 +194,141 @@ class SupabaseSynchronizer:
             with psycopg.connect(self.database_url) as target:
                 target.execute("SET search_path TO public")
                 target.execute(POSTGRES_SCHEMA)
+                target.commit()
+                current_table, last_id = self._prepare_sync(target)
+                current_index = TABLES.index(current_table)
 
-                for table_name in TABLES:
-                    table_counts[table_name] = self._sync_table(
+                for table_name in TABLES[current_index:]:
+                    table_last_id = (
+                        last_id
+                        if table_name == current_table
+                        else self._get_table_start_id(target, table_name)
+                    )
+                    copied_count, table_last_id = self._sync_table_batches(
                         source,
                         target,
                         table_name,
+                        table_last_id,
                     )
+                    table_counts[table_name] = copied_count
+                    self._complete_table(target, table_name, table_last_id)
 
         return SupabaseSyncResult(table_counts)
 
-    def _sync_table(
+    def _prepare_sync(self, target: psycopg.Connection) -> tuple[str, int]:
+        row = target.execute(
+            """
+            SELECT mode, status, current_table, last_id
+            FROM cotacoes_sync_runs
+            WHERE id = 1
+            """
+        ).fetchone()
+
+        if row is not None and row[1] == "in_progress":
+            if row[0] != self.mode:
+                raise RuntimeError(
+                    f"Existe uma sincronizacao {row[0]} incompleta. "
+                    f"Retome esse modo antes de iniciar {self.mode}."
+                )
+
+            if row[2] in TABLES:
+                self._report(f"Retomando em {row[2]} apos o ID {row[3]}.")
+                return str(row[2]), int(row[3])
+
+        if self.mode == "full":
+            self._clear_target_tables(target)
+            self._report("Snapshot remoto limpo; iniciando substituicao em lotes.")
+        elif not self._has_watermarks(target) and self._target_has_data(target):
+            raise RuntimeError(
+                "A sincronizacao incremental exige um destino vazio ou uma "
+                "sincronizacao completa concluida anteriormente."
+            )
+
+        last_id = self._get_table_start_id(target, TABLES[0])
+        target.execute(
+            """
+            INSERT INTO cotacoes_sync_runs (
+                id, mode, status, current_table, last_id, started_at, updated_at
+            )
+            VALUES (1, %s, 'in_progress', %s, %s, NOW(), NOW())
+            ON CONFLICT (id) DO UPDATE SET
+                mode = EXCLUDED.mode,
+                status = EXCLUDED.status,
+                current_table = EXCLUDED.current_table,
+                last_id = EXCLUDED.last_id,
+                started_at = EXCLUDED.started_at,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (self.mode, TABLES[0], last_id),
+        )
+        target.commit()
+        self._report(
+            f"Sincronizacao {self.mode} iniciada em lotes de {self.batch_size}."
+        )
+        return TABLES[0], last_id
+
+    def _clear_target_tables(self, target: psycopg.Connection) -> None:
+        target.execute(
+            sql.SQL("TRUNCATE TABLE {} RESTART IDENTITY").format(
+                sql.SQL(", ").join(map(sql.Identifier, TABLES_REVERSE))
+            )
+        )
+
+    def _sync_table_batches(
         self,
         source: sqlite3.Connection,
         target: psycopg.Connection,
         table_name: str,
-    ) -> int:
+        last_id: int,
+    ) -> tuple[int, int]:
         columns = self._get_columns(source, table_name)
+        copied_count = 0
+        select_query = sql.SQL(
+            "SELECT {columns} FROM {table} WHERE id > ? ORDER BY id LIMIT ?"
+        ).format(
+            columns=sql.SQL(", ").join(map(sql.Identifier, columns)),
+            table=sql.Identifier(table_name),
+        ).as_string()
+
+        while rows := source.execute(
+            select_query,
+            (last_id, self.batch_size),
+        ).fetchall():
+            self._sync_batch(target, table_name, columns, rows)
+            last_id = int(rows[-1]["id"])
+            copied_count += len(rows)
+            self._save_progress(target, table_name, last_id)
+            target.commit()
+            self._report(
+                f"{table_name}: {copied_count} registro(s) enviados nesta execucao; "
+                f"ultimo ID confirmado: {last_id}."
+            )
+
+        return copied_count, last_id
+
+    def _sync_batch(
+        self,
+        target: psycopg.Connection,
+        table_name: str,
+        columns: list[str],
+        rows: list[sqlite3.Row],
+    ) -> None:
         temporary_table = f"sync_{table_name}"
+        target.execute("SET LOCAL statement_timeout TO 0")
         target.execute(
             sql.SQL("CREATE TEMP TABLE {} (LIKE {} INCLUDING DEFAULTS) ON COMMIT DROP").format(
                 sql.Identifier(temporary_table),
                 sql.Identifier(table_name),
             )
         )
-
-        source_cursor = source.execute(
-            sql.SQL("SELECT {} FROM {} ORDER BY id").format(
-                sql.SQL(", ").join(map(sql.Identifier, columns)),
-                sql.Identifier(table_name),
-            ).as_string()
-        )
-        copied_count = 0
         copy_query = sql.SQL("COPY {} ({}) FROM STDIN").format(
             sql.Identifier(temporary_table),
             sql.SQL(", ").join(map(sql.Identifier, columns)),
         )
 
         with target.cursor().copy(copy_query) as copy:
-            while rows := source_cursor.fetchmany(self.batch_size):
-                for row in rows:
-                    copy.write_row(tuple(row))
-                copied_count += len(rows)
+            for row in rows:
+                copy.write_row(tuple(row))
 
         update_columns = [column for column in columns if column != "id"]
         target.execute(
@@ -222,12 +348,103 @@ class SupabaseSynchronizer:
                 ),
             )
         )
+
+    def _save_progress(
+        self,
+        target: psycopg.Connection,
+        table_name: str,
+        last_id: int,
+    ) -> None:
         target.execute(
-            "SELECT setval(pg_get_serial_sequence(%s, 'id'), "
-            "COALESCE((SELECT MAX(id) FROM " + table_name + "), 1), true)",
+            """
+            UPDATE cotacoes_sync_runs
+            SET current_table = %s, last_id = %s, updated_at = NOW()
+            WHERE id = 1
+            """,
+            (table_name, last_id),
+        )
+        self._save_watermark(target, table_name, last_id)
+
+    def _complete_table(
+        self,
+        target: psycopg.Connection,
+        table_name: str,
+        last_id: int,
+    ) -> None:
+        current_index = TABLES.index(table_name)
+        next_table = (
+            TABLES[current_index + 1]
+            if current_index + 1 < len(TABLES)
+            else None
+        )
+        target.execute("SET LOCAL statement_timeout TO 0")
+        target.execute(
+            sql.SQL(
+                "SELECT setval(pg_get_serial_sequence(%s, 'id'), "
+                "COALESCE((SELECT MAX(id) FROM {}), 1), "
+                "EXISTS (SELECT 1 FROM {}))"
+            ).format(sql.Identifier(table_name), sql.Identifier(table_name)),
             (table_name,),
         )
-        return copied_count
+        target.execute(
+            """
+            UPDATE cotacoes_sync_runs
+            SET status = %s, current_table = %s, last_id = 0, updated_at = NOW()
+            WHERE id = 1
+            """,
+            ("in_progress" if next_table else "completed", next_table),
+        )
+        self._save_watermark(target, table_name, last_id)
+        target.commit()
+        self._report(f"{table_name}: tabela concluida.")
+
+    def _get_table_start_id(
+        self,
+        target: psycopg.Connection,
+        table_name: str,
+    ) -> int:
+        if self.mode == "full":
+            return 0
+
+        if table_name in REFERENCE_TABLES:
+            return 0
+
+        row = target.execute(
+            """
+            SELECT last_id
+            FROM cotacoes_sync_watermarks
+            WHERE table_name = %s
+            """,
+            (table_name,),
+        ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def _save_watermark(
+        self,
+        target: psycopg.Connection,
+        table_name: str,
+        last_id: int,
+    ) -> None:
+        target.execute(
+            """
+            INSERT INTO cotacoes_sync_watermarks (table_name, last_id, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (table_name) DO UPDATE SET
+                last_id = EXCLUDED.last_id,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (table_name, last_id),
+        )
+
+    def _has_watermarks(self, target: psycopg.Connection) -> bool:
+        row = target.execute(
+            "SELECT EXISTS (SELECT 1 FROM cotacoes_sync_watermarks)"
+        ).fetchone()
+        return bool(row and row[0])
+
+    def _target_has_data(self, target: psycopg.Connection) -> bool:
+        row = target.execute("SELECT EXISTS (SELECT 1 FROM estados)").fetchone()
+        return bool(row and row[0])
 
     def _get_columns(
         self,
@@ -238,3 +455,7 @@ class SupabaseSynchronizer:
             str(row["name"])
             for row in source.execute(f"PRAGMA table_info({table_name})")
         ]
+
+    def _report(self, message: str) -> None:
+        if self.progress is not None:
+            self.progress(message)

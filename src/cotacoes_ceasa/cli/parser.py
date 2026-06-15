@@ -140,10 +140,22 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
             "sem sobrescrever campos preenchidos."
         ),
     )
-    parser.add_argument(
+    sync_group = parser.add_mutually_exclusive_group()
+    sync_group.add_argument(
         "--sync-supabase",
         action="store_true",
-        help="Sincroniza o banco SQLite com o PostgreSQL do Supabase.",
+        help="Adiciona novos registros do SQLite ao Supabase.",
+    )
+    sync_group.add_argument(
+        "--replace-supabase",
+        action="store_true",
+        help="Substitui completamente o snapshot do Supabase.",
+    )
+    parser.add_argument(
+        "--supabase-batch-size",
+        default=config.supabase_batch_size,
+        type=int,
+        help="Quantidade de registros enviada por lote ao Supabase.",
     )
     parser.add_argument(
         "--list-categories",

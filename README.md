@@ -41,7 +41,9 @@ Comandos principais:
 | `docker compose run --rm salvar` | Reprocessa raws ativos e salva no SQLite |
 | `docker compose run --rm tudo` | Baixa, processa os raws da coleta e salva |
 | `docker compose run --rm complementar-prohort` | Complementa o banco com PROHORT |
-| `docker compose run --rm sincronizar-supabase` | Sincroniza o SQLite com o Supabase |
+| `docker compose run --rm sincronizar-supabase` | Adiciona novos registros ao Supabase |
+| `docker compose run --rm substituir-supabase` | Substitui completamente o Supabase |
+| `docker compose run --rm migrar-supabase-pgloader` | Executa migracao completa excepcional |
 | `docker compose run --rm compactar-old` | Compacta HTMLs antigos |
 | `docker compose run --rm app --help` | Exibe todas as opcoes da CLI |
 

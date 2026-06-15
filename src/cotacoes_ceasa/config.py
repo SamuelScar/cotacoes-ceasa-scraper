@@ -17,6 +17,7 @@ class AppConfig:
     raw_dir: str
     database_path: str
     supabase_database_url: str | None
+    supabase_batch_size: int
     http_timeout_seconds: int
     request_delay_seconds: float
     reuse_raw_before_request: bool
@@ -51,6 +52,7 @@ def load_config(env_file: Path = ENV_FILE) -> AppConfig:
         raw_dir=os.getenv("COTACOES_RAW_DIR", "data/raw"),
         database_path=os.getenv("COTACOES_DATABASE_PATH", "data/cotacoes.sqlite"),
         supabase_database_url=_get_optional_env("COTACOES_SUPABASE_DATABASE_URL"),
+        supabase_batch_size=_get_int_env("COTACOES_SUPABASE_BATCH_SIZE", 5_000),
         http_timeout_seconds=_get_int_env("COTACOES_HTTP_TIMEOUT_SECONDS", 30),
         request_delay_seconds=_get_float_env("COTACOES_REQUEST_DELAY_SECONDS", 2.0),
         reuse_raw_before_request=_get_bool_env(

@@ -3,6 +3,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
+from zoneinfo import ZoneInfo
+
+
+REPORT_TIMEZONE = ZoneInfo("America/Sao_Paulo")
+
+
+def report_now() -> datetime:
+    """Retorna o horario usado nos relatorios."""
+    return datetime.now(REPORT_TIMEZONE)
 
 
 @dataclass(frozen=True)
@@ -25,7 +34,7 @@ class ReportSummary:
 class ExecutionReport:
     """Registra uma execucao da CLI e gera seu relatorio detalhado."""
 
-    started_at: datetime = field(default_factory=lambda: datetime.now().astimezone())
+    started_at: datetime = field(default_factory=report_now)
     report_name: str = "execucao"
     report_title: str = "Execucao nao identificada"
     final_status: str | None = None
@@ -103,7 +112,7 @@ class ExecutionReport:
             self._record_event("RESUMO", label, value)
 
     def write(self, report_dir: Path) -> Path:
-        finished_at = datetime.now().astimezone()
+        finished_at = report_now()
         report_dir.mkdir(parents=True, exist_ok=True)
         file_path = report_dir / (
             f"{self.report_name}_{self.started_at.strftime('%Y%m%d_%H%M%S_%f')}.md"
@@ -124,7 +133,7 @@ class ExecutionReport:
     ) -> None:
         self.events.append(
             ReportEvent(
-                occurred_at=datetime.now().astimezone(),
+                occurred_at=report_now(),
                 event_type=event_type,
                 label=label,
                 detail=detail,

@@ -6,6 +6,7 @@
 - Docker Compose.
 
 O container usa Python 3.12 e instala as dependencias de `requirements.txt`.
+Os horarios dos relatorios usam o fuso `America/Sao_Paulo`.
 
 ## Preparacao
 
@@ -28,6 +29,7 @@ argumentos passados ao servico `app` sobrescrevem esses valores.
 | `COTACOES_RAW_DIR` | Diretorio dos arquivos brutos |
 | `COTACOES_DATABASE_PATH` | Caminho do SQLite |
 | `COTACOES_SUPABASE_DATABASE_URL` | Connection string PostgreSQL do Supabase |
+| `COTACOES_SUPABASE_BATCH_SIZE` | Quantidade de registros enviada por lote |
 | `COTACOES_HTTP_TIMEOUT_SECONDS` | Timeout de cada requisicao |
 | `COTACOES_REQUEST_DELAY_SECONDS` | Intervalo minimo entre requisicoes |
 | `COTACOES_REUSE_RAW_BEFORE_REQUEST` | Reutiliza raw ativo antes de baixar |
