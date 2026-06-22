@@ -118,6 +118,25 @@ docker compose run --rm salvar
 O projeto nao migra bancos antigos. Confirme que os raws ativos necessarios
 estao presentes antes de excluir o SQLite.
 
+## Pacote de dados
+
+Para versionar ou transportar a pasta `data/`, gere o pacote compactado a
+partir da raiz do projeto:
+
+```bash
+tar -I pigz -cf data.tar.gz data
+```
+
+Para restaurar a pasta `data/` a partir do pacote:
+
+```bash
+tar -I pigz -xf data.tar.gz
+```
+
+O `pigz` usa automaticamente as threads disponiveis. O arquivo `data.tar.gz`
+deve ser rastreado com Git LFS, mantendo a pasta `data/` como artefato local
+de execucao.
+
 ## Complemento PROHORT
 
 Para complementar automaticamente depois de qualquer fluxo que salva no
