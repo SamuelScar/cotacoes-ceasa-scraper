@@ -6,11 +6,12 @@ ENV PYTHONPATH=/app/src
 
 WORKDIR /app
 
-COPY requirements.txt .
-
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
-
 COPY . .
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pigz \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -e .
 
 ENTRYPOINT ["python", "-m", "cotacoes_ceasa.main"]

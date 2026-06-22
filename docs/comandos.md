@@ -2,7 +2,10 @@
 
 ## Comandos principais
 
-Estes sao os comandos usados na operacao normal:
+Estes sao os comandos usados na operacao normal. Quando estiver trabalhando
+com o pacote `data.tar.gz`, prefira chamar os servicos pelo wrapper
+`python scripts/cotacoes.py`, porque ele descompacta, executa e recompacta os
+dados com seguranca.
 
 | Comando | Operacao |
 | --- | --- |
@@ -25,6 +28,9 @@ permanece inalterada.
 
 A saida usa cores em terminais interativos e informa cada raw assim que ele e
 salvo. Para desativar as cores, execute o container com `-e NO_COLOR=1`.
+Comandos longos exibem progresso por fonte, categoria ou arquivo. Em terminal
+interativo, a barra usa Rich; fora de TTY, o progresso aparece como linhas de
+texto e tambem fica registrado no relatorio.
 
 Cada comando gera um relatorio em `data/relatorios/`, inclusive quando termina
 com erro ou e interrompido. O arquivo registra somente as fases executadas e
@@ -71,8 +77,10 @@ acessar a fonte.
 
 O fluxo `tudo` processa somente os arquivos selecionados pelo download da
 execucao atual. Assim, `quotes_back` tambem limita o volume da persistencia.
-Se a execucao for interrompida ainda durante o download, os raws ja baixados
-permanecem em disco. Execute `docker compose run --rm salvar` para persisti-los.
+Se uma fonte falhar depois de baixar parte dos raws, o proprio `tudo` processa
+esses arquivos parciais na fase de persistencia e mantem a falha registrada no
+relatorio. Se a execucao inteira for interrompida antes da persistencia,
+execute `docker compose run --rm salvar` para aproveitar os raws ja salvos.
 
 ## Parametros uteis
 
@@ -120,22 +128,45 @@ estao presentes antes de excluir o SQLite.
 
 ## Pacote de dados
 
-Para versionar ou transportar a pasta `data/`, gere o pacote compactado a
-partir da raiz do projeto:
+O arquivo versionado e `data.tar.gz`. A pasta `data/` e recriada somente
+durante a execucao e removida ao final pelo wrapper operacional.
+
+Use o script abaixo para executar os servicos do Compose mantendo o pacote de
+dados seguro:
 
 ```bash
-tar -I pigz -cf data.tar.gz data
+python scripts/cotacoes.py tudo
+python scripts/cotacoes.py baixar
+python scripts/cotacoes.py salvar
+python scripts/cotacoes.py app --source ceasa-pe --save
 ```
 
-Para restaurar a pasta `data/` a partir do pacote:
+O script faz o fluxo completo:
+
+1. cria um lock para impedir duas execucoes simultaneas;
+2. descompacta `data.tar.gz` para `data/`, quando necessario;
+3. executa o servico Docker solicitado;
+4. compacta `data/` em `data.tar.gz.tmp` com `tar` e `pigz`;
+5. valida o pacote temporario;
+6. substitui `data.tar.gz` somente depois da validacao;
+7. remove `data/` ao final.
+
+O `pigz` roda dentro do container e usa multiplas threads para compactar e
+descompactar mais rapido. O host precisa apenas de Python, Docker e Docker
+Compose.
+
+Se a execucao falhar depois de alterar `data/`, o script ainda tenta gerar um
+novo pacote com o estado atual e retorna o codigo de erro do comando original.
+Se a compactacao ou validacao falhar, o `data.tar.gz` anterior permanece
+preservado e a pasta `data/` fica disponivel para recuperacao.
+
+Para inspecionar manualmente o pacote sem executar o scraper:
 
 ```bash
-tar -I pigz -xf data.tar.gz
+docker compose run --rm --entrypoint tar app -I pigz -tf data.tar.gz
 ```
 
-O `pigz` usa automaticamente as threads disponiveis. O arquivo `data.tar.gz`
-deve ser rastreado com Git LFS, mantendo a pasta `data/` como artefato local
-de execucao.
+O arquivo `data.tar.gz` deve ser rastreado com Git LFS.
 
 ## Complemento PROHORT
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from cotacoes_ceasa.cli.output import TerminalOutput
+from cotacoes_ceasa.cli.progress import ProgressReporter
 from cotacoes_ceasa.core.contracts import SourceParser
 from cotacoes_ceasa.core.models import Cotacao
 
@@ -54,37 +55,50 @@ def process_raw_and_report(
             f"{len(selected_raw_files)} arquivo(s) selecionado(s) nesta coleta."
         )
 
-    for file_path in selected_raw_files:
-        try:
-            metadata = parse_raw_document_metadata(file_path)
-            url_origem = build_raw_source_url(
-                source_slug,
-                base_url,
-                metadata.category_slug,
-                metadata.target_date,
-            )
-            raw_content = read_raw_file(file_path)
-            parsed_cotacoes = parser.parse_category(
-                raw_content,
-                metadata.category_slug,
-                url_origem,
-            )
-            raw_hash = build_raw_hash(raw_content)
-            parsed_cotacoes = [
-                replace(
-                    cotacao,
-                    arquivo_raw=file_path.as_posix(),
-                    hash_raw=raw_hash,
-                    baixado_em=metadata.downloaded_at,
-                )
-                for cotacao in parsed_cotacoes
-            ]
-        except Exception as error:
-            output.warning(f"{file_path.name} | {error}")
-            continue
+    with ProgressReporter(output) as progress:
+        progress_task = progress.task(
+            label=f"Processamento {source_slug}",
+            total=len(selected_raw_files),
+            unit="arquivo(s)",
+        )
 
-        cotacoes.extend(parsed_cotacoes)
-        output.success(f"{file_path.name} | {len(parsed_cotacoes)} cotacoes.")
+        for file_path in selected_raw_files:
+            progress_task.update(current=file_path.name)
+
+            try:
+                metadata = parse_raw_document_metadata(file_path)
+                url_origem = build_raw_source_url(
+                    source_slug,
+                    base_url,
+                    metadata.category_slug,
+                    metadata.target_date,
+                )
+                raw_content = read_raw_file(file_path)
+                parsed_cotacoes = parser.parse_category(
+                    raw_content,
+                    metadata.category_slug,
+                    url_origem,
+                )
+                raw_hash = build_raw_hash(raw_content)
+                parsed_cotacoes = [
+                    replace(
+                        cotacao,
+                        arquivo_raw=file_path.as_posix(),
+                        hash_raw=raw_hash,
+                        baixado_em=metadata.downloaded_at,
+                    )
+                    for cotacao in parsed_cotacoes
+                ]
+            except Exception as error:
+                output.warning(f"{file_path.name} | {error}")
+                progress_task.advance(current=file_path.name)
+                continue
+
+            cotacoes.extend(parsed_cotacoes)
+            output.success(f"{file_path.name} | {len(parsed_cotacoes)} cotacoes.")
+            progress_task.advance(current=file_path.name)
+
+        progress_task.finish()
 
     return cotacoes
 

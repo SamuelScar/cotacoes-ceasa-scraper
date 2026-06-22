@@ -3,3 +3,6 @@ __pycache__/
 *.py[cod]
 .env
 data/
+data.tar.gz
+data.tar.gz.tmp
+.cotacoes-data.lock

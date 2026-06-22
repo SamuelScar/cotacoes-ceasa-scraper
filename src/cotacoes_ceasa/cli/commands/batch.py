@@ -4,8 +4,10 @@ from pathlib import Path
 from cotacoes_ceasa.cli.commands.source import resolve_source_operation, run_source
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.cli.parser import format_incremental_history, format_quotes_back
+from cotacoes_ceasa.cli.progress import ProgressReporter
 from cotacoes_ceasa.config import AppConfig
 from cotacoes_ceasa.sources.registry import history_requested, source_supports_history
+from cotacoes_ceasa.workflows.collection import PartialDownloadError
 
 
 def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
@@ -69,50 +71,75 @@ def run_all_sources_phase(
     skipped_count = 0
     downloaded_files: dict[str, list[Path]] = {}
 
-    for source_slug in config.sources:
-        if (
-            raw_files_by_source is not None
-            and source_slug not in raw_files_by_source
-        ):
-            skipped_count += 1
-            output.warning(
-                f"{source_slug} | persistencia ignorada porque o download falhou."
-            )
-            continue
+    with ProgressReporter(output) as progress:
+        progress_task = progress.task(
+            label=phase_name,
+            total=len(config.sources),
+            unit="fonte(s)",
+        )
 
-        source_args = copy(args)
-        source_args.source = source_slug
+        for source_slug in config.sources:
+            progress_task.update(current=source_slug)
 
-        if history_requested(source_args.quotes_back) and not source_supports_history(
-            source_slug
-        ):
-            source_args.quotes_back = 0
-
-            if not source_args.process_raw:
-                output.info(
-                    f"{source_slug} | fonte sem historico; coletando somente a atual."
+            if (
+                raw_files_by_source is not None
+                and source_slug not in raw_files_by_source
+            ):
+                skipped_count += 1
+                output.warning(
+                    f"{source_slug} | persistencia ignorada porque o download falhou."
                 )
+                progress_task.advance(current=source_slug)
+                continue
 
-        try:
-            source_files = run_source(
-                source_args,
-                config,
-                output,
-                show_summary=False,
-                raw_files=(
-                    raw_files_by_source.get(source_slug, [])
-                    if raw_files_by_source is not None
-                    else None
-                ),
-            )
-        except Exception as error:
-            failed_count += 1
-            output.warning(f"{source_slug} | {type(error).__name__}: {error}")
-            continue
+            source_args = copy(args)
+            source_args.source = source_slug
 
-        completed_count += 1
-        if source_files is not None:
-            downloaded_files[source_slug] = source_files
+            if (
+                history_requested(source_args.quotes_back)
+                and not source_supports_history(source_slug)
+            ):
+                source_args.quotes_back = 0
+
+                if not source_args.process_raw:
+                    output.info(
+                        f"{source_slug} | fonte sem historico; coletando somente a atual."
+                    )
+
+            try:
+                source_files = run_source(
+                    source_args,
+                    config,
+                    output,
+                    show_summary=False,
+                    raw_files=(
+                        raw_files_by_source.get(source_slug, [])
+                        if raw_files_by_source is not None
+                        else None
+                    ),
+                )
+            except PartialDownloadError as error:
+                failed_count += 1
+                output.warning(
+                    f"{source_slug} | {type(error.original_error).__name__}: "
+                    f"{error.original_error}"
+                )
+                downloaded_files[source_slug] = error.saved_files
+                output.warning(
+                    f"{source_slug} | {len(error.saved_files)} arquivo(s) baixado(s) "
+                    "antes da falha serao processados na persistencia."
+                )
+            except Exception as error:
+                failed_count += 1
+                output.warning(f"{source_slug} | {type(error).__name__}: {error}")
+            else:
+                completed_count += 1
+                if source_files is not None:
+                    downloaded_files[source_slug] = source_files
+            finally:
+                progress_task.advance(current=source_slug)
+
+        progress_task.finish()
 
     output.summary(
         (

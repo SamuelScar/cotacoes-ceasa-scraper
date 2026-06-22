@@ -14,7 +14,11 @@ from cotacoes_ceasa.sources.registry import (
     build_source_parser,
 )
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
-from cotacoes_ceasa.workflows.collection import collect_and_report, download_and_report
+from cotacoes_ceasa.workflows.collection import (
+    PartialDownloadError,
+    collect_and_report,
+    download_and_report,
+)
 from cotacoes_ceasa.workflows.raw_processing import process_raw_and_report
 
 
@@ -161,7 +165,20 @@ def run_source_download_and_process(
     download_args.download_only = True
     download_args.process_raw = False
     download_args.save = False
-    downloaded_files = run_source(download_args, config, output)
+    download_error: PartialDownloadError | None = None
+
+    try:
+        downloaded_files = run_source(download_args, config, output)
+    except PartialDownloadError as error:
+        if not error.saved_files:
+            raise
+
+        download_error = error
+        downloaded_files = error.saved_files
+        output.warning(
+            f"{args.source} | {len(error.saved_files)} arquivo(s) baixado(s) "
+            "antes da falha serao processados na persistencia."
+        )
 
     process_args = copy(args)
     process_args.download_and_process = False
@@ -169,6 +186,9 @@ def run_source_download_and_process(
     process_args.process_raw = True
     process_args.save = False
     run_source(process_args, config, output, raw_files=downloaded_files or [])
+
+    if download_error is not None:
+        raise download_error.original_error
 
 
 def complete_source_operation(

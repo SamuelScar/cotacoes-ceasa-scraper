@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from cotacoes_ceasa.cli.output import TerminalOutput
+from cotacoes_ceasa.cli.progress import ProgressReporter
 from cotacoes_ceasa.core.contracts import SourceCollector
 from cotacoes_ceasa.core.models import Category, Cotacao
 from cotacoes_ceasa.http.client import HttpRequestError, HttpSourceBlockedError
@@ -9,6 +10,15 @@ from cotacoes_ceasa.workflows.raw_processing import find_oldest_raw_target_date
 
 
 INFINITE_HISTORY_EMPTY_ATTEMPTS = 366
+
+
+class PartialDownloadError(RuntimeError):
+    """Erro de download que preserva os arquivos ja salvos na execucao."""
+
+    def __init__(self, original_error: Exception, saved_files: list[Path]) -> None:
+        self.original_error = original_error
+        self.saved_files = saved_files
+        super().__init__(str(original_error))
 
 
 def collect_and_report(
@@ -39,41 +49,52 @@ def collect_and_report(
     )
     cotacoes: list[Cotacao] = []
 
-    for category in categories:
-        target_dates = target_dates_by_category[category.slug]
-        category_total = 0
-
-        if collector.supports_target_dates and getattr(
-            collector,
-            "category_specific_dates",
-            False,
-        ):
-            output.info(
-                f"{category.slug} | datas: {format_target_dates(target_dates)}"
-            )
-
-        output.info(
-            f"{category.slug} | processando {len(target_dates)} data(s)."
+    with ProgressReporter(output) as progress:
+        progress_task = progress.task(
+            label=f"Coleta {source_slug}",
+            total=len(categories),
+            unit="categoria(s)",
         )
 
-        for target_date in target_dates:
-            try:
-                category_cotacoes = collector.collect_category(
-                    category.slug,
-                    target_date,
-                )
-            except (HttpRequestError, HttpSourceBlockedError):
-                raise
-            except Exception as error:
-                output.warning(
-                    f"{category.slug} | {format_target_date(target_date)} | {error}"
-                )
-                continue
+        for category in categories:
+            progress_task.update(current=category.slug)
+            target_dates = target_dates_by_category[category.slug]
+            category_total = 0
 
-            cotacoes.extend(category_cotacoes)
-            category_total += len(category_cotacoes)
+            if collector.supports_target_dates and getattr(
+                collector,
+                "category_specific_dates",
+                False,
+            ):
+                output.info(
+                    f"{category.slug} | datas: {format_target_dates(target_dates)}"
+                )
 
-        output.success(f"{category.slug} | {category_total} cotacoes.")
+            output.info(
+                f"{category.slug} | processando {len(target_dates)} data(s)."
+            )
+
+            for target_date in target_dates:
+                try:
+                    category_cotacoes = collector.collect_category(
+                        category.slug,
+                        target_date,
+                    )
+                except (HttpRequestError, HttpSourceBlockedError):
+                    raise
+                except Exception as error:
+                    output.warning(
+                        f"{category.slug} | {format_target_date(target_date)} | {error}"
+                    )
+                    continue
+
+                cotacoes.extend(category_cotacoes)
+                category_total += len(category_cotacoes)
+
+            output.success(f"{category.slug} | {category_total} cotacoes.")
+            progress_task.advance(current=category.slug)
+
+        progress_task.finish()
 
     return cotacoes
 
@@ -89,47 +110,74 @@ def download_and_report(
 ) -> list[Path]:
     """Baixa arquivos brutos para a janela de datas configurada."""
     output = output or TerminalOutput()
-    output.section("Download por categoria")
-    output.info("Descobrindo categorias disponiveis.")
-    categories = collector.discover_categories()
-    output.success(f"{len(categories)} categoria(s) descoberta(s).")
-    output.info("Resolvendo datas de cotacao.")
     downloaded_files: dict[tuple[str, date | None], Path] = {}
-    target_dates_by_category = resolve_category_target_dates(
-        collector,
-        categories,
-        target_date,
-        quotes_back,
-        raw_dir,
-        source_slug,
-        incremental_history,
-        output,
-        downloaded_files,
-    )
-    saved_files = list(downloaded_files.values())
+    saved_files: list[Path] = []
 
-    for category in categories:
-        target_dates = target_dates_by_category[category.slug]
-        output.info(f"{category.slug} | baixando {len(target_dates)} arquivo(s).")
+    try:
+        output.section("Download por categoria")
+        output.info("Descobrindo categorias disponiveis.")
+        categories = collector.discover_categories()
+        output.success(f"{len(categories)} categoria(s) descoberta(s).")
+        output.info("Resolvendo datas de cotacao.")
+        target_dates_by_category = resolve_category_target_dates(
+            collector,
+            categories,
+            target_date,
+            quotes_back,
+            raw_dir,
+            source_slug,
+            incremental_history,
+            output,
+            downloaded_files,
+        )
+        saved_files = list(downloaded_files.values())
 
-        for target_date in target_dates:
-            downloaded_file = downloaded_files.get((category.slug, target_date))
+        with ProgressReporter(output) as progress:
+            progress_task = progress.task(
+                label=f"Download {source_slug}",
+                total=len(categories),
+                unit="categoria(s)",
+            )
 
-            if downloaded_file is not None:
-                continue
-
-            try:
-                file_path = collector.download_category(category.slug, target_date)
-            except (HttpRequestError, HttpSourceBlockedError):
-                raise
-            except Exception as error:
-                output.warning(
-                    f"{category.slug} | {format_target_date(target_date)} | {error}"
+            for category in categories:
+                progress_task.update(current=category.slug)
+                target_dates = target_dates_by_category[category.slug]
+                output.info(
+                    f"{category.slug} | baixando {len(target_dates)} arquivo(s)."
                 )
-                continue
 
-            saved_files.append(file_path)
-            output.success(f"{category.slug} | salvo em {file_path}")
+                for target_date in target_dates:
+                    downloaded_file = downloaded_files.get((category.slug, target_date))
+
+                    if downloaded_file is not None:
+                        continue
+
+                    try:
+                        file_path = collector.download_category(
+                            category.slug,
+                            target_date,
+                        )
+                    except (HttpRequestError, HttpSourceBlockedError):
+                        raise
+                    except Exception as error:
+                        output.warning(
+                            f"{category.slug} | "
+                            f"{format_target_date(target_date)} | {error}"
+                        )
+                        continue
+
+                    saved_files.append(file_path)
+                    output.success(f"{category.slug} | salvo em {file_path}")
+
+                progress_task.advance(current=category.slug)
+
+            progress_task.finish()
+    except Exception as error:
+        partial_files = list(dict.fromkeys([*downloaded_files.values(), *saved_files]))
+        if not partial_files:
+            raise
+
+        raise PartialDownloadError(error, partial_files) from error
 
     return saved_files
 

@@ -5,7 +5,10 @@
 - Docker.
 - Docker Compose.
 
-O container usa Python 3.12 e instala as dependencias de `requirements.txt`.
+O container usa Python 3.12 e instala as dependencias declaradas em
+`pyproject.toml`.
+Ele tambem instala `pigz`, usado pelo wrapper operacional para compactar e
+descompactar `data.tar.gz` com multiplas threads.
 Os horarios dos relatorios usam o fuso `America/Sao_Paulo`.
 
 ## Preparacao

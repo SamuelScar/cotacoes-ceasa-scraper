@@ -19,6 +19,7 @@ from cotacoes_ceasa.cli.parser import (
     format_quotes_back,
 )
 from cotacoes_ceasa.config import AppConfig, load_config
+from cotacoes_ceasa.workflows.collection import PartialDownloadError
 
 
 REPORT_DIR = Path("data/relatorios")
@@ -43,6 +44,13 @@ def main() -> None:
                 output.error(f"CLI encerrada com codigo {error.code}.")
                 output.summary()
             raise
+        except PartialDownloadError as error:
+            output.set_execution_status("Encerrada com erro")
+            output.error(
+                f"{type(error.original_error).__name__}: {error.original_error}"
+            )
+            output.summary()
+            raise SystemExit(1)
         except Exception as error:
             output.set_execution_status("Encerrada com erro")
             output.error(f"{type(error).__name__}: {error}")

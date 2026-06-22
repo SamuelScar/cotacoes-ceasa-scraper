@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+from rich.console import Console
+
 from cotacoes_ceasa.cli.report import ExecutionReport
 
 
@@ -40,6 +42,18 @@ class TerminalOutput:
         init=False,
         repr=False,
     )
+    _console: Console = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._console = Console(no_color=not self.use_colors, highlight=False)
+
+    @property
+    def console(self) -> Console:
+        return self._console
+
+    @property
+    def supports_live_progress(self) -> bool:
+        return self.use_colors and self._console.is_terminal
 
     def enable_execution_report(
         self,
@@ -112,6 +126,14 @@ class TerminalOutput:
     def error(self, message: str) -> None:
         self._message("ERRO", message, counted=True)
 
+    def progress(self, message: str, visible: bool = True) -> None:
+        if visible:
+            self._message("INFO", message, counted=False)
+            return
+
+        if self._execution_report is not None:
+            self._execution_report.record_message("INFO", message, counted=False)
+
     def summary(
         self,
         rows: Iterable[tuple[str, object]] = (),
@@ -183,7 +205,8 @@ class TerminalOutput:
         return f"{color}{text}{RESET}" if self.use_colors else text
 
     def _print(self, text: str = "") -> None:
-        print(text, flush=True)
+        self._console.print(text, markup=False)
+        self._console.file.flush()
 
 
 def _supports_colors(stream) -> bool:

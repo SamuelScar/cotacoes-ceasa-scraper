@@ -4,88 +4,10 @@
 
 | Pendencia | Resumo |
 | --- | --- |
-| [Progresso da execucao](#progresso-da-execucao) | Exibir percentual, fase atual, itens concluidos, tempo decorrido e estimativa confiavel nos comandos longos. |
-| [Coletas historicas parciais](#coletas-historicas-parciais) | Fazer o comando `tudo` salvar no banco os arquivos baixados antes de uma fonte falhar. |
-| [Dados compactados e Git LFS](#dados-compactados-e-git-lfs) | Versionar os dados como arquivo compactado com Git LFS e controlar descompactacao, validacao e substituicao segura. |
 | [Paralelismo entre fontes](#paralelismo-entre-fontes) | Executar downloads de fontes independentes em paralelo, mantendo requisicoes internas e persistencia SQLite sequenciais. |
 | [Execucao continua como crawler](#execucao-continua-como-crawler) | Avaliar e implementar execucoes periodicas para coletar e persistir somente dados novos. |
 | [Desempenho do processamento de raws](#desempenho-do-processamento-de-raws) | Medir e reduzir o custo do processamento, principalmente na extracao de PDFs e nas fontes mais lentas. |
 | [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
-
-## Progresso da execucao
-
-Exibir o progresso dos comandos longos, principalmente `tudo`, para permitir
-acompanhar quanto da execucao ja foi concluido.
-
-A saida deve informar:
-
-- percentual geral concluido;
-- fase atual, como download ou persistencia;
-- fonte e categoria atuais;
-- quantidade concluida e total conhecido;
-- tempo decorrido e estimativa de tempo restante, quando confiavel.
-
-O calculo deve considerar que algumas fontes descobrem categorias e datas
-durante a execucao. Nesses casos, o total e o percentual podem ser atualizados
-conforme novos itens forem descobertos, sem apresentar uma estimativa enganosa.
-
-## Coletas historicas parciais
-
-Atualmente, os arquivos baixados antes de uma falha permanecem em `data/raw/`,
-mas o comando `tudo` nao os salva automaticamente no banco. Para aproveitar
-esses arquivos, e necessario executar `docker compose run --rm salvar`.
-
-O comando `tudo` deve processar e salvar esses arquivos antes de continuar para
-a proxima fonte, mantendo a falha registrada no relatorio.
-
-Exemplo: se uma fonte baixar 80 arquivos e falhar no seguinte, os 80 arquivos
-devem ser persistidos pelo próprio `tudo`. O relatorio deve informar quantos
-arquivos foram baixados e persistidos antes da falha.
-
-O comando `salvar` permanece como recuperacao para execucoes interrompidas
-antes que o `tudo` consiga iniciar a persistencia.
-
-## Dados compactados e Git LFS
-
-A pasta `data/` deve manter a estrutura atual durante a execucao, mas ser
-versionada como `data.tar.gz` com Git LFS para evitar milhares de raws no
-repositorio Git comum.
-
-Fluxo proposto:
-
-1. Manter somente `data.tar.gz` versionado com Git LFS.
-2. Antes de executar um comando, descompactar o arquivo preservando
-   `data/cotacoes.sqlite`, `data/raw/` e suas subpastas.
-3. Executar o scraper normalmente, adicionando raws e registros ao banco
-   existente.
-4. Ao encerrar, inclusive em falhas ou interrupcoes, gerar um novo arquivo
-   compactado temporario.
-5. Validar o arquivo temporario e substituir `data.tar.gz` de forma atomica.
-6. Remover a pasta `data/` descompactada somente depois da substituicao.
-
-A implementacao deve fornecer um script unico para envolver os comandos
-existentes, por exemplo:
-
-```bash
-./scripts/cotacoes tudo
-./scripts/cotacoes baixar
-./scripts/cotacoes salvar
-./scripts/cotacoes app --source ceasa-pe --save
-```
-
-Cuidados necessarios:
-
-- usar um lock para impedir duas execucoes alterando o mesmo pacote;
-- nunca sobrescrever diretamente o arquivo compactado valido;
-- manter `data/` e arquivos compactados temporarios no `.gitignore`;
-- configurar `data.tar.gz` no `.gitattributes` para uso do Git LFS;
-- documentar a instalacao do Git LFS para quem clonar o repositorio;
-- acompanhar armazenamento e transferencia consumidos no provedor;
-- considerar armazenamento externo quando o volume deixar de ser adequado
-  ate mesmo para Git LFS.
-
-O Git LFS reduz o peso do clone normal, mas continua armazenando cada versao
-enviada e nao elimina o crescimento do armazenamento remoto.
 
 ## Paralelismo entre fontes
 
@@ -225,11 +147,3 @@ necessario executar a substituicao completa para enviar a correcao.
 
 A sincronizacao incremental deve identificar e atualizar esses registros
 antigos sem precisar substituir todo o banco remoto.
-
-## Pendencias menores
-
-### Centralizar dependencias no pyproject.toml
-
-Remover a duplicacao de dependencias entre `requirements.txt` e
-`pyproject.toml`. Ajustar o Dockerfile para instalar o projeto com
-`pip install .` e remover o `requirements.txt`.
