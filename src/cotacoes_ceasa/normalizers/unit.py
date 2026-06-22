@@ -2,6 +2,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import lru_cache
 
 from cotacoes_ceasa.normalizers.text import clean_text
 
@@ -59,6 +60,7 @@ RANGE_AFTER_PATTERN = re.compile(
 )
 
 
+@lru_cache(maxsize=4096)
 def normalize_unit(value: str | None) -> NormalizedUnit:
     original = clean_text(value)
 
@@ -278,8 +280,9 @@ def _build_normalized_display(
     return f"{normalized} ({detail})" if detail else normalized
 
 
-def _packaging_symbols() -> set[str]:
-    return {symbol for _, symbol, _, _ in PACKAGINGS}
+@lru_cache(maxsize=1)
+def _packaging_symbols() -> frozenset[str]:
+    return frozenset(symbol for _, symbol, _, _ in PACKAGINGS)
 
 
 def _format_decimal(value: Decimal) -> str:

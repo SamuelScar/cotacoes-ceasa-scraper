@@ -15,6 +15,7 @@ class AppConfig:
 
     sources_file: str
     raw_dir: str
+    pdf_text_cache_dir: str
     database_path: str
     supabase_database_url: str | None
     supabase_batch_size: int
@@ -50,6 +51,10 @@ def load_config(env_file: Path = ENV_FILE) -> AppConfig:
     return AppConfig(
         sources_file=sources_file,
         raw_dir=os.getenv("COTACOES_RAW_DIR", "data/raw"),
+        pdf_text_cache_dir=os.getenv(
+            "COTACOES_PDF_TEXT_CACHE_DIR",
+            "data/cache/pdf-text",
+        ),
         database_path=os.getenv("COTACOES_DATABASE_PATH", "data/cotacoes.sqlite"),
         supabase_database_url=_get_optional_env("COTACOES_SUPABASE_DATABASE_URL"),
         supabase_batch_size=_get_int_env("COTACOES_SUPABASE_BATCH_SIZE", 5_000),

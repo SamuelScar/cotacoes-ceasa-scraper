@@ -120,6 +120,9 @@ class TerminalOutput:
     def success(self, message: str) -> None:
         self._message("OK", message, counted=True)
 
+    def detail_success(self, message: str, report: bool = False) -> None:
+        self._message("OK", message, counted=False, report=report)
+
     def warning(self, message: str) -> None:
         self._message("AVISO", message, counted=True)
 
@@ -168,11 +171,17 @@ class TerminalOutput:
         if self._execution_report is not None:
             self._execution_report.record_summary(rows, report_title)
 
-    def _message(self, level: str, message: str, counted: bool) -> None:
+    def _message(
+        self,
+        level: str,
+        message: str,
+        counted: bool,
+        report: bool = True,
+    ) -> None:
         if counted:
             self._increment_count(level)
 
-        if self._execution_report is not None:
+        if report and self._execution_report is not None:
             self._execution_report.record_message(level, message, counted)
 
         label = self._color(f"[{level:<5}]", LEVEL_COLORS[level] + BOLD)

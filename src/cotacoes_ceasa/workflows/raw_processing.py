@@ -3,12 +3,19 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime
 from hashlib import sha256
 from pathlib import Path
+from time import perf_counter
 from urllib.parse import urlencode
 
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.cli.progress import ProgressReporter
 from cotacoes_ceasa.core.contracts import SourceParser
 from cotacoes_ceasa.core.models import Cotacao
+from cotacoes_ceasa.parsers.pdf import (
+    configure_pdf_text_cache,
+    get_pdf_text_cache_stats,
+    reset_pdf_text_cache_stats,
+)
+from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 
 
 RAW_FILE_PATTERN = re.compile(
@@ -24,16 +31,35 @@ class RawFileMetadata:
     downloaded_at: datetime
 
 
+@dataclass
+class RawProcessingStats:
+    selected_files: int = 0
+    processed_files: int = 0
+    skipped_files: int = 0
+    failed_files: int = 0
+    parsed_quotes: int = 0
+    read_seconds: float = 0.0
+    hash_seconds: float = 0.0
+    skip_lookup_seconds: float = 0.0
+    parser_seconds: float = 0.0
+    metadata_seconds: float = 0.0
+
+
 def process_raw_and_report(
     parser: SourceParser,
     raw_dir: Path,
     source_slug: str,
     base_url: str,
+    database_path: Path,
+    pdf_text_cache_dir: Path,
+    force_reprocess: bool = False,
+    raw_detail_report: bool = False,
     output: TerminalOutput | None = None,
     raw_files: list[Path] | None = None,
 ) -> list[Cotacao]:
     """Processa arquivos brutos salvos em disco e retorna cotacoes normalizadas."""
     output = output or TerminalOutput()
+    processing_started_at = perf_counter()
     selected_raw_files = (
         list_raw_files(raw_dir, source_slug)
         if raw_files is None
@@ -55,6 +81,17 @@ def process_raw_and_report(
             f"{len(selected_raw_files)} arquivo(s) selecionado(s) nesta coleta."
         )
 
+    stats = RawProcessingStats(selected_files=len(selected_raw_files))
+    lookup_started_at = perf_counter()
+    processed_raws = (
+        set()
+        if force_reprocess
+        else SQLiteStorage(database_path).find_processed_raw_hashes(selected_raw_files)
+    )
+    stats.skip_lookup_seconds += perf_counter() - lookup_started_at
+    configure_pdf_text_cache(pdf_text_cache_dir)
+    reset_pdf_text_cache_stats()
+
     with ProgressReporter(output) as progress:
         progress_task = progress.task(
             label=f"Processamento {source_slug}",
@@ -66,20 +103,41 @@ def process_raw_and_report(
             progress_task.update(current=file_path.name)
 
             try:
+                metadata_started_at = perf_counter()
                 metadata = parse_raw_document_metadata(file_path)
+                stats.metadata_seconds += perf_counter() - metadata_started_at
                 url_origem = build_raw_source_url(
                     source_slug,
                     base_url,
                     metadata.category_slug,
                     metadata.target_date,
                 )
+                read_started_at = perf_counter()
                 raw_content = read_raw_file(file_path)
+                stats.read_seconds += perf_counter() - read_started_at
+                hash_started_at = perf_counter()
+                raw_hash = build_raw_hash(raw_content)
+                stats.hash_seconds += perf_counter() - hash_started_at
+
+                lookup_started_at = perf_counter()
+                already_processed = (
+                    file_path.as_posix(),
+                    raw_hash,
+                ) in processed_raws
+                stats.skip_lookup_seconds += perf_counter() - lookup_started_at
+
+                if already_processed:
+                    stats.skipped_files += 1
+                    progress_task.advance(current=file_path.name)
+                    continue
+
+                parser_started_at = perf_counter()
                 parsed_cotacoes = parser.parse_category(
                     raw_content,
                     metadata.category_slug,
                     url_origem,
                 )
-                raw_hash = build_raw_hash(raw_content)
+                stats.parser_seconds += perf_counter() - parser_started_at
                 parsed_cotacoes = [
                     replace(
                         cotacao,
@@ -90,15 +148,43 @@ def process_raw_and_report(
                     for cotacao in parsed_cotacoes
                 ]
             except Exception as error:
+                stats.failed_files += 1
                 output.warning(f"{file_path.name} | {error}")
                 progress_task.advance(current=file_path.name)
                 continue
 
             cotacoes.extend(parsed_cotacoes)
-            output.success(f"{file_path.name} | {len(parsed_cotacoes)} cotacoes.")
+            stats.processed_files += 1
+            stats.parsed_quotes += len(parsed_cotacoes)
+            output.detail_success(
+                f"{file_path.name} | {len(parsed_cotacoes)} cotacoes.",
+                report=raw_detail_report,
+            )
             progress_task.advance(current=file_path.name)
 
         progress_task.finish()
+
+    pdf_cache_stats = get_pdf_text_cache_stats()
+    total_seconds = perf_counter() - processing_started_at
+    output.report_summary(
+        (
+            ("Raws selecionados", stats.selected_files),
+            ("Raws processados", stats.processed_files),
+            ("Raws ignorados", stats.skipped_files),
+            ("Raws com falha", stats.failed_files),
+            ("Cotacoes extraidas dos raws", stats.parsed_quotes),
+            ("Tempo total processamento raws (s)", f"{total_seconds:.2f}"),
+            ("Tempo lendo raws (s)", f"{stats.read_seconds:.2f}"),
+            ("Tempo calculando hashes (s)", f"{stats.hash_seconds:.2f}"),
+            ("Tempo consultando cache SQLite (s)", f"{stats.skip_lookup_seconds:.2f}"),
+            ("Tempo lendo metadados (s)", f"{stats.metadata_seconds:.2f}"),
+            ("Tempo em parsers (s)", f"{stats.parser_seconds:.2f}"),
+            ("Cache PDF acertos", pdf_cache_stats.hits),
+            ("Cache PDF misses", pdf_cache_stats.misses),
+            ("Cache PDF gravacoes", pdf_cache_stats.writes),
+        ),
+        report_title=f"Desempenho do processamento {source_slug}",
+    )
 
     return cotacoes
 

@@ -13,6 +13,7 @@ apresentacao ou envio final.
 | Progresso de execucao com Rich | Feita | Comandos longos passaram a exibir progresso por fonte, categoria e arquivo. |
 | Dependencias centralizadas | Feita | O projeto passou a usar `pyproject.toml` como fonte unica de dependencias. |
 | Wrapper operacional do pacote de dados | Feita | `scripts/cotacoes.py` passou a controlar descompactacao, execucao e recompactacao segura de `data.tar.gz`. |
+| Otimizacoes de processamento | Feita | Raws ja persistidos podem ser ignorados, textos de PDFs passaram a ser cacheados e relatorios ganharam metricas de desempenho. |
 
 ## 1. Git LFS para os dados compactados
 
@@ -177,3 +178,42 @@ artefato versionado e usando `data/` apenas durante a execucao.
   na validacao.
 - Se a compactacao falhar, o pacote anterior permanece preservado e `data/`
   fica em disco para recuperacao.
+
+## 6. Otimizacoes de processamento
+
+### Objetivo
+
+Reduzir trabalho repetido no processamento de raws sem alterar os resultados
+dos parsers nem a estrutura dos dados persistidos.
+
+### O que foi feito
+
+- Adicionadas metricas de tempo por etapa no processamento de raws.
+- Adicionado salto automatico de raws que ja existem em `coletas` com o mesmo
+  `arquivo_raw` e `hash_raw`.
+- Criado `--force-reprocess` para reprocessar tudo quando for necessario.
+- Adicionado cache de texto extraido de PDFs em `data/cache/pdf-text/`.
+- Adicionado cache em memoria para normalizacao de unidades repetidas.
+- Reduzido o historico detalhado do relatorio, evitando registrar um `OK` para
+  cada raw por padrao.
+- Criado `--raw-detail-report` para reativar o detalhe arquivo por arquivo
+  quando for necessario auditar uma execucao.
+
+### Arquivos relacionados
+
+- `src/cotacoes_ceasa/workflows/raw_processing.py`
+- `src/cotacoes_ceasa/parsers/pdf.py`
+- `src/cotacoes_ceasa/storage/sqlite.py`
+- `src/cotacoes_ceasa/normalizers/unit.py`
+- `src/cotacoes_ceasa/cli/parser.py`
+- `src/cotacoes_ceasa/cli/output.py`
+- `src/cotacoes_ceasa/cli/commands/source.py`
+- `docs/comandos.md`
+- `docs/pendencias.md`
+
+### Observacoes
+
+- O cache de PDF e derivado dos raws: se for apagado, ele pode ser recriado em
+  uma nova execucao.
+- O paralelismo de processamento ficou anotado como possibilidade futura, mas
+  nao foi implementado nesta rodada.

@@ -15,6 +15,9 @@ Executar fontes independentes em paralelo pode reduzir o tempo total. O
 paralelismo deve ocorrer somente entre fontes; requisicoes internas e
 persistencia SQLite devem continuar sequenciais.
 
+Status: anotado para avaliacao futura. Nao foi implementado nesta rodada porque
+as melhorias atuais priorizaram medicoes, cache e reducao de reprocessamento.
+
 Fluxo proposto:
 
 1. Criar uma fila com as fontes configuradas.
@@ -123,13 +126,13 @@ Medicoes necessarias:
 
 Melhorias a avaliar:
 
-- ignorar raws que ja foram processados e persistidos sem alteracao;
-- manter uma opcao explicita para reprocessamento completo;
-- armazenar ou reutilizar texto extraido de PDFs quando o raw nao mudar;
+- acompanhar as novas metricas de tempo por etapa nos relatorios;
+- acompanhar o ganho do salto de raws ja processados sem alteracao;
+- acompanhar o ganho do cache de texto extraido de PDFs;
 - processar raws independentes em paralelo com limite configuravel;
-- reduzir trabalho repetido dentro dos parsers e normalizadores;
+- reduzir trabalho repetido dentro dos parsers;
 - priorizar a investigacao dos PDFs da CEASA-PR;
-- registrar duracao por fonte, arquivo e etapa nos relatorios.
+- ampliar a instrumentacao se alguma etapa continuar sem granularidade suficiente.
 
 Qualquer otimizacao deve preservar os resultados atuais dos parsers, a
 proveniencia dos registros e a capacidade de reconstruir o banco a partir dos

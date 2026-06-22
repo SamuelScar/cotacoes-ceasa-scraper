@@ -69,6 +69,11 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         help="Diretorio onde o HTML bruto sera salvo.",
     )
     parser.add_argument(
+        "--pdf-text-cache-dir",
+        default=config.pdf_text_cache_dir,
+        help="Diretorio onde textos extraidos de PDFs serao cacheados.",
+    )
+    parser.add_argument(
         "--database-path",
         default=config.database_path,
         help="Arquivo SQLite onde as cotacoes serao salvas.",
@@ -116,6 +121,16 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         "--process-raw",
         action="store_true",
         help="Processa HTML bruto salvo em disco e salva os registros no SQLite.",
+    )
+    parser.add_argument(
+        "--force-reprocess",
+        action="store_true",
+        help="Reprocessa raws mesmo quando ja existem no SQLite com o mesmo hash.",
+    )
+    parser.add_argument(
+        "--raw-detail-report",
+        action="store_true",
+        help="Registra cada raw processado no historico completo do relatorio.",
     )
     parser.add_argument(
         "--download-and-process",

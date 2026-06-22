@@ -30,6 +30,7 @@ argumentos passados ao servico `app` sobrescrevem esses valores.
 | --- | --- |
 | `COTACOES_SOURCES_FILE` | Arquivo JSON com as fontes |
 | `COTACOES_RAW_DIR` | Diretorio dos arquivos brutos |
+| `COTACOES_PDF_TEXT_CACHE_DIR` | Diretorio do cache de texto extraido de PDFs |
 | `COTACOES_DATABASE_PATH` | Caminho do SQLite |
 | `COTACOES_SUPABASE_DATABASE_URL` | Connection string PostgreSQL do Supabase |
 | `COTACOES_SUPABASE_BATCH_SIZE` | Quantidade de registros enviada por lote |
@@ -73,6 +74,10 @@ que a publicacao atual continue sendo atualizada normalmente.
 Com `COTACOES_REUSE_RAW_BEFORE_REQUEST=true`, o coletor procura o arquivo
 correspondente diretamente em `data/raw/<fonte>/`. A busca nao usa `old/` nem
 arquivos compactados.
+
+`COTACOES_PDF_TEXT_CACHE_DIR` define onde ficam os textos extraidos de PDFs. O
+padrao e `data/cache/pdf-text/`; apagar esse diretorio nao remove raws nem
+registros do SQLite, apenas força nova extracao de texto dos PDFs.
 
 Com `COTACOES_COMPLEMENT_PROHORT=true`, todo fluxo que salva no SQLite executa
 o complemento PROHORT uma vez ao final. A URL versionada fica em

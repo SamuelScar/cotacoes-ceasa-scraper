@@ -1,5 +1,6 @@
 from copy import copy
 from pathlib import Path
+from time import perf_counter
 
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.cli.parser import (
@@ -13,6 +14,7 @@ from cotacoes_ceasa.sources.registry import (
     build_registered_collector,
     build_source_parser,
 )
+from cotacoes_ceasa.parsers.pdf import configure_pdf_text_cache
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 from cotacoes_ceasa.workflows.collection import (
     PartialDownloadError,
@@ -45,6 +47,7 @@ def run_source(
         config=config,
         source_config=source_config,
     )
+    configure_pdf_text_cache(Path(args.pdf_text_cache_dir))
     source_parser = build_source_parser(args.source)
 
     if args.list_categories:
@@ -69,16 +72,22 @@ def run_source(
             raw_dir=Path(args.raw_dir),
             source_slug=args.source,
             base_url=args.base_url or source_config.base_url,
+            database_path=Path(args.database_path),
+            pdf_text_cache_dir=Path(args.pdf_text_cache_dir),
+            force_reprocess=args.force_reprocess,
+            raw_detail_report=args.raw_detail_report,
             output=output,
             raw_files=raw_files,
         )
         output.section("Persistencia")
         output.info(f"Salvando cotacoes em {args.database_path}.")
+        persistence_started_at = perf_counter()
         inserted_count = save_cotacoes(
             args=args,
             cotacoes=cotacoes,
             source_config=source_config,
         )
+        persistence_seconds = perf_counter() - persistence_started_at
         output.success(f"{inserted_count} registro(s) novo(s) salvo(s).")
         complete_source_operation(
             output,
@@ -86,6 +95,7 @@ def run_source(
             (
                 ("Cotacoes processadas", len(cotacoes)),
                 ("Registros novos", inserted_count),
+                ("Tempo persistencia SQLite (s)", f"{persistence_seconds:.2f}"),
                 ("Banco", args.database_path),
             ),
         )
@@ -103,11 +113,13 @@ def run_source(
         )
         output.section("Persistencia")
         output.info(f"Salvando cotacoes em {args.database_path}.")
+        persistence_started_at = perf_counter()
         inserted_count = save_cotacoes(
             args=args,
             cotacoes=cotacoes,
             source_config=source_config,
         )
+        persistence_seconds = perf_counter() - persistence_started_at
         output.success(f"{inserted_count} registro(s) novo(s) salvo(s).")
         complete_source_operation(
             output,
@@ -115,6 +127,7 @@ def run_source(
             (
                 ("Cotacoes extraidas", len(cotacoes)),
                 ("Registros novos", inserted_count),
+                ("Tempo persistencia SQLite (s)", f"{persistence_seconds:.2f}"),
                 ("Banco", args.database_path),
             ),
         )

@@ -36,6 +36,9 @@ Cada comando gera um relatorio em `data/relatorios/`, inclusive quando termina
 com erro ou e interrompido. O arquivo registra somente as fases executadas e
 inclui configuracoes sem credenciais, duracao, resultados por fonte, alertas,
 erros e historico cronologico.
+Por padrao, o historico nao registra uma linha `OK` para cada raw processado;
+os totais por fonte continuam no resumo. Use `--raw-detail-report` quando
+precisar auditar arquivo por arquivo.
 
 ## Selecionar fontes
 
@@ -91,9 +94,12 @@ execute `docker compose run --rm salvar` para aproveitar os raws ja salvos.
 | `--quotes-back` | Define quantas cotacoes anteriores buscar |
 | `--list-categories` | Lista categorias descobertas |
 | `--raw-dir` | Sobrescreve o diretorio de raws |
+| `--pdf-text-cache-dir` | Sobrescreve o diretorio do cache de texto extraido de PDFs |
 | `--database-path` | Sobrescreve o caminho do SQLite |
 | `--http-timeout-seconds` | Sobrescreve o timeout HTTP |
 | `--request-delay-seconds` | Sobrescreve o intervalo entre requisicoes |
+| `--force-reprocess` | Reprocessa raws mesmo quando ja existem no SQLite com o mesmo hash |
+| `--raw-detail-report` | Registra cada raw processado no historico completo do relatorio |
 
 Os flags `--download-only`, `--download-and-process`, `--archive-raw-old` e
 `--complement-prohort` sao usados internamente pelos atalhos definidos no
@@ -113,14 +119,23 @@ grupo e gerado no mesmo dia, a versao anterior vai para `old/`.
 O comando `salvar` processa somente arquivos `.html` e `.pdf` diretamente na
 pasta da fonte. Ele ignora `old/` e `.zip`.
 
-Use `salvar` quando precisar reprocessar todo o acervo ativo. Na operacao
-normal, `tudo` processa somente os raws selecionados na coleta atual.
+Durante o processamento, raws que ja existem em `coletas` com o mesmo
+`arquivo_raw` e `hash_raw` sao ignorados automaticamente. Isso evita repetir
+parser e normalizacao quando o dado ja foi persistido.
+
+Use `--force-reprocess` quando precisar validar novamente todos os raws ativos.
+Na operacao normal, `tudo` processa somente os raws selecionados na coleta
+atual.
+
+Textos extraidos de PDFs sao cacheados em `data/cache/pdf-text/` por padrao. O
+cache e indexado pelo hash do PDF e pela versao da estrategia de extracao. Se o
+PDF mudar, o texto e extraido novamente.
 
 Para reconstruir o banco depois de uma mudanca de schema ou normalizacao:
 
 ```bash
 rm data/cotacoes.sqlite
-docker compose run --rm salvar
+docker compose run --rm app --process-raw --force-reprocess
 ```
 
 O projeto nao migra bancos antigos. Confirme que os raws ativos necessarios

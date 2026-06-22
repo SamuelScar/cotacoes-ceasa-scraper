@@ -201,6 +201,14 @@ def build_report_configuration(
 
     if saves_database:
         rows.append(("COTACOES_DATABASE_PATH", args.database_path))
+        rows.append(("COTACOES_PDF_TEXT_CACHE_DIR", args.pdf_text_cache_dir))
+        rows.append(("Reprocessamento forcado", "sim" if args.force_reprocess else "nao"))
+        rows.append(
+            (
+                "Detalhe de raw no relatorio",
+                "sim" if args.raw_detail_report else "nao",
+            )
+        )
         rows.append(("COTACOES_COMPLEMENT_PROHORT", config.complement_prohort))
         rows.append(
             (

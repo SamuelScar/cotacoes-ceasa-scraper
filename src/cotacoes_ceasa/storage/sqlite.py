@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Iterable
 
 from cotacoes_ceasa.core.models import Cotacao
 from cotacoes_ceasa.normalizers.text import slugify
@@ -56,6 +57,43 @@ class SQLiteStorage:
                 source_slug=source_slug,
                 default_market=city,
             )
+
+    def find_processed_raw_hashes(
+        self,
+        raw_paths: Iterable[Path],
+    ) -> set[tuple[str, str]]:
+        """Retorna pares arquivo/hash ja registrados em coletas."""
+        raw_path_values = sorted({raw_path.as_posix() for raw_path in raw_paths})
+
+        if not raw_path_values or not self.database_path.exists():
+            return set()
+
+        processed_raws: set[tuple[str, str]] = set()
+
+        with sqlite3.connect(self.database_path) as connection:
+            for index in range(0, len(raw_path_values), 900):
+                chunk = raw_path_values[index : index + 900]
+                placeholders = ", ".join("?" for _ in chunk)
+                try:
+                    rows = connection.execute(
+                        f"""
+                        SELECT arquivo_raw, hash_raw
+                        FROM coletas
+                        WHERE arquivo_raw IN ({placeholders})
+                            AND hash_raw IS NOT NULL
+                        """,
+                        chunk,
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    return set()
+
+                processed_raws.update(
+                    (str(arquivo_raw), str(hash_raw))
+                    for arquivo_raw, hash_raw in rows
+                    if arquivo_raw is not None and hash_raw is not None
+                )
+
+        return processed_raws
 
     def _create_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
