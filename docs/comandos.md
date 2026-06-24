@@ -21,6 +21,9 @@ dados com seguranca.
 Data limite, janela historica, caminhos, delay e timeout sao lidos do `.env`.
 Uma falha em uma fonte nao interrompe o lote das demais.
 Sem `--source`, a CLI executa todas as fontes presentes em `config/fontes.json`.
+Nos comandos `baixar` e `tudo`, `COTACOES_WORKERS` ou `--workers` definem
+quantas fontes podem baixar ao mesmo tempo. O padrao `1` mantem o fluxo
+sequencial.
 
 Com `COTACOES_INCREMENTAL_HISTORY=true`, pedidos de historico continuam antes
 do raw ativo mais antigo de cada fonte. A coleta atual com `quotes_back=0`
@@ -98,12 +101,26 @@ execute `docker compose run --rm salvar` para aproveitar os raws ja salvos.
 | `--database-path` | Sobrescreve o caminho do SQLite |
 | `--http-timeout-seconds` | Sobrescreve o timeout HTTP |
 | `--request-delay-seconds` | Sobrescreve o intervalo entre requisicoes |
+| `--workers` | Define quantas fontes baixam em paralelo nos fluxos de todas as fontes |
 | `--force-reprocess` | Reprocessa raws mesmo quando ja existem no SQLite com o mesmo hash |
 | `--raw-detail-report` | Registra cada raw processado no historico completo do relatorio |
 
 Os flags `--download-only`, `--download-and-process`, `--archive-raw-old` e
 `--complement-prohort` sao usados internamente pelos atalhos definidos no
 Compose. Nao e necessario usa-los diretamente.
+
+Para baixar fontes em paralelo em uma chamada pontual:
+
+```bash
+docker compose run --rm app --download-only --workers 3
+docker compose run --rm app --download-and-process --workers 3
+```
+
+Mesmo com `--workers`, cada fonte continua sequencial internamente e a
+persistencia no SQLite continua sem escrita concorrente.
+
+Para usar os atalhos `baixar` e `tudo`, configure `COTACOES_WORKERS=3` no
+`.env` e execute os comandos normais.
 
 Para consultar todas as opcoes:
 

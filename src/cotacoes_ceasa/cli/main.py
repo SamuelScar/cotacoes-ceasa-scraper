@@ -257,6 +257,19 @@ def build_report_configuration(
                             args.target_date,
                             args.quotes_back,
                         ),
+                ),
+            ]
+        )
+
+        if all_sources and (args.download_only or args.download_and_process):
+            effective_workers = min(args.workers, len(config.sources))
+            rows.extend(
+                [
+                    ("COTACOES_WORKERS", args.workers),
+                    ("Workers de download efetivos", effective_workers),
+                    (
+                        "Download paralelo",
+                        "sim" if effective_workers > 1 else "nao",
                     ),
                 ]
             )

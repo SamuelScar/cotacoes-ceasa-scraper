@@ -32,6 +32,9 @@ final.
 
 Por padrao, a CLI executa todas as fontes presentes em `config/fontes.json`.
 Use `--source <fonte>` somente quando quiser executar uma fonte especifica.
+Nos fluxos de todas as fontes, `COTACOES_WORKERS` ou `--workers` controlam
+quantas fontes sao baixadas em paralelo. O padrao `1` preserva a execucao
+sequencial.
 
 Comandos principais:
 
@@ -46,6 +49,16 @@ Comandos principais:
 | `docker compose run --rm migrar-supabase-pgloader` | Executa migracao completa excepcional |
 | `docker compose run --rm compactar-old` | Compacta HTMLs antigos |
 | `docker compose run --rm app --help` | Exibe todas as opcoes da CLI |
+
+Exemplo de download paralelo pontual:
+
+```bash
+docker compose run --rm app --download-only --workers 3
+docker compose run --rm app --download-and-process --workers 3
+```
+
+Para usar os atalhos `baixar` e `tudo`, configure `COTACOES_WORKERS=3` no
+`.env` e execute os comandos normais.
 
 ## Janela de coleta
 

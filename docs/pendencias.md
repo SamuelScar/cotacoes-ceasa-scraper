@@ -4,51 +4,55 @@
 
 | Pendencia | Resumo |
 | --- | --- |
-| [Paralelismo entre fontes](#paralelismo-entre-fontes) | Executar downloads de fontes independentes em paralelo, mantendo requisicoes internas e persistencia SQLite sequenciais. |
+| [Pipeline de download e persistencia](#pipeline-de-download-e-persistencia) | Processar e salvar uma fonte assim que seu download terminar, enquanto outras fontes continuam baixando. |
 | [Execucao continua como crawler](#execucao-continua-como-crawler) | Avaliar e implementar execucoes periodicas para coletar e persistir somente dados novos. |
 | [Desempenho do processamento de raws](#desempenho-do-processamento-de-raws) | Medir e reduzir o custo do processamento, principalmente na extracao de PDFs e nas fontes mais lentas. |
 | [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
+| [Migrar documentacao extensa para GitHub Wiki](#migrar-documentacao-extensa-para-github-wiki) | Reorganizar guias longos na Wiki quando o repositorio puder ficar publico. |
 
-## Paralelismo entre fontes
+## Pipeline de download e persistencia
 
-Executar fontes independentes em paralelo pode reduzir o tempo total. O
-paralelismo deve ocorrer somente entre fontes; requisicoes internas e
-persistencia SQLite devem continuar sequenciais.
+Depois do paralelismo de download entre fontes, avaliar uma evolucao em pipeline
+para o comando `tudo`. Nesse fluxo, uma fonte que terminou o download entra em
+uma fila de processamento enquanto outras fontes continuam baixando.
 
-Status: anotado para avaliacao futura. Nao foi implementado nesta rodada porque
-as melhorias atuais priorizaram medicoes, cache e reducao de reprocessamento.
+Contexto da etapa ja implementada:
+[estudo-paralelismo.md](estudo-paralelismo.md).
 
-Fluxo proposto:
+Fluxo futuro:
 
-1. Criar uma fila com as fontes configuradas.
-2. Executar uma quantidade limitada de fontes simultaneamente.
-3. Manter um coletor e uma sessao HTTP isolados por fonte.
-4. Salvar cada raw imediatamente, como ocorre atualmente.
-5. Agrupar as falhas por fonte sem interromper as demais.
-6. Processar e persistir os raws depois do download paralelo.
+1. Baixar fontes em paralelo com limite de workers.
+2. Enviar cada fonte concluida para uma fila de persistencia.
+3. Manter apenas um consumidor processando raws e salvando no SQLite.
+4. Preservar os arquivos parciais quando uma fonte falhar durante o download.
+5. Consolidar o relatorio sem misturar eventos de download e persistencia.
 
-Exemplo de comando futuro:
+Exemplo conceitual:
 
-```bash
-docker compose run --rm baixar --workers 3
-docker compose run --rm tudo --workers 3
+```text
+downloads paralelos:
+  worker 1 baixa ceasa-pe
+  worker 2 baixa ceasa-mg
+  worker 3 baixa ceasa-pr
+
+fila de persistencia:
+  ceasa-mg terminou -> processa/salva ceasa-mg
+  ceasa-pe terminou -> processa/salva ceasa-pe
+  ceasa-pr terminou -> processa/salva ceasa-pr
 ```
 
 Cuidados necessarios:
 
-- iniciar com poucos workers e tornar o limite configuravel;
-- garantir que a saida identifique a fonte em todas as mensagens;
-- preservar delay, retry, `Retry-After` e interrupcao por bloqueio em cada
-  fonte;
-- evitar que duas tarefas escrevam o mesmo raw;
-- nao compartilhar coletores ou sessoes HTTP entre threads;
-- evitar escritas concorrentes no SQLite, preferindo uma fase unica de
-  persistencia depois dos downloads;
-- permitir cancelar a execucao e encerrar os workers corretamente;
-- medir o impacto antes de aumentar o paralelismo.
+- nao permitir mais de uma escrita simultanea no SQLite;
+- separar claramente logs de download e logs de persistencia;
+- cancelar downloads e esvaziar a fila de forma controlada em interrupcoes;
+- definir como ordenar o relatorio quando download e persistencia ocorrerem ao
+  mesmo tempo;
+- medir se o ganho adicional compensa a complexidade.
 
-O ganho deve vir da espera simultanea por fontes diferentes, sem aumentar
-agressivamente as requisicoes para uma mesma CEASA.
+Essa pendencia deve vir depois do paralelismo simples de download, porque depende
+de resultados estruturados por fonte, controle de workers e tratamento confiavel
+de falhas parciais.
 
 ## Execucao continua como crawler
 
@@ -150,3 +154,37 @@ necessario executar a substituicao completa para enviar a correcao.
 
 A sincronizacao incremental deve identificar e atualizar esses registros
 antigos sem precisar substituir todo o banco remoto.
+
+## Migrar documentacao extensa para GitHub Wiki
+
+Quando o repositorio puder ficar publico, avaliar a criacao da Wiki do GitHub
+para concentrar a documentacao longa do projeto.
+
+Objetivo:
+
+1. Manter no repositorio apenas a documentacao essencial para rodar e manter o
+   codigo.
+2. Mover guias longos, estudos tecnicos, roadmap e detalhes operacionais para a
+   Wiki.
+3. Usar o `README.md` como porta de entrada, com links para as paginas da Wiki.
+
+Conteudos candidatos para a Wiki:
+
+- comandos de operacao detalhados;
+- fluxo de coleta;
+- fontes e limitacoes;
+- modelo de dados;
+- pacote `data.tar.gz`;
+- sincronizacao com Supabase;
+- estrategias anti-bloqueio;
+- decisoes tecnicas com contexto;
+- pendencias, roadmap e estudos tecnicos.
+
+Cuidados:
+
+- manter `.env.example` no repositorio, porque acompanha o comportamento real do
+  codigo;
+- manter no repositorio configuracoes, comandos criticos e decisoes que precisam
+  mudar junto com o codigo;
+- evitar que a Wiki vire a unica fonte de informacoes necessarias para executar
+  o projeto localmente.

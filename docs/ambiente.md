@@ -36,6 +36,7 @@ argumentos passados ao servico `app` sobrescrevem esses valores.
 | `COTACOES_SUPABASE_BATCH_SIZE` | Quantidade de registros enviada por lote |
 | `COTACOES_HTTP_TIMEOUT_SECONDS` | Timeout de cada requisicao |
 | `COTACOES_REQUEST_DELAY_SECONDS` | Intervalo minimo entre requisicoes |
+| `COTACOES_WORKERS` | Quantidade de fontes baixadas em paralelo |
 | `COTACOES_REUSE_RAW_BEFORE_REQUEST` | Reutiliza raw ativo antes de baixar |
 | `COTACOES_INCREMENTAL_HISTORY` | Continua o historico antes do raw mais antigo |
 | `COTACOES_COMPLEMENT_PROHORT` | Executa o complemento PROHORT depois de salvar |
@@ -89,3 +90,5 @@ nova configuracao obrigatoria for adicionada.
 Sem `--source`, a CLI executa todas as fontes presentes em
 `COTACOES_SOURCES_FILE`. Para executar somente uma fonte, informe-a diretamente
 na chamada, por exemplo: `--source ceasa-pe`.
+Nos comandos `baixar` e `tudo`, `COTACOES_WORKERS` controla quantas fontes
+baixam em paralelo. O valor `1` preserva a execucao sequencial.

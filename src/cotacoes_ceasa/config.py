@@ -21,6 +21,7 @@ class AppConfig:
     supabase_batch_size: int
     http_timeout_seconds: int
     request_delay_seconds: float
+    workers: int
     reuse_raw_before_request: bool
     incremental_history: bool
     complement_prohort: bool
@@ -60,6 +61,7 @@ def load_config(env_file: Path = ENV_FILE) -> AppConfig:
         supabase_batch_size=_get_int_env("COTACOES_SUPABASE_BATCH_SIZE", 5_000),
         http_timeout_seconds=_get_int_env("COTACOES_HTTP_TIMEOUT_SECONDS", 30),
         request_delay_seconds=_get_float_env("COTACOES_REQUEST_DELAY_SECONDS", 2.0),
+        workers=_get_positive_int_env("COTACOES_WORKERS", 1),
         reuse_raw_before_request=_get_bool_env(
             "COTACOES_REUSE_RAW_BEFORE_REQUEST",
             False,
@@ -146,6 +148,15 @@ def _get_int_env(name: str, default: int) -> int:
         return int(value)
     except ValueError as error:
         raise ValueError(f"Valor invalido para {name}: {value}") from error
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    value = _get_int_env(name, default)
+
+    if value < 1:
+        raise ValueError(f"{name} deve ser maior ou igual a 1.")
+
+    return value
 
 
 def _get_quotes_back_env(name: str, default: int) -> int | None:

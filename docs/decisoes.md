@@ -18,6 +18,8 @@ operacao do projeto.
 - `quotes_back=0` sempre preserva a coleta da publicacao atual, mesmo com o modo
   incremental ativo.
 - Falhas pontuais de categoria nao interrompem as demais categorias.
+- Nos fluxos de todas as fontes, o download pode executar fontes diferentes em
+  paralelo, mas cada fonte continua sequencial internamente.
 - Layouts sem interpretacao confiavel sao rejeitados em vez de persistidos.
 
 ## Acesso HTTP
@@ -42,6 +44,8 @@ operacao do projeto.
   apresentacoes, coletas e cotacoes.
 - O raw e seu hash identificam a proveniencia do registro.
 - Identidade comercial e versao observada usam chaves diferentes.
+- A persistencia SQLite permanece sequencial, mesmo quando o download roda com
+  mais de um worker.
 - O banco e recriado a partir dos raws quando o schema muda; nao ha migracoes
   de estruturas antigas.
 

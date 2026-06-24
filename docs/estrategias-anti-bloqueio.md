@@ -14,6 +14,8 @@ fonte recusa o acesso. Ele nao tenta contornar bloqueios.
 - Interrupcao imediata em HTTP 403.
 - Interrupcao em HTTP 429 persistente.
 - Interrupcao da fonte em falhas HTTP ou de conexao persistentes.
+- `COTACOES_WORKERS` paraleliza apenas fontes diferentes; cada fonte preserva
+  seu proprio intervalo e sua propria sessao.
 
 O cache em memoria nao continua entre execucoes. Para reutilizar raws ativos,
 configure:

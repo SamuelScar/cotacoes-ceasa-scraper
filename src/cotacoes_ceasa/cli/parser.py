@@ -31,6 +31,19 @@ def parse_quotes_back(value: str) -> int | None:
         raise argparse.ArgumentTypeError("Use um numero ou infinito.") from error
 
 
+def parse_positive_int(value: str) -> int:
+    """Converte parametros inteiros que exigem valor positivo."""
+    try:
+        parsed_value = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("Use um numero inteiro.") from error
+
+    if parsed_value < 1:
+        raise argparse.ArgumentTypeError("Use um numero maior ou igual a 1.")
+
+    return parsed_value
+
+
 def format_quotes_back(value: int | None) -> str:
     return "infinito" if value is None else str(value)
 
@@ -141,6 +154,15 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         "--download-only",
         action="store_true",
         help="Baixa os raws sem extrair cotacoes.",
+    )
+    parser.add_argument(
+        "--workers",
+        default=config.workers,
+        type=parse_positive_int,
+        help=(
+            "Quantidade de fontes baixadas em paralelo no download de todas "
+            "as fontes. O padrao preserva execucao sequencial."
+        ),
     )
     parser.add_argument(
         "--archive-raw-old",
