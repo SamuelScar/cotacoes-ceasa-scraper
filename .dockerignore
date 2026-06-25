@@ -5,4 +5,5 @@ __pycache__/
 data/
 data.tar.gz
 data.tar.gz.tmp
+ceasa-data-latest.zip
 .cotacoes-data.lock
