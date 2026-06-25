@@ -22,6 +22,16 @@ operacao do projeto.
   paralelo, mas cada fonte continua sequencial internamente.
 - Layouts sem interpretacao confiavel sao rejeitados em vez de persistidos.
 
+## Crawler
+
+- A execucao continua atual e feita por GitHub Actions, usando
+  `.github/workflows/scraper-release.yml`.
+- O estado entre rodadas fica no asset `ceasa-data-latest.tar.gz` da release
+  fixa `latest-data`.
+- Cada rodada restaura `data/`, executa `docker compose run --rm tudo`, compacta
+  a pasta e publica novamente o asset.
+- Um servico local `crawler` permanente nao faz parte da operacao atual.
+
 ## Acesso HTTP
 
 - O cliente aplica delay, jitter, cache por execucao e backoff.

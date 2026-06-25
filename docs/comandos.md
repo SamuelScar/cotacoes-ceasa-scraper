@@ -189,6 +189,46 @@ Para inspecionar manualmente o pacote sem descompactar:
 docker compose run --rm --entrypoint tar app -I pigz -tf ceasa-data-latest.tar.gz
 ```
 
+## Crawler por workflow
+
+O crawler atual do projeto e o workflow `.github/workflows/scraper-release.yml`.
+Ele usa o GitHub Actions como agendador e a release `latest-data` como ponto de
+persistencia do pacote `data/`.
+
+Fluxo executado pelo workflow:
+
+1. selecionar a janela diaria de execucao;
+2. criar o `.env` sem credenciais pelo action local `prepare-scraper`;
+3. construir a imagem Docker;
+4. baixar e descompactar `ceasa-data-latest.tar.gz` da release fixa, se existir;
+5. executar `docker compose run --rm tudo`;
+6. compactar `data/` novamente com `python scripts/cotacoes.py compactar`;
+7. substituir o asset `ceasa-data-latest.tar.gz` na release `latest-data`;
+8. enviar o ultimo relatorio por e-mail se os secrets SMTP estiverem presentes.
+
+Variaveis principais do workflow:
+
+| Variavel | Uso atual |
+| --- | --- |
+| `DATA_RELEASE_TAG` | Tag da release fixa. Padrao: `latest-data` |
+| `DATA_ASSET_NAME` | Nome do pacote publicado. Padrao: `ceasa-data-latest.tar.gz` |
+| `COTACOES_TARGET_DATE` | Data limite usada no runner. Padrao: vazio |
+| `COTACOES_QUOTES_BACK` | Janela historica usada no runner. Padrao: `100` |
+| `COTACOES_INCREMENTAL_HISTORY` | Define se a coleta continua antes do raw mais antigo. Padrao: `false` |
+| `COTACOES_WORKERS` | Quantidade de fontes baixadas em paralelo. Padrao: `1` |
+| `COTACOES_REQUEST_DELAY_SECONDS` | Delay entre requisicoes HTTP. Padrao: `7.0` |
+
+No disparo manual, esses valores aparecem como campos opcionais em
+**Actions > Atualizar pacote de dados > Run workflow**. Nas execucoes agendadas,
+o workflow le as mesmas chaves no environment `Crowler`, em **Settings >
+Environments > Crowler > Environment variables**. Se uma variavel nao existir, o
+padrao acima e usado.
+
+Esse workflow substitui, por enquanto, a ideia de manter um container `crawler`
+rodando continuamente. O estado entre execucoes fica no pacote da release e a
+idempotencia continua dependendo do SQLite, dos raws salvos e das chaves unicas
+de persistencia.
+
 ## Complemento PROHORT
 
 Para complementar automaticamente depois de qualquer fluxo que salva no
@@ -242,5 +282,3 @@ novamente os raws ativos, use temporariamente:
 ```env
 COTACOES_REUSE_RAW_BEFORE_REQUEST=true
 ```
-
-

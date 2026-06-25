@@ -2,6 +2,34 @@ name: Atualizar pacote de dados
 
 on:
   workflow_dispatch:
+    inputs:
+      target_date:
+        description: "Data limite da coleta. Vazio usa a ultima disponivel."
+        required: false
+        type: string
+      quotes_back:
+        description: "Quantidade de cotacoes anteriores."
+        required: false
+        default: "100"
+        type: string
+      incremental_history:
+        description: "Continuar historico antes do raw mais antigo."
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      workers:
+        description: "Quantidade de fontes baixadas em paralelo."
+        required: false
+        default: "1"
+        type: string
+      request_delay_seconds:
+        description: "Delay entre requisicoes HTTP."
+        required: false
+        default: "7.0"
+        type: string
   schedule:
     - cron: "0 9 * * *"
     - cron: "0 11 * * *"
@@ -19,20 +47,20 @@ concurrency:
   group: latest-data-release
   cancel-in-progress: false
 
-env:
-  DATA_RELEASE_TAG: latest-data
-  DATA_ASSET_NAME: ceasa-data-latest.tar.gz
-  COTACOES_TARGET_DATE: ""
-  COTACOES_QUOTES_BACK: "100"
-  COTACOES_INCREMENTAL_HISTORY: "false"
-  COTACOES_WORKERS: "1"
-  COTACOES_REQUEST_DELAY_SECONDS: "7.0"
-
 jobs:
   atualizar-dados:
     name: Gerar e publicar dados
     runs-on: ubuntu-latest
+    environment: Crowler
     timeout-minutes: 360
+    env:
+      DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'latest-data' }}
+      DATA_ASSET_NAME: ${{ vars.DATA_ASSET_NAME || 'ceasa-data-latest.tar.gz' }}
+      COTACOES_TARGET_DATE: ${{ github.event_name == 'workflow_dispatch' && inputs.target_date || vars.COTACOES_TARGET_DATE || '' }}
+      COTACOES_QUOTES_BACK: ${{ github.event_name == 'workflow_dispatch' && inputs.quotes_back || vars.COTACOES_QUOTES_BACK || '100' }}
+      COTACOES_INCREMENTAL_HISTORY: ${{ github.event_name == 'workflow_dispatch' && inputs.incremental_history || vars.COTACOES_INCREMENTAL_HISTORY || 'false' }}
+      COTACOES_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.workers || vars.COTACOES_WORKERS || '1' }}
+      COTACOES_REQUEST_DELAY_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.request_delay_seconds || vars.COTACOES_REQUEST_DELAY_SECONDS || '7.0' }}
 
     steps:
       - name: Definir janela da execucao agendada
@@ -165,5 +193,3 @@ jobs:
           REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
           REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
           WORKFLOW_STATUS: ${{ job.status }}
-
-
