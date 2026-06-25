@@ -8,46 +8,43 @@ apresentacao ou envio final.
 
 | Melhoria | Status | Resumo |
 | --- | --- | --- |
-| Git LFS para os dados compactados | Feita | `data.tar.gz` passou a ser tratado pelo Git LFS para evitar que o Git comum carregue o arquivo grande diretamente. |
+| Release fixa para os dados compactados | Em ajuste | O pacote de dados deixou de depender de armazenamento versionado para arquivos grandes e passou a ser preparado para publicacao como asset de release. |
 | Persistencia de coletas parciais | Feita | `tudo` passou a processar raws baixados antes de uma falha de fonte. |
 | Progresso de execucao com Rich | Feita | Comandos longos passaram a exibir progresso por fonte, categoria e arquivo. |
 | Dependencias centralizadas | Feita | O projeto passou a usar `pyproject.toml` como fonte unica de dependencias. |
-| Wrapper operacional do pacote de dados | Feita | `scripts/cotacoes.py` passou a controlar descompactacao, execucao e recompactacao segura de `data.tar.gz`. |
+| Script de pacote de dados | Em ajuste | `scripts/cotacoes.py` passou a compactar e descompactar `ceasa-data-latest.tar.gz` com `tar` e `pigz`. |
 | Otimizacoes de processamento | Feita | Raws ja persistidos podem ser ignorados, textos de PDFs passaram a ser cacheados e relatorios ganharam metricas de desempenho. |
 
-## 1. Git LFS para os dados compactados
+## 1. Release fixa para os dados compactados
 
 ### Objetivo
 
-Reduzir o impacto do arquivo grande de dados no repositorio Git comum,
-mantendo a possibilidade de versionar o pacote de dados usado pelo projeto.
+Manter apenas o pacote de dados mais recente fora do Git comum, evitando o
+acumulo de pacotes grandes antigos.
 
 ### O que foi feito
 
-- Configurado `data.tar.gz` no `.gitattributes` para ser controlado pelo Git LFS.
+- Removida a dependencia de armazenamento versionado para o pacote de dados.
 - Mantida a estrategia de usar um arquivo compactado unico para representar a
   pasta `data/`.
+- Preparado o fluxo para publicar `ceasa-data-latest.tar.gz` como asset da
+  release fixa `latest-data`.
 - Evitado versionar milhares de arquivos brutos diretamente no Git comum.
 
 ### Arquivos relacionados
 
-- `.gitattributes`
-- `data.tar.gz`
-- `docs/pendencias.md`
+- `.github/workflows/scraper-release.yml`
+- `.github/actions/`
+- `scripts/cotacoes.py`
+- `.gitignore`
+- `.dockerignore`
 
 ### Observacoes
 
-- O Git LFS melhora o clone e o controle do repositorio, mas nao elimina o
-  custo de armazenamento remoto.
-- Cada nova versao enviada de `data.tar.gz` ainda consome espaco no provedor
-  Git LFS.
-- Para novas maquinas, e necessario ter Git LFS instalado antes de baixar os
-  dados corretamente.
-
-### Complemento posterior
-
-O fluxo operacional seguro para atualizar `data.tar.gz` foi implementado depois
-no wrapper descrito no item 5.
+- O clone do repositorio nao traz `data/`.
+- O pacote mais recente deve ser baixado da release `latest-data`.
+- O asset antigo da release e substituido pelo workflow, mantendo apenas a
+  versao mais recente disponivel.
 
 ## 2. Persistencia de coletas parciais
 
@@ -140,44 +137,38 @@ como ponto unico de manutencao.
 - `docs/ambiente.md`
 - `docs/pendencias.md`
 
-## 5. Wrapper operacional do pacote de dados
+## 5. Script de pacote de dados
 
 ### Objetivo
 
-Automatizar o ciclo de uso do pacote de dados, mantendo `data.tar.gz` como
-artefato versionado e usando `data/` apenas durante a execucao.
+Automatizar a compactacao e a restauracao da pasta `data/` usando o mesmo
+formato de pacote publicado na release fixa.
 
 ### O que foi feito
 
-- Criado `scripts/cotacoes.py` como wrapper multiplataforma para Ubuntu e
-  Windows.
-- Adicionado lock em `.cotacoes-data.lock` para impedir duas execucoes
-  simultaneas alterando o pacote.
-- Automatizada a descompactacao de `data.tar.gz` para `data/`.
-- Automatizada a execucao do servico Docker solicitado.
-- Automatizada a compactacao em `data.tar.gz.tmp`, validacao e substituicao
-  segura do pacote final.
-- Ajustado o Dockerfile para instalar `pigz`, usado com `tar -I pigz` para
-  compactar e descompactar com multiplas threads dentro do container.
-- Atualizado `.gitignore` para ignorar lock e pacote temporario.
-- Removida a pendencia de fluxo operacional do pacote de dados.
+- Ajustado `scripts/cotacoes.py` para operar com os comandos `compactar` e
+  `descompactar`.
+- Mantido o lock em `.cotacoes-data.lock` para impedir duas operacoes
+  simultaneas no pacote.
+- Automatizada a compactacao em `ceasa-data-latest.tar.gz.tmp`, validacao e
+  substituicao segura do pacote final.
+- Automatizada a restauracao de `ceasa-data-latest.tar.gz` para `data/`.
+- Mantido o uso de `pigz` com `tar -I pigz` dentro do container.
 
 ### Arquivos relacionados
 
 - `scripts/cotacoes.py`
 - `Dockerfile`
 - `.gitignore`
-- `docs/comandos.md`
-- `docs/ambiente.md`
-- `docs/pendencias.md`
+- `.dockerignore`
+- `.github/workflows/scraper-release.yml`
 
 ### Observacoes
 
 - O host precisa apenas de Python, Docker e Docker Compose.
-- O `data.tar.gz` antigo so e substituido depois que o pacote temporario passa
-  na validacao.
-- Se a compactacao falhar, o pacote anterior permanece preservado e `data/`
-  fica em disco para recuperacao.
+- O pacote temporario so substitui o final depois que passa na validacao.
+- O script nao executa mais o scraper; ele apenas compacta ou descompacta o
+  pacote de dados.
 
 ## 6. Otimizacoes de processamento
 
@@ -217,3 +208,7 @@ dos parsers nem a estrutura dos dados persistidos.
   uma nova execucao.
 - O paralelismo de processamento ficou anotado como possibilidade futura, mas
   nao foi implementado nesta rodada.
+
+
+
+

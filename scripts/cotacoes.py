@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,8 +10,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
-PACKAGE_FILE = PROJECT_ROOT / "data.tar.gz"
-TEMP_PACKAGE_FILE = PROJECT_ROOT / "data.tar.gz.tmp"
+DEFAULT_PACKAGE_FILE = PROJECT_ROOT / "ceasa-data-latest.tar.gz"
 LOCK_FILE = PROJECT_ROOT / ".cotacoes-data.lock"
 
 
@@ -21,45 +19,47 @@ class CommandError(RuntimeError):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Executa comandos do scraper mantendo data.tar.gz seguro."
-    )
-    parser.add_argument(
-        "compose_args",
-        nargs=argparse.REMAINDER,
-        help="Servico e argumentos repassados ao docker compose run --rm.",
-    )
+    parser = build_parser()
     args = parser.parse_args()
-
-    if not args.compose_args:
-        parser.error(
-            "informe o servico, por exemplo: tudo, salvar ou app --source ceasa-pe"
-        )
-
+    package_file = args.arquivo.resolve()
     compose_command = resolve_compose_command()
     lock_fd = acquire_lock()
-    command_exit_code = 0
 
     try:
-        prepare_data(compose_command)
-
-        try:
-            run_compose_service(compose_command, args.compose_args)
-        except subprocess.CalledProcessError as error:
-            command_exit_code = error.returncode or 1
-        except KeyboardInterrupt:
-            command_exit_code = 130
-            print("Execucao interrompida; compactando dados atuais antes de sair.")
-
-        package_data(compose_command)
-        remove_data_dir()
+        if args.comando == "compactar":
+            compact_data(compose_command, package_file)
+        elif args.comando == "descompactar":
+            extract_data(compose_command, package_file)
+        else:
+            parser.error(f"comando invalido: {args.comando}")
     except Exception as error:
         print(f"Erro: {error}", file=sys.stderr)
-        return command_exit_code or 1
+        return 1
     finally:
         release_lock(lock_fd)
 
-    return command_exit_code
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Compacta ou descompacta a pasta data/ com tar e pigz."
+    )
+    parser.add_argument(
+        "comando",
+        choices=("compactar", "descompactar"),
+        help="Operacao desejada para o pacote de dados.",
+    )
+    parser.add_argument(
+        "--arquivo",
+        type=Path,
+        default=DEFAULT_PACKAGE_FILE,
+        help=(
+            "Arquivo .tar.gz usado na operacao. "
+            "Padrao: ceasa-data-latest.tar.gz."
+        ),
+    )
+    return parser
 
 
 def resolve_compose_command() -> list[str]:
@@ -96,7 +96,7 @@ def acquire_lock() -> int:
         lock_fd = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError as error:
         raise CommandError(
-            f"Ja existe uma execucao usando o pacote de dados: {LOCK_FILE}. "
+            f"Ja existe uma operacao usando o pacote de dados: {LOCK_FILE}. "
             "Se nao houver outro processo rodando, remova esse arquivo manualmente."
         ) from error
 
@@ -116,100 +116,56 @@ def release_lock(lock_fd: int) -> None:
             pass
 
 
-def prepare_data(compose_command: list[str]) -> None:
-    if DATA_DIR.exists():
-        print("Usando pasta data/ existente.")
-        return
-
-    if not PACKAGE_FILE.exists():
-        print("data.tar.gz nao encontrado; criando data/ vazia.")
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        return
-
-    print("Descompactando data.tar.gz com pigz.")
-    run_compose(
-        compose_command,
-        [
-            "run",
-            "--rm",
-            "--entrypoint",
-            "tar",
-            "app",
-            "-I",
-            "pigz",
-            "-xf",
-            "data.tar.gz",
-        ],
-    )
-
-
-def run_compose_service(compose_command: list[str], compose_args: list[str]) -> None:
-    print(f"Executando: docker compose run --rm {' '.join(compose_args)}")
-    run_compose(compose_command, ["run", "--rm", *compose_args])
-
-
-def package_data(compose_command: list[str]) -> None:
+def compact_data(compose_command: list[str], package_file: Path) -> None:
     if not DATA_DIR.exists():
-        raise CommandError("data/ nao existe ao final da execucao.")
+        raise CommandError("data/ nao existe para compactar.")
 
-    remove_temp_package()
-    print("Compactando data/ em data.tar.gz.tmp com pigz.")
-    run_compose(
+    temp_package_file = package_file.with_name(f"{package_file.name}.tmp")
+    remove_file(temp_package_file)
+
+    print(f"Compactando data/ em {temp_package_file.name} com pigz.")
+    run_tar(
         compose_command,
-        [
-            "run",
-            "--rm",
-            "--entrypoint",
-            "tar",
-            "app",
-            "-I",
-            "pigz",
-            "-cf",
-            "data.tar.gz.tmp",
-            "data",
-        ],
+        ["-I", "pigz", "-cf", temp_package_file.name, "data"],
     )
 
-    print("Validando data.tar.gz.tmp.")
-    run_compose(
+    print(f"Validando {temp_package_file.name}.")
+    run_tar(
         compose_command,
-        [
-            "run",
-            "--rm",
-            "--entrypoint",
-            "tar",
-            "app",
-            "-I",
-            "pigz",
-            "-tf",
-            "data.tar.gz.tmp",
-        ],
+        ["-I", "pigz", "-tf", temp_package_file.name],
         stdout=subprocess.DEVNULL,
     )
 
-    TEMP_PACKAGE_FILE.replace(PACKAGE_FILE)
-    print("data.tar.gz atualizado com sucesso.")
+    temp_package_file.replace(package_file)
+    print(f"Pacote atualizado: {package_file.name}")
 
 
-def remove_temp_package() -> None:
+def extract_data(compose_command: list[str], package_file: Path) -> None:
+    if not package_file.exists():
+        raise CommandError(f"Arquivo nao encontrado: {package_file}")
+
+    print(f"Descompactando {package_file.name} com pigz.")
+    run_tar(
+        compose_command,
+        ["-I", "pigz", "-xf", package_file.name],
+    )
+    print("Pasta data/ restaurada.")
+
+
+def remove_file(path: Path) -> None:
     try:
-        TEMP_PACKAGE_FILE.unlink()
+        path.unlink()
     except FileNotFoundError:
         pass
 
 
-def remove_data_dir() -> None:
-    shutil.rmtree(DATA_DIR)
-    print("Pasta data/ removida; o estado versionavel ficou em data.tar.gz.")
-
-
-def run_compose(
+def run_tar(
     compose_command: list[str],
-    args: list[str],
+    tar_args: list[str],
     stdout=None,
 ) -> None:
     subprocess.run(
-        [*compose_command, *args],
+        [*compose_command, "run", "--rm", "--entrypoint", "tar", "app", *tar_args],
         cwd=PROJECT_ROOT,
         stdout=stdout,
         check=True,

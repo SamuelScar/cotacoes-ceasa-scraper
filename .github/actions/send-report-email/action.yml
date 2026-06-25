@@ -1,0 +1,59 @@
+name: Enviar relatorio por email
+description: Envia o ultimo relatorio Markdown por SMTP, se os secrets estiverem configurados.
+
+runs:
+  using: composite
+  steps:
+    - name: Enviar email
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [ -z "${SMTP_HOST}" ] || [ -z "${SMTP_PORT}" ] || [ -z "${SMTP_USER}" ] || [ -z "${SMTP_PASSWORD}" ] || [ -z "${REPORT_EMAIL_FROM}" ] || [ -z "${REPORT_EMAIL_TO}" ]; then
+          echo "Secrets de email nao configurados. Pulando envio do relatorio."
+          exit 0
+        fi
+
+        latest_report=""
+        if [ -d data/relatorios ]; then
+          latest_report=$(find data/relatorios -maxdepth 1 -type f -name "*.md" -printf "%T@ %p\n" | sort -n | tail -n 1 | cut -d " " -f 2-)
+        fi
+
+        if [ -z "${latest_report}" ]; then
+          echo "Nenhum relatorio encontrado em data/relatorios."
+          exit 0
+        fi
+
+        echo "Enviando relatorio: ${latest_report}"
+        export latest_report
+        python - <<'PY'
+        import os
+        import smtplib
+        from email.message import EmailMessage
+        from pathlib import Path
+
+        report_path = Path(os.environ["latest_report"])
+        status = os.environ.get("WORKFLOW_STATUS", "desconhecido")
+
+        message = EmailMessage()
+        message["Subject"] = f"CEASA scraper finalizado: {status}"
+        message["From"] = os.environ["REPORT_EMAIL_FROM"]
+        message["To"] = os.environ["REPORT_EMAIL_TO"]
+        message.set_content(
+            "Execucao do scraper CEASA finalizada.\n\n"
+            f"Status do workflow: {status}\n"
+            f"Relatorio anexado: {report_path.name}\n"
+        )
+
+        message.add_attachment(
+            report_path.read_bytes(),
+            maintype="text",
+            subtype="markdown",
+            filename=report_path.name,
+        )
+
+        with smtplib.SMTP(os.environ["SMTP_HOST"], int(os.environ["SMTP_PORT"])) as smtp:
+            smtp.starttls()
+            smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
+            smtp.send_message(message)
+        PY

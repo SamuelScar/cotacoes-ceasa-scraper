@@ -6,6 +6,7 @@
 | --- | --- |
 | [Pipeline de download e persistencia](#pipeline-de-download-e-persistencia) | Processar e salvar uma fonte assim que seu download terminar, enquanto outras fontes continuam baixando. |
 | [Execucao continua como crawler](#execucao-continua-como-crawler) | Avaliar e implementar execucoes periodicas para coletar e persistir somente dados novos. |
+| [Enviar relatorio automatico uma vez ao dia](#enviar-relatorio-automatico-uma-vez-ao-dia) | Reduzir os e-mails do workflow para apenas um relatorio diario consolidado. |
 | [Desempenho do processamento de raws](#desempenho-do-processamento-de-raws) | Medir e reduzir o custo do processamento, principalmente na extracao de PDFs e nas fontes mais lentas. |
 | [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
 | [Migrar documentacao extensa para GitHub Wiki](#migrar-documentacao-extensa-para-github-wiki) | Reorganizar guias longos na Wiki quando o repositorio puder ficar publico. |
@@ -99,6 +100,26 @@ externo de `docker compose run --rm tudo`. Um crawler dedicado passa a ser
 interessante quando forem necessarios intervalos por fonte, retentativas
 coordenadas, estado persistente e observabilidade continua.
 
+
+## Enviar relatorio automatico uma vez ao dia
+
+O workflow atual pode executar a coleta mais de uma vez ao dia. O envio de
+e-mail deve ser ajustado para nao mandar um relatorio a cada execucao.
+
+Comportamento esperado:
+
+1. Manter as coletas agendadas ao longo do dia.
+2. Publicar o pacote `ceasa-data-latest.tar.gz` normalmente a cada execucao.
+3. Enviar e-mail com relatorio somente uma vez por dia.
+4. Evitar e-mails duplicados quando houver execucao manual ou mais de uma janela
+   automatica no mesmo dia.
+5. Registrar no log do workflow quando o envio for pulado por ja ter ocorrido no
+   dia.
+
+Uma forma simples de implementar e criar uma janela diaria especifica para o
+email, ou salvar um marcador diario na propria release para saber se o relatorio
+ja foi enviado.
+
 ## Desempenho do processamento de raws
 
 Melhorar o desempenho do processamento de raws, principalmente nas fontes com
@@ -174,7 +195,7 @@ Conteudos candidatos para a Wiki:
 - fluxo de coleta;
 - fontes e limitacoes;
 - modelo de dados;
-- pacote `data.tar.gz`;
+- pacote `ceasa-data-latest.tar.gz`;
 - sincronizacao com Supabase;
 - estrategias anti-bloqueio;
 - decisoes tecnicas com contexto;
@@ -188,3 +209,4 @@ Cuidados:
   mudar junto com o codigo;
 - evitar que a Wiki vire a unica fonte de informacoes necessarias para executar
   o projeto localmente.
+

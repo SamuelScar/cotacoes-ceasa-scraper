@@ -7,8 +7,8 @@
 
 O container usa Python 3.12 e instala as dependencias declaradas em
 `pyproject.toml`.
-Ele tambem instala `pigz`, usado pelo wrapper operacional para compactar e
-descompactar `data.tar.gz` com multiplas threads.
+Ele tambem instala `pigz`, usado pelo script de pacote para compactar e
+descompactar `ceasa-data-latest.tar.gz` com multiplas threads.
 Os horarios dos relatorios usam o fuso `America/Sao_Paulo`.
 
 ## Preparacao
@@ -92,3 +92,5 @@ Sem `--source`, a CLI executa todas as fontes presentes em
 na chamada, por exemplo: `--source ceasa-pe`.
 Nos comandos `baixar` e `tudo`, `COTACOES_WORKERS` controla quantas fontes
 baixam em paralelo. O valor `1` preserva a execucao sequencial.
+
+

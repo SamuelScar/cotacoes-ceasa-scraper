@@ -1,0 +1,36 @@
+name: Restaurar pacote de dados da release
+description: Baixa e descompacta o asset atual da release fixa, quando existir.
+
+inputs:
+  release-tag:
+    required: true
+    description: Tag da release fixa.
+  asset-name:
+    required: true
+    description: Nome do asset compactado.
+
+runs:
+  using: composite
+  steps:
+    - name: Restaurar data
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if gh release view "${{ inputs.release-tag }}" >/dev/null 2>&1; then
+          echo "Release ${{ inputs.release-tag }} encontrada. Tentando baixar ${{ inputs.asset-name }}."
+          if gh release download "${{ inputs.release-tag }}" --pattern "${{ inputs.asset-name }}" --clobber; then
+            echo "Pacote atual baixado."
+            python scripts/cotacoes.py descompactar --arquivo "${{ inputs.asset-name }}"
+          else
+            echo "Asset ${{ inputs.asset-name }} ainda nao existe. A coleta comecara sem data/ restaurado."
+          fi
+        else
+          echo "Release ${{ inputs.release-tag }} ainda nao existe. Ela sera criada no final."
+        fi
+
+        mkdir -p data
+        echo "Conteudo inicial de data/:"
+        du -sh data || true
+        find data -maxdepth 2 -type f | head -n 20 || true
+

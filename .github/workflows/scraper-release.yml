@@ -1,0 +1,169 @@
+name: Atualizar pacote de dados
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * *"
+    - cron: "0 11 * * *"
+    - cron: "0 13 * * *"
+    - cron: "0 15 * * *"
+    - cron: "0 17 * * *"
+    - cron: "0 19 * * *"
+    - cron: "0 21 * * *"
+    - cron: "0 23 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: latest-data-release
+  cancel-in-progress: false
+
+env:
+  DATA_RELEASE_TAG: latest-data
+  DATA_ASSET_NAME: ceasa-data-latest.tar.gz
+  COTACOES_TARGET_DATE: ""
+  COTACOES_QUOTES_BACK: "100"
+  COTACOES_INCREMENTAL_HISTORY: "false"
+  COTACOES_WORKERS: "1"
+  COTACOES_REQUEST_DELAY_SECONDS: "7.0"
+
+jobs:
+  atualizar-dados:
+    name: Gerar e publicar dados
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Definir janela da execucao agendada
+        id: janela
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Execucao manual liberada."
+            exit 0
+          fi
+
+          hours=(9 11 13 15 17 19 21 23)
+          day_of_year=$(date -u +%j)
+          current_hour=$(date -u +%H)
+          selected_indexes=(
+            $((10#$day_of_year % ${#hours[@]}))
+            $(((10#$day_of_year + 3) % ${#hours[@]}))
+            $(((10#$day_of_year + 5) % ${#hours[@]}))
+          )
+          selected_hours=()
+
+          for index in "${selected_indexes[@]}"; do
+            selected_hours+=("${hours[$index]}")
+          done
+
+          echo "Dia do ano: $day_of_year"
+          echo "Hora UTC atual: $current_hour"
+          echo "Horas UTC selecionadas para hoje: ${selected_hours[*]}"
+
+          for selected_hour in "${selected_hours[@]}"; do
+            if [ $((10#$current_hour)) -eq "$selected_hour" ]; then
+              echo "should_run=true" >> "$GITHUB_OUTPUT"
+              echo "Janela selecionada. A coleta vai continuar."
+              exit 0
+            fi
+          done
+
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+          echo "Janela ignorada. A coleta de hoje rodara em outro horario."
+
+      - name: Checkout do codigo
+        if: steps.janela.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Criar configuracao do scraper
+        if: steps.janela.outputs.should_run == 'true'
+        uses: ./.github/actions/prepare-scraper
+        with:
+          target-date: ${{ env.COTACOES_TARGET_DATE }}
+          quotes-back: ${{ env.COTACOES_QUOTES_BACK }}
+          incremental-history: ${{ env.COTACOES_INCREMENTAL_HISTORY }}
+          workers: ${{ env.COTACOES_WORKERS }}
+          request-delay-seconds: ${{ env.COTACOES_REQUEST_DELAY_SECONDS }}
+
+      - name: Contexto da execucao
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+          echo "Repositorio: $GITHUB_REPOSITORY"
+          echo "Ref: $GITHUB_REF"
+          echo "Commit: $GITHUB_SHA"
+          echo "Evento: $GITHUB_EVENT_NAME"
+          date -u
+          docker --version
+          docker compose version
+
+      - name: Build da imagem Docker
+        if: steps.janela.outputs.should_run == 'true'
+        run: docker compose build
+
+      - name: Restaurar pacote atual da release
+        if: steps.janela.outputs.should_run == 'true'
+        uses: ./.github/actions/restore-release-data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          release-tag: ${{ env.DATA_RELEASE_TAG }}
+          asset-name: ${{ env.DATA_ASSET_NAME }}
+
+
+      - name: Executar scraper
+        if: steps.janela.outputs.should_run == 'true'
+        run: docker compose run --rm tudo
+
+      - name: Conferir pasta data gerada
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ ! -d data ]; then
+            echo "A pasta data/ nao foi gerada."
+            exit 1
+          fi
+
+          echo "Resumo de data/:"
+          du -sh data
+          echo "Arquivos principais:"
+          find data -maxdepth 2 -type f | sort | head -n 50
+          echo "Relatorios recentes:"
+          find data/relatorios -maxdepth 1 -type f -printf "%TY-%Tm-%Td %TH:%TM %p\n" 2>/dev/null | sort | tail -n 10 || true
+
+      - name: Compactar pacote de dados
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+          python scripts/cotacoes.py compactar --arquivo "$DATA_ASSET_NAME"
+          ls -lh "$DATA_ASSET_NAME"
+
+      - name: Publicar pacote na release fixa
+        if: steps.janela.outputs.should_run == 'true'
+        uses: ./.github/actions/publish-release-data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          release-tag: ${{ env.DATA_RELEASE_TAG }}
+          asset-name: ${{ env.DATA_ASSET_NAME }}
+
+      - name: Enviar relatorio por email
+        if: always() && steps.janela.outputs.should_run == 'true'
+        uses: ./.github/actions/send-report-email
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
+          REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+          WORKFLOW_STATUS: ${{ job.status }}
+
+

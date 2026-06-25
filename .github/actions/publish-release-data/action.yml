@@ -1,0 +1,37 @@
+name: Publicar pacote de dados na release
+description: Cria a release fixa se necessario, remove o asset antigo e publica o novo.
+
+inputs:
+  release-tag:
+    required: true
+    description: Tag da release fixa.
+  asset-name:
+    required: true
+    description: Nome do asset compactado.
+
+runs:
+  using: composite
+  steps:
+    - name: Publicar asset
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if gh release view "${{ inputs.release-tag }}" >/dev/null 2>&1; then
+          echo "Release ${{ inputs.release-tag }} ja existe."
+        else
+          echo "Criando release ${{ inputs.release-tag }}."
+          gh release create "${{ inputs.release-tag }}" \
+            --title "Dados CEASA mais recentes" \
+            --notes "Pacote de dados atualizado automaticamente pelo GitHub Actions."
+        fi
+
+        if gh release view "${{ inputs.release-tag }}" --json assets --jq '.assets[].name' | grep -Fx "${{ inputs.asset-name }}" >/dev/null; then
+          echo "Removendo asset antigo ${{ inputs.asset-name }}."
+          gh release delete-asset "${{ inputs.release-tag }}" "${{ inputs.asset-name }}" -y
+        else
+          echo "Nenhum asset antigo com nome ${{ inputs.asset-name }}."
+        fi
+
+        echo "Enviando novo asset ${{ inputs.asset-name }}."
+        gh release upload "${{ inputs.release-tag }}" "${{ inputs.asset-name }}"

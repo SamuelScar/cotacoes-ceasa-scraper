@@ -2,10 +2,9 @@
 
 ## Comandos principais
 
-Estes sao os comandos usados na operacao normal. Quando estiver trabalhando
-com o pacote `data.tar.gz`, prefira chamar os servicos pelo wrapper
-`python scripts/cotacoes.py`, porque ele descompacta, executa e recompacta os
-dados com seguranca.
+Estes sao os comandos usados na operacao normal. A pasta `data/` fica fora
+do Git e pode ser empacotada ou restaurada com `python scripts/cotacoes.py`
+quando necessario.
 
 | Comando | Operacao |
 | --- | --- |
@@ -160,45 +159,35 @@ estao presentes antes de excluir o SQLite.
 
 ## Pacote de dados
 
-O arquivo versionado e `data.tar.gz`. A pasta `data/` e recriada somente
-durante a execucao e removida ao final pelo wrapper operacional.
+A pasta `data/` nao e versionada no Git. O pacote mais recente deve ficar como
+asset da release `latest-data`, com o nome `ceasa-data-latest.tar.gz`.
 
-Use o script abaixo para executar os servicos do Compose mantendo o pacote de
-dados seguro:
+Use o script abaixo para compactar ou restaurar esse pacote:
 
 ```bash
-python scripts/cotacoes.py tudo
-python scripts/cotacoes.py baixar
-python scripts/cotacoes.py salvar
-python scripts/cotacoes.py app --source ceasa-pe --save
+python scripts/cotacoes.py compactar
+python scripts/cotacoes.py descompactar
+python scripts/cotacoes.py compactar --arquivo ceasa-data-latest.tar.gz
+python scripts/cotacoes.py descompactar --arquivo ceasa-data-latest.tar.gz
 ```
 
-O script faz o fluxo completo:
+O script faz somente a operacao de pacote:
 
-1. cria um lock para impedir duas execucoes simultaneas;
-2. descompacta `data.tar.gz` para `data/`, quando necessario;
-3. executa o servico Docker solicitado;
-4. compacta `data/` em `data.tar.gz.tmp` com `tar` e `pigz`;
-5. valida o pacote temporario;
-6. substitui `data.tar.gz` somente depois da validacao;
-7. remove `data/` ao final.
+1. cria um lock para impedir duas operacoes simultaneas no pacote;
+2. em `compactar`, compacta `data/` em um `.tar.gz.tmp` com `tar` e `pigz`;
+3. valida o pacote temporario;
+4. substitui o `.tar.gz` final somente depois da validacao;
+5. em `descompactar`, restaura a pasta `data/` a partir do `.tar.gz` informado.
 
 O `pigz` roda dentro do container e usa multiplas threads para compactar e
 descompactar mais rapido. O host precisa apenas de Python, Docker e Docker
 Compose.
 
-Se a execucao falhar depois de alterar `data/`, o script ainda tenta gerar um
-novo pacote com o estado atual e retorna o codigo de erro do comando original.
-Se a compactacao ou validacao falhar, o `data.tar.gz` anterior permanece
-preservado e a pasta `data/` fica disponivel para recuperacao.
-
-Para inspecionar manualmente o pacote sem executar o scraper:
+Para inspecionar manualmente o pacote sem descompactar:
 
 ```bash
-docker compose run --rm --entrypoint tar app -I pigz -tf data.tar.gz
+docker compose run --rm --entrypoint tar app -I pigz -tf ceasa-data-latest.tar.gz
 ```
-
-O arquivo `data.tar.gz` deve ser rastreado com Git LFS.
 
 ## Complemento PROHORT
 
@@ -253,3 +242,5 @@ novamente os raws ativos, use temporariamente:
 ```env
 COTACOES_REUSE_RAW_BEFORE_REQUEST=true
 ```
+
+
