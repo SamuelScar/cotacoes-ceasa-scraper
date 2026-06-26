@@ -3,14 +3,10 @@ name: Atualizar pacote de dados
 on:
   workflow_dispatch:
   schedule:
+    - cron: "0 3 * * *"
     - cron: "0 9 * * *"
-    - cron: "0 11 * * *"
-    - cron: "0 13 * * *"
     - cron: "0 15 * * *"
-    - cron: "0 17 * * *"
-    - cron: "0 19 * * *"
     - cron: "0 21 * * *"
-    - cron: "0 23 * * *"
 
 permissions:
   contents: write
@@ -23,10 +19,10 @@ env:
   DATA_RELEASE_TAG: latest-data
   DATA_ASSET_NAME: ceasa-data-latest.tar.gz
   COTACOES_TARGET_DATE: ""
-  COTACOES_QUOTES_BACK: "100"
-  COTACOES_INCREMENTAL_HISTORY: "false"
-  COTACOES_WORKERS: "1"
-  COTACOES_REQUEST_DELAY_SECONDS: "7.0"
+  COTACOES_QUOTES_BACK: ${{ vars.COTACOES_QUOTES_BACK }}
+  COTACOES_INCREMENTAL_HISTORY: ${{ vars.COTACOES_INCREMENTAL_HISTORY || 'false' }}
+  COTACOES_WORKERS: ${{ vars.COTACOES_WORKERS }}
+  COTACOES_REQUEST_DELAY_SECONDS: ${{ vars.COTACOES_REQUEST_DELAY_SECONDS }}
 
 jobs:
   atualizar-dados:
@@ -35,51 +31,37 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Definir janela da execucao agendada
+      - name: Liberar execucao
         id: janela
         run: |
-          set -euo pipefail
-
-          if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "Execucao manual liberada."
-            exit 0
-          fi
-
-          hours=(9 11 13 15 17 19 21 23)
-          day_of_year=$(date -u +%j)
-          current_hour=$(date -u +%H)
-          selected_indexes=(
-            $((10#$day_of_year % ${#hours[@]}))
-            $(((10#$day_of_year + 3) % ${#hours[@]}))
-            $(((10#$day_of_year + 5) % ${#hours[@]}))
-          )
-          selected_hours=()
-
-          for index in "${selected_indexes[@]}"; do
-            selected_hours+=("${hours[$index]}")
-          done
-
-          echo "Dia do ano: $day_of_year"
-          echo "Hora UTC atual: $current_hour"
-          echo "Horas UTC selecionadas para hoje: ${selected_hours[*]}"
-
-          for selected_hour in "${selected_hours[@]}"; do
-            if [ $((10#$current_hour)) -eq "$selected_hour" ]; then
-              echo "should_run=true" >> "$GITHUB_OUTPUT"
-              echo "Janela selecionada. A coleta vai continuar."
-              exit 0
-            fi
-          done
-
-          echo "should_run=false" >> "$GITHUB_OUTPUT"
-          echo "Janela ignorada. A coleta de hoje rodara em outro horario."
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "Execucao liberada. Agendamentos comecam com intervalo minimo de 6 horas."
 
       - name: Checkout do codigo
         if: steps.janela.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
           lfs: false
+
+      - name: Validar variaveis do scraper
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          missing=0
+          for name in COTACOES_QUOTES_BACK COTACOES_WORKERS COTACOES_REQUEST_DELAY_SECONDS; do
+            if [ -z "${!name}" ]; then
+              echo "Variavel obrigatoria nao configurada: $name"
+              missing=1
+            else
+              echo "$name=${!name}"
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            echo "Configure as variaveis em Settings > Secrets and variables > Actions > Variables."
+            exit 1
+          fi
 
       - name: Criar configuracao do scraper
         if: steps.janela.outputs.should_run == 'true'
@@ -115,7 +97,6 @@ jobs:
         with:
           release-tag: ${{ env.DATA_RELEASE_TAG }}
           asset-name: ${{ env.DATA_ASSET_NAME }}
-
 
       - name: Executar scraper
         if: steps.janela.outputs.should_run == 'true'
