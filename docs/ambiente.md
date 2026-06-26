@@ -21,6 +21,19 @@ docker compose build
 O Compose monta a raiz do projeto em `/app`. Configuracoes e arquivos gerados
 em `data/` permanecem na maquina.
 
+## Ambiente do crawler
+
+O crawler atual roda no GitHub Actions pelo workflow
+`.github/workflows/scraper-release.yml`. Ele cria um `.env` temporario no runner,
+restaura `data/` a partir da release `latest-data`, executa o servico `tudo` e
+republica `ceasa-data-latest.tar.gz`.
+
+As variaveis usadas pelo agendamento ficam no environment `Crowler`, em
+**Settings > Environments > Crowler > Environment variables**. O disparo manual
+tambem aceita os mesmos valores como campos opcionais em **Run workflow**.
+Secrets SMTP sao opcionais e ficam em **Environment secrets**, apenas para envio
+de relatorio por e-mail.
+
 ## Variaveis locais
 
 O `.env` define os valores padrao da CLI. Quando existe uma opcao equivalente,
@@ -92,5 +105,3 @@ Sem `--source`, a CLI executa todas as fontes presentes em
 na chamada, por exemplo: `--source ceasa-pe`.
 Nos comandos `baixar` e `tudo`, `COTACOES_WORKERS` controla quantas fontes
 baixam em paralelo. O valor `1` preserva a execucao sequencial.
-
-

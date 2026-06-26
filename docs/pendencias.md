@@ -5,8 +5,8 @@
 | Pendencia | Resumo |
 | --- | --- |
 | [Pipeline de download e persistencia](#pipeline-de-download-e-persistencia) | Processar e salvar uma fonte assim que seu download terminar, enquanto outras fontes continuam baixando. |
-| [Execucao continua como crawler](#execucao-continua-como-crawler) | Avaliar e implementar execucoes periodicas para coletar e persistir somente dados novos. |
 | [Enviar relatorio automatico uma vez ao dia](#enviar-relatorio-automatico-uma-vez-ao-dia) | Reduzir os e-mails do workflow para apenas um relatorio diario consolidado. |
+| [Blindar publicacao do pacote](#blindar-publicacao-do-pacote) | Evitar substituir o pacote da release quando a rodada tiver falha relevante. |
 | [Desempenho do processamento de raws](#desempenho-do-processamento-de-raws) | Medir e reduzir o custo do processamento, principalmente na extracao de PDFs e nas fontes mais lentas. |
 | [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
 | [Migrar documentacao extensa para GitHub Wiki](#migrar-documentacao-extensa-para-github-wiki) | Reorganizar guias longos na Wiki quando o repositorio puder ficar publico. |
@@ -16,9 +16,6 @@
 Depois do paralelismo de download entre fontes, avaliar uma evolucao em pipeline
 para o comando `tudo`. Nesse fluxo, uma fonte que terminou o download entra em
 uma fila de processamento enquanto outras fontes continuam baixando.
-
-Contexto da etapa ja implementada:
-[estudo-paralelismo.md](estudo-paralelismo.md).
 
 Fluxo futuro:
 
@@ -51,60 +48,13 @@ Cuidados necessarios:
   mesmo tempo;
 - medir se o ganho adicional compensa a complexidade.
 
-Essa pendencia deve vir depois do paralelismo simples de download, porque depende
-de resultados estruturados por fonte, controle de workers e tratamento confiavel
-de falhas parciais.
-
-## Execucao continua como crawler
-
-Um crawler deve agendar e coordenar chamadas equivalentes ao comando `tudo`,
-reutilizando os fluxos existentes para coletar e persistir somente dados novos.
-
-Fluxo proposto:
-
-1. Iniciar o servico e validar configuracao, diretorios e banco.
-2. Executar uma rodada de download para as fontes agendadas.
-3. Processar os raws baixados e salvar somente registros novos.
-4. Registrar o resultado da rodada por fonte.
-5. Aguardar o proximo horario configurado.
-6. Encerrar de forma controlada ao receber um sinal do container.
-
-Exemplo de configuracao futura:
-
-```env
-COTACOES_CRAWLER_INTERVAL_MINUTES=60
-COTACOES_CRAWLER_WORKERS=3
-```
-
-Exemplo de servico futuro:
-
-```bash
-docker compose up crawler
-```
-
-Cuidados necessarios:
-
-- impedir que uma nova rodada comece antes da anterior terminar;
-- permitir frequencias diferentes para fontes com atualizacoes distintas;
-- manter a coleta idempotente para nao duplicar registros;
-- persistir o estado minimo necessario para retomar apos reinicio;
-- aplicar backoff maior quando uma fonte permanecer indisponivel;
-- registrar inicio, fim, duracao, arquivos baixados, registros novos e falhas
-  de cada rodada;
-- disponibilizar uma verificacao de saude para identificar processo travado;
-- encerrar corretamente durante compactacao, download ou persistencia;
-- separar erros temporarios de falhas que exigem manutencao do coletor.
-
-Antes de manter um processo Python ativo, deve ser avaliado o agendamento
-externo de `docker compose run --rm tudo`. Um crawler dedicado passa a ser
-interessante quando forem necessarios intervalos por fonte, retentativas
-coordenadas, estado persistente e observabilidade continua.
-
+Essa pendencia fica depois do crawler por workflow estar estavel, porque aumenta
+a complexidade do relatorio e da coordenacao entre download e persistencia.
 
 ## Enviar relatorio automatico uma vez ao dia
 
-O workflow atual pode executar a coleta mais de uma vez ao dia. O envio de
-e-mail deve ser ajustado para nao mandar um relatorio a cada execucao.
+O crawler por workflow pode executar a coleta mais de uma vez ao dia. O envio de
+e-mail deve ser ajustado para nao mandar um relatorio a cada rodada.
 
 Comportamento esperado:
 
@@ -119,6 +69,24 @@ Comportamento esperado:
 Uma forma simples de implementar e criar uma janela diaria especifica para o
 email, ou salvar um marcador diario na propria release para saber se o relatorio
 ja foi enviado.
+
+## Blindar publicacao do pacote
+
+O workflow atual publica novamente `ceasa-data-latest.tar.gz` ao final da
+execucao. Antes de ativar mais paralelismo ou aumentar a frequencia, vale
+endurecer as regras de publicacao para evitar substituir um pacote bom por uma
+rodada com falha relevante.
+
+Comportamento esperado:
+
+1. detectar no relatorio ou na saida quando houve falha de fonte;
+2. diferenciar falha parcial aproveitavel de falha que invalida a rodada;
+3. bloquear a publicacao quando o pacote novo nao representar melhoria confiavel;
+4. preservar o asset anterior da release quando a publicacao for bloqueada;
+5. registrar no log do workflow o motivo da decisao.
+
+Essa pendencia nao impede o crawler atual de funcionar, mas reduz risco
+operacional quando a coleta ficar mais frequente.
 
 ## Desempenho do processamento de raws
 
@@ -209,4 +177,3 @@ Cuidados:
   mudar junto com o codigo;
 - evitar que a Wiki vire a unica fonte de informacoes necessarias para executar
   o projeto localmente.
-

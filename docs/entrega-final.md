@@ -8,27 +8,30 @@ apresentacao ou envio final.
 
 | Melhoria | Status | Resumo |
 | --- | --- | --- |
-| Release fixa para os dados compactados | Em ajuste | O pacote de dados deixou de depender de armazenamento versionado para arquivos grandes e passou a ser preparado para publicacao como asset de release. |
+| Crawler por workflow e release fixa | Feita | O GitHub Actions passou a restaurar, atualizar e republicar o pacote `data/` como asset da release `latest-data`. |
 | Persistencia de coletas parciais | Feita | `tudo` passou a processar raws baixados antes de uma falha de fonte. |
 | Progresso de execucao com Rich | Feita | Comandos longos passaram a exibir progresso por fonte, categoria e arquivo. |
 | Dependencias centralizadas | Feita | O projeto passou a usar `pyproject.toml` como fonte unica de dependencias. |
-| Script de pacote de dados | Em ajuste | `scripts/cotacoes.py` passou a compactar e descompactar `ceasa-data-latest.tar.gz` com `tar` e `pigz`. |
+| Script de pacote de dados | Feita | `scripts/cotacoes.py` passou a compactar e descompactar `ceasa-data-latest.tar.gz` com `tar` e `pigz`. |
 | Otimizacoes de processamento | Feita | Raws ja persistidos podem ser ignorados, textos de PDFs passaram a ser cacheados e relatorios ganharam metricas de desempenho. |
 
-## 1. Release fixa para os dados compactados
+## 1. Crawler por workflow e release fixa
 
 ### Objetivo
 
-Manter apenas o pacote de dados mais recente fora do Git comum, evitando o
-acumulo de pacotes grandes antigos.
+Executar coletas periodicas sem manter um processo Python permanente e manter
+apenas o pacote de dados mais recente fora do Git comum.
 
 ### O que foi feito
 
 - Removida a dependencia de armazenamento versionado para o pacote de dados.
 - Mantida a estrategia de usar um arquivo compactado unico para representar a
   pasta `data/`.
-- Preparado o fluxo para publicar `ceasa-data-latest.tar.gz` como asset da
-  release fixa `latest-data`.
+- Criado o workflow `.github/workflows/scraper-release.yml` para restaurar o
+  pacote atual, executar `docker compose run --rm tudo`, compactar `data/` e
+  publicar `ceasa-data-latest.tar.gz` como asset da release fixa `latest-data`.
+- Separadas actions locais para preparar configuracao, restaurar pacote,
+  publicar asset e enviar relatorio por e-mail.
 - Evitado versionar milhares de arquivos brutos diretamente no Git comum.
 
 ### Arquivos relacionados
@@ -45,6 +48,8 @@ acumulo de pacotes grandes antigos.
 - O pacote mais recente deve ser baixado da release `latest-data`.
 - O asset antigo da release e substituido pelo workflow, mantendo apenas a
   versao mais recente disponivel.
+- Esse workflow e o crawler oficial do projeto por enquanto. Um daemon local
+  fica reservado para necessidade futura de controle fino por fonte.
 
 ## 2. Persistencia de coletas parciais
 
@@ -208,7 +213,6 @@ dos parsers nem a estrutura dos dados persistidos.
   uma nova execucao.
 - O paralelismo de processamento ficou anotado como possibilidade futura, mas
   nao foi implementado nesta rodada.
-
 
 
 

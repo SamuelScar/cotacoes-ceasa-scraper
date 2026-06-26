@@ -2,6 +2,31 @@ name: Atualizar pacote de dados
 
 on:
   workflow_dispatch:
+    inputs:
+      target_date:
+        description: "Data limite da coleta. Vazio usa a ultima disponivel."
+        required: false
+        type: string
+      quotes_back:
+        description: "Quantidade de cotacoes anteriores. Vazio usa a variavel COTACOES_QUOTES_BACK."
+        required: false
+        type: string
+      incremental_history:
+        description: "Continuar historico antes do raw mais antigo."
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      workers:
+        description: "Quantidade de fontes baixadas em paralelo. Vazio usa a variavel COTACOES_WORKERS."
+        required: false
+        type: string
+      request_delay_seconds:
+        description: "Delay entre requisicoes HTTP. Vazio usa a variavel COTACOES_REQUEST_DELAY_SECONDS."
+        required: false
+        type: string
   schedule:
     - cron: "0 3 * * *"
     - cron: "0 9 * * *"
@@ -15,20 +40,20 @@ concurrency:
   group: latest-data-release
   cancel-in-progress: false
 
-env:
-  DATA_RELEASE_TAG: latest-data
-  DATA_ASSET_NAME: ceasa-data-latest.tar.gz
-  COTACOES_TARGET_DATE: ""
-  COTACOES_QUOTES_BACK: ${{ vars.COTACOES_QUOTES_BACK }}
-  COTACOES_INCREMENTAL_HISTORY: ${{ vars.COTACOES_INCREMENTAL_HISTORY || 'false' }}
-  COTACOES_WORKERS: ${{ vars.COTACOES_WORKERS }}
-  COTACOES_REQUEST_DELAY_SECONDS: ${{ vars.COTACOES_REQUEST_DELAY_SECONDS }}
-
 jobs:
   atualizar-dados:
     name: Gerar e publicar dados
     runs-on: ubuntu-latest
+    environment: Crawler
     timeout-minutes: 360
+    env:
+      DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'latest-data' }}
+      DATA_ASSET_NAME: ${{ vars.DATA_ASSET_NAME || 'ceasa-data-latest.tar.gz' }}
+      COTACOES_TARGET_DATE: ${{ github.event_name == 'workflow_dispatch' && inputs.target_date || vars.COTACOES_TARGET_DATE || '' }}
+      COTACOES_QUOTES_BACK: ${{ github.event_name == 'workflow_dispatch' && inputs.quotes_back || vars.COTACOES_QUOTES_BACK }}
+      COTACOES_INCREMENTAL_HISTORY: ${{ github.event_name == 'workflow_dispatch' && inputs.incremental_history || vars.COTACOES_INCREMENTAL_HISTORY || 'false' }}
+      COTACOES_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.workers || vars.COTACOES_WORKERS }}
+      COTACOES_REQUEST_DELAY_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.request_delay_seconds || vars.COTACOES_REQUEST_DELAY_SECONDS }}
 
     steps:
       - name: Liberar execucao
@@ -59,7 +84,7 @@ jobs:
           done
 
           if [ "$missing" -ne 0 ]; then
-            echo "Configure as variaveis em Settings > Secrets and variables > Actions > Variables."
+            echo "Configure as variaveis em Settings > Secrets and variables > Actions > Variables ou informe os inputs manuais."
             exit 1
           fi
 
@@ -146,5 +171,3 @@ jobs:
           REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
           REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
           WORKFLOW_STATUS: ${{ job.status }}
-
-

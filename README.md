@@ -10,6 +10,8 @@ consolida os registros em um banco SQLite normalizado.
 3. Processar os arquivos brutos com o parser da fonte.
 4. Salvar cotacoes, proveniencia e versoes em `data/cotacoes.sqlite`.
 5. Opcionalmente complementar campos vazios com o PROHORT.
+6. No crawler atual, restaurar `data/` da release fixa, executar uma nova rodada
+   e republicar o pacote atualizado.
 
 Os coletores individuais continuam sendo a fonte principal. O PROHORT nao
 sobrescreve valores ja preenchidos. Sua URL fica versionada em
@@ -59,6 +61,25 @@ docker compose run --rm app --download-and-process --workers 3
 
 Para usar os atalhos `baixar` e `tudo`, configure `COTACOES_WORKERS=3` no
 `.env` e execute os comandos normais.
+
+## Crawler atual
+
+Por enquanto, a execucao continua do projeto e feita pelo GitHub Actions, nao por
+um processo Python permanente.
+
+O workflow `.github/workflows/scraper-release.yml` roda em horarios agendados e
+tambem pode ser disparado manualmente. A cada execucao valida, ele:
+
+1. restaura `ceasa-data-latest.tar.gz` da release `latest-data`, quando existir;
+2. executa `docker compose run --rm tudo`;
+3. compacta a pasta `data/`;
+4. publica novamente o asset `ceasa-data-latest.tar.gz` na mesma release;
+5. envia o ultimo relatorio por e-mail quando os secrets SMTP estao configurados.
+
+Esse fluxo e o crawler oficial do projeto neste momento. Um servico local
+`docker compose up crawler` fica reservado para uma evolucao futura, caso sejam
+necessarios intervalos por fonte, backoff persistente ou observabilidade de
+processo continuo.
 
 ## Janela de coleta
 
