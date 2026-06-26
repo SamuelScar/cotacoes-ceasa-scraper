@@ -54,6 +54,7 @@ jobs:
       COTACOES_INCREMENTAL_HISTORY: ${{ github.event_name == 'workflow_dispatch' && inputs.incremental_history || vars.COTACOES_INCREMENTAL_HISTORY || 'false' }}
       COTACOES_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.workers || vars.COTACOES_WORKERS }}
       COTACOES_REQUEST_DELAY_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.request_delay_seconds || vars.COTACOES_REQUEST_DELAY_SECONDS }}
+      COTACOES_SEND_REPORT_EMAIL: ${{ vars.COTACOES_SEND_REPORT_EMAIL || 'true' }}
 
     steps:
       - name: Liberar execucao
@@ -170,4 +171,5 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
           REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+          COTACOES_SEND_REPORT_EMAIL: ${{ env.COTACOES_SEND_REPORT_EMAIL }}
           WORKFLOW_STATUS: ${{ job.status }}

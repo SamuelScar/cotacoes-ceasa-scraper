@@ -217,6 +217,7 @@ Variaveis principais do workflow:
 | `COTACOES_INCREMENTAL_HISTORY` | Define se a coleta continua antes do raw mais antigo. Padrao: `false` |
 | `COTACOES_WORKERS` | Quantidade de fontes baixadas em paralelo. Padrao: `1` |
 | `COTACOES_REQUEST_DELAY_SECONDS` | Delay entre requisicoes HTTP. Padrao: `7.0` |
+| `COTACOES_SEND_REPORT_EMAIL` | Envia o relatorio por email ao final do workflow quando `true`. Padrao: `true` |
 
 No disparo manual, esses valores aparecem como campos opcionais em
 **Actions > Atualizar pacote de dados > Run workflow**. Nas execucoes agendadas,
