@@ -170,7 +170,8 @@ formato de pacote publicado na release fixa.
 
 ### Observacoes
 
-- O host precisa apenas de Python, Docker e Docker Compose.
+- No fluxo local, o host precisa apenas de Docker e Docker Compose.
+- O workflow ainda usa Python no runner para o script de pacote.
 - O pacote temporario so substitui o final depois que passa na validacao.
 - O script nao executa mais o scraper; ele apenas compacta ou descompacta o
   pacote de dados.
