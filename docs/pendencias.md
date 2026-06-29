@@ -7,6 +7,7 @@
 | [Pipeline de download e persistencia](#pipeline-de-download-e-persistencia) | Processar e salvar uma fonte assim que seu download terminar, enquanto outras fontes continuam baixando. |
 | [Enviar relatorio automatico uma vez ao dia](#enviar-relatorio-automatico-uma-vez-ao-dia) | Reduzir os e-mails do workflow para apenas um relatorio diario consolidado. |
 | [Blindar publicacao do pacote](#blindar-publicacao-do-pacote) | Evitar substituir o pacote da release quando a rodada tiver falha relevante. |
+| [Dificuldades nas coletas recentes](#dificuldades-nas-coletas-recentes) | Investigar fontes com timeouts, historico parcial e falhas de parser/persistencia. |
 | [Desempenho do processamento de raws](#desempenho-do-processamento-de-raws) | Medir e reduzir o custo do processamento, principalmente na extracao de PDFs e nas fontes mais lentas. |
 | [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
 | [Migrar documentacao extensa para GitHub Wiki](#migrar-documentacao-extensa-para-github-wiki) | Reorganizar guias longos na Wiki quando o repositorio puder ficar publico. |
@@ -88,6 +89,47 @@ Comportamento esperado:
 Essa pendencia nao impede o crawler atual de funcionar, mas reduz risco
 operacional quando a coleta ficar mais frequente.
 
+## Dificuldades nas coletas recentes
+
+A analise dos relatorios em `data/relatorios/` ate `2026-06-28` mostrou que o
+workflow esta estavel, mas ainda conclui com avisos recorrentes. Nao ha
+indicacao de bloqueio explicito por `403`, `429`, `HttpSourceBlocked`,
+`Forbidden` ou `Too Many Requests`; os problemas observados parecem estar mais
+ligados a timeout, fonte instavel, limite de busca historica e parser.
+
+Pontos a investigar com mais cuidado:
+
+1. CEASA-PR baixa e processa muitos raws, mas a persistencia pode falhar com
+   `ValueError: Cotacao sem data`. No relatorio
+   `download_e_persistencia_20260628_190209_398039.md`, a fonte processou
+   `251` de `254` raws e extraiu `54.225` cotacoes, mas a persistencia da fonte
+   falhou.
+2. CEASA-PR tambem tem PDFs invalidos ou ausentes recorrentes, principalmente
+   `Invalid Elementary Object`, `Stream has ended unexpectedly` e PDFs nao
+   encontrados para algumas datas de Maringa, Londrina e Foz do Iguacu.
+3. CEASA-Campinas e CEASA-RJ aparecem com timeouts frequentes e, quando o
+   download falha, a persistencia fica como `persistencia ignorada porque o
+   download falhou`.
+4. CEASA-GO e CEASA-CE tambem apresentam timeouts, mas com frequencia menor que
+   Campinas e RJ nas coletas recentes.
+5. CEASA-BA e CEAGESP-SP frequentemente nao encontram todas as datas pedidas na
+   janela historica (`51 datas de cotacao apos 204 tentativas`), mas ainda
+   aproveitam os arquivos baixados antes da falha.
+6. A publicacao do pacote deve considerar essas falhas parciais para evitar
+   substituir um pacote bom por uma rodada com perda relevante de fontes.
+
+Acoes futuras:
+
+- corrigir primeiro a persistencia da CEASA-PR, porque ela concentra o maior
+  volume potencial perdido;
+- separar falha de download, falha de parser e falha de persistencia no resumo
+  para deixar o impacto por fonte mais claro;
+- avaliar retries/backoff ou coleta separada para CEASA-Campinas e CEASA-RJ;
+- avaliar uma politica especifica para fontes com historico parcial, como BA e
+  CEAGESP-SP;
+- acompanhar nos proximos relatorios se surgem sinais reais de bloqueio HTTP
+  (`403`, `429` ou `Retry-After`).
+
 ## Desempenho do processamento de raws
 
 Melhorar o desempenho do processamento de raws, principalmente nas fontes com
@@ -120,6 +162,8 @@ Medicoes necessarias:
 Melhorias a avaliar:
 
 - acompanhar as novas metricas de tempo por etapa nos relatorios;
+- comparar duracao, volume baixado e `COTACOES_WORKERS` para confirmar o
+  ganho real do paralelismo entre fontes;
 - acompanhar o ganho do salto de raws ja processados sem alteracao;
 - acompanhar o ganho do cache de texto extraido de PDFs;
 - processar raws independentes em paralelo com limite configuravel;

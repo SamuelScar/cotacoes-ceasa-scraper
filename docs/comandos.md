@@ -163,22 +163,35 @@ A pasta `data/` nao e versionada no Git. O pacote mais recente deve ficar como
 asset da release `latest-data`, com o nome `ceasa-data-latest.tar.gz`.
 
 Depois de baixar manualmente `ceasa-data-latest.tar.gz` e colocar o arquivo na
-raiz do repositorio, restaure a pasta `data/` pelo container:
+raiz do repositorio, extraia o pacote pelo container:
 
 ```bash
-docker compose run --rm --entrypoint python app scripts/cotacoes.py descompactar --arquivo ceasa-data-latest.tar.gz
+docker compose run --rm --entrypoint tar app -I pigz -xf ceasa-data-latest.tar.gz
+```
+
+Esse comando extrai os arquivos por cima de `data/`. Arquivos com o mesmo
+caminho sao substituidos, mas arquivos antigos que nao existem no pacote
+continuam na pasta.
+
+Para deixar `data/` exatamente igual ao pacote baixado, remova a pasta antes de
+extrair:
+
+```powershell
+Remove-Item -Recurse -Force data
+docker compose run --rm --entrypoint tar app -I pigz -xf ceasa-data-latest.tar.gz
 ```
 
 Para compactar a pasta `data/` local pelo container:
 
 ```bash
-docker compose run --rm --entrypoint python app scripts/cotacoes.py compactar --arquivo ceasa-data-latest.tar.gz
+docker compose run --rm --entrypoint tar app -I pigz -cf ceasa-data-latest.tar.gz data
 ```
 
-O workflow usa o mesmo `scripts/cotacoes.py` no runner para compactar ou
-restaurar o pacote durante a publicacao automatica.
+O workflow usa `scripts/cotacoes.py` no runner para compactar ou restaurar o
+pacote durante a publicacao automatica. Esse script deve rodar no host ou no
+runner, porque ele chama Docker Compose internamente.
 
-Esse script faz somente a operacao de pacote:
+No workflow, esse script faz somente a operacao de pacote:
 
 1. cria um lock para impedir duas operacoes simultaneas no pacote;
 2. em `compactar`, compacta `data/` em um `.tar.gz.tmp` com `tar` e `pigz`;
