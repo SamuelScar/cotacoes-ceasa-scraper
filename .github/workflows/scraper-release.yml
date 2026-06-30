@@ -2,43 +2,11 @@ name: Atualizar pacote de dados
 
 on:
   workflow_dispatch:
-    inputs:
-      target_date:
-        description: "Data limite da coleta. Vazio usa a ultima disponivel."
-        required: false
-        type: string
-      quotes_back:
-        description: "Quantidade de cotacoes anteriores."
-        required: false
-        default: "100"
-        type: string
-      incremental_history:
-        description: "Continuar historico antes do raw mais antigo."
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
-      workers:
-        description: "Quantidade de fontes baixadas em paralelo."
-        required: false
-        default: "1"
-        type: string
-      request_delay_seconds:
-        description: "Delay entre requisicoes HTTP."
-        required: false
-        default: "7.0"
-        type: string
   schedule:
+    - cron: "0 3 * * *"
     - cron: "0 9 * * *"
-    - cron: "0 11 * * *"
-    - cron: "0 13 * * *"
     - cron: "0 15 * * *"
-    - cron: "0 17 * * *"
-    - cron: "0 19 * * *"
     - cron: "0 21 * * *"
-    - cron: "0 23 * * *"
 
 permissions:
   contents: write
@@ -51,7 +19,7 @@ jobs:
   atualizar-dados:
     name: Gerar e publicar dados
     runs-on: ubuntu-latest
-    environment: Crowler
+    environment: Crawler
     timeout-minutes: 360
     env:
       DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'latest-data' }}
@@ -60,52 +28,13 @@ jobs:
       DATA_ONEDRIVE_BACKUP_ENABLED: ${{ vars.DATA_ONEDRIVE_BACKUP_ENABLED || 'false' }}
       DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
       DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
-      COTACOES_TARGET_DATE: ${{ github.event_name == 'workflow_dispatch' && inputs.target_date || vars.COTACOES_TARGET_DATE || '' }}
-      COTACOES_QUOTES_BACK: ${{ github.event_name == 'workflow_dispatch' && inputs.quotes_back || vars.COTACOES_QUOTES_BACK || '100' }}
-      COTACOES_INCREMENTAL_HISTORY: ${{ github.event_name == 'workflow_dispatch' && inputs.incremental_history || vars.COTACOES_INCREMENTAL_HISTORY || 'false' }}
-      COTACOES_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.workers || vars.COTACOES_WORKERS || '1' }}
-      COTACOES_REQUEST_DELAY_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.request_delay_seconds || vars.COTACOES_REQUEST_DELAY_SECONDS || '7.0' }}
 
     steps:
-      - name: Definir janela da execucao agendada
+      - name: Liberar execucao
         id: janela
         run: |
-          set -euo pipefail
-
-          if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "Execucao manual liberada."
-            exit 0
-          fi
-
-          hours=(9 11 13 15 17 19 21 23)
-          day_of_year=$(date -u +%j)
-          current_hour=$(date -u +%H)
-          selected_indexes=(
-            $((10#$day_of_year % ${#hours[@]}))
-            $(((10#$day_of_year + 3) % ${#hours[@]}))
-            $(((10#$day_of_year + 5) % ${#hours[@]}))
-          )
-          selected_hours=()
-
-          for index in "${selected_indexes[@]}"; do
-            selected_hours+=("${hours[$index]}")
-          done
-
-          echo "Dia do ano: $day_of_year"
-          echo "Hora UTC atual: $current_hour"
-          echo "Horas UTC selecionadas para hoje: ${selected_hours[*]}"
-
-          for selected_hour in "${selected_hours[@]}"; do
-            if [ $((10#$current_hour)) -eq "$selected_hour" ]; then
-              echo "should_run=true" >> "$GITHUB_OUTPUT"
-              echo "Janela selecionada. A coleta vai continuar."
-              exit 0
-            fi
-          done
-
-          echo "should_run=false" >> "$GITHUB_OUTPUT"
-          echo "Janela ignorada. A coleta de hoje rodara em outro horario."
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "Execucao liberada. Agendamentos comecam com intervalo minimo de 6 horas."
 
       - name: Checkout do codigo
         if: steps.janela.outputs.should_run == 'true'
@@ -113,15 +42,76 @@ jobs:
         with:
           lfs: false
 
+      - name: Resolver variaveis do scraper
+        if: steps.janela.outputs.should_run == 'true'
+        id: scraper-vars
+        env:
+          REPO_COTACOES_TARGET_DATE: ${{ vars.COTACOES_TARGET_DATE || '' }}
+          REPO_COTACOES_QUOTES_BACK: ${{ vars.COTACOES_QUOTES_BACK || '' }}
+          REPO_COTACOES_INCREMENTAL_HISTORY: ${{ vars.COTACOES_INCREMENTAL_HISTORY || '' }}
+          REPO_COTACOES_WORKERS: ${{ vars.COTACOES_WORKERS || '' }}
+          REPO_COTACOES_REQUEST_DELAY_SECONDS: ${{ vars.COTACOES_REQUEST_DELAY_SECONDS || '' }}
+          REPO_COTACOES_SEND_REPORT_EMAIL: ${{ vars.COTACOES_SEND_REPORT_EMAIL || '' }}
+        run: |
+          set -euo pipefail
+
+          resolve_value() {
+            local name="$1"
+            local repo="$2"
+            local default="$3"
+            local current="${!name:-}"
+
+            if [ -n "$current" ]; then
+              printf "%s" "$current"
+            elif [ -n "$repo" ]; then
+              printf "%s" "$repo"
+            else
+              printf "%s" "$default"
+            fi
+          }
+
+          write_config() {
+            local output_name="$1"
+            local env_name="$2"
+            local value="$3"
+
+            echo "${output_name}=${value}" >> "$GITHUB_OUTPUT"
+            echo "${env_name}=${value}" >> "$GITHUB_ENV"
+          }
+
+          target_date="$(resolve_value COTACOES_TARGET_DATE "$REPO_COTACOES_TARGET_DATE" "")"
+          quotes_back="$(resolve_value COTACOES_QUOTES_BACK "$REPO_COTACOES_QUOTES_BACK" "100")"
+          incremental_history="$(resolve_value COTACOES_INCREMENTAL_HISTORY "$REPO_COTACOES_INCREMENTAL_HISTORY" "false")"
+          workers="$(resolve_value COTACOES_WORKERS "$REPO_COTACOES_WORKERS" "1")"
+          request_delay_seconds="$(resolve_value COTACOES_REQUEST_DELAY_SECONDS "$REPO_COTACOES_REQUEST_DELAY_SECONDS" "7.0")"
+          send_report_email="$(resolve_value COTACOES_SEND_REPORT_EMAIL "$REPO_COTACOES_SEND_REPORT_EMAIL" "true")"
+
+          write_config target_date COTACOES_TARGET_DATE "$target_date"
+          write_config quotes_back COTACOES_QUOTES_BACK "$quotes_back"
+          write_config incremental_history COTACOES_INCREMENTAL_HISTORY "$incremental_history"
+          write_config workers COTACOES_WORKERS "$workers"
+          write_config request_delay_seconds COTACOES_REQUEST_DELAY_SECONDS "$request_delay_seconds"
+          write_config send_report_email COTACOES_SEND_REPORT_EMAIL "$send_report_email"
+
+      - name: Conferir variaveis do scraper
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          echo "Configuracao resolvida para esta execucao:"
+          for name in COTACOES_QUOTES_BACK COTACOES_WORKERS COTACOES_REQUEST_DELAY_SECONDS COTACOES_INCREMENTAL_HISTORY COTACOES_SEND_REPORT_EMAIL; do
+            echo "$name=${!name}"
+          done
+
       - name: Criar configuracao do scraper
         if: steps.janela.outputs.should_run == 'true'
         uses: ./.github/actions/prepare-scraper
         with:
-          target-date: ${{ env.COTACOES_TARGET_DATE }}
-          quotes-back: ${{ env.COTACOES_QUOTES_BACK }}
-          incremental-history: ${{ env.COTACOES_INCREMENTAL_HISTORY }}
-          workers: ${{ env.COTACOES_WORKERS }}
-          request-delay-seconds: ${{ env.COTACOES_REQUEST_DELAY_SECONDS }}
+          target-date: ${{ steps.scraper-vars.outputs.target_date }}
+          quotes-back: ${{ steps.scraper-vars.outputs.quotes_back }}
+          incremental-history: ${{ steps.scraper-vars.outputs.incremental_history }}
+          workers: ${{ steps.scraper-vars.outputs.workers }}
+          request-delay-seconds: ${{ steps.scraper-vars.outputs.request_delay_seconds }}
 
       - name: Contexto da execucao
         if: steps.janela.outputs.should_run == 'true'
@@ -369,4 +359,5 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
           REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+          COTACOES_SEND_REPORT_EMAIL: ${{ steps.scraper-vars.outputs.send_report_email }}
           WORKFLOW_STATUS: ${{ job.status }}

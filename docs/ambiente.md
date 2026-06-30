@@ -34,14 +34,14 @@ O pacote do GitHub Release nao inclui `data/cotacoes.sqlite`; ele guarda raws,
 cache e relatorios. O pacote do OneDrive inclui o SQLite para preservar o banco
 consolidado entre execucoes.
 
-As variaveis usadas pelo agendamento ficam no environment `Crowler`, em
-**Settings > Environments > Crowler > Environment variables**. O disparo manual
+As variaveis usadas pelo agendamento ficam no environment `Crawler`, em
+**Settings > Environments > Crawler > Environment variables**. O disparo manual
 tambem aceita os mesmos valores como campos opcionais em **Run workflow**.
 Secrets SMTP sao opcionais e ficam em **Environment secrets**, apenas para envio
 de relatorio por e-mail.
 
 Para manter uma copia no OneDrive fora do GitHub, configure no environment
-`Crowler`:
+`Crawler`:
 
 | Chave | Tipo | Uso |
 | --- | --- | --- |

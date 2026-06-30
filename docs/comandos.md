@@ -173,7 +173,8 @@ asset da release `latest-data`, com o nome `ceasa-data-latest.tar.gz`. Quando o
 backup no OneDrive esta ativo, o pacote completo fica em
 `ceasa-data-full-latest.tar.gz`.
 
-Use o script abaixo para compactar ou restaurar esse pacote:
+Depois de baixar manualmente `ceasa-data-latest.tar.gz` e colocar o arquivo na
+raiz do repositorio, extraia o pacote pelo container:
 
 ```bash
 docker compose run --rm --entrypoint python app scripts/cotacoes.py compactar
@@ -259,15 +260,14 @@ Variaveis principais do workflow:
 | `COTACOES_INCREMENTAL_HISTORY` | Define se a coleta continua antes do raw mais antigo. Padrao: `false` |
 | `COTACOES_WORKERS` | Quantidade de fontes baixadas em paralelo. Padrao: `1` |
 | `COTACOES_REQUEST_DELAY_SECONDS` | Delay entre requisicoes HTTP. Padrao: `7.0` |
+| `COTACOES_SEND_REPORT_EMAIL` | Envia o relatorio por email ao final do workflow quando `true`. Padrao: `true` |
 
-No disparo manual, esses valores aparecem como campos opcionais em
-**Actions > Atualizar pacote de dados > Run workflow**. Nas execucoes agendadas,
-o workflow le as mesmas chaves no environment `Crowler`, em **Settings >
-Environments > Crowler > Environment variables**. Se uma variavel nao existir, o
-padrao acima e usado.
+Em execucoes agendadas ou manuais, o workflow le essas chaves no environment
+`Crawler`, em **Settings > Environments > Crawler > Environment variables**.
+Se uma variavel nao existir, o padrao acima e usado para nao perder a execucao.
 
 Quando `DATA_ONEDRIVE_BACKUP_ENABLED=true`, configure tambem o secret
-`RCLONE_CONFIG` no environment `Crowler`. O backup do OneDrive salva uma copia
+`RCLONE_CONFIG` no environment `Crawler`. O backup do OneDrive salva uma copia
 historica em `history/` e atualiza uma copia fixa em `latest/` com o mesmo nome
 de `DATA_ONEDRIVE_ASSET_NAME`. Se o backup do OneDrive nao puder ser restaurado,
 o workflow tenta baixar o pacote enxuto da release.

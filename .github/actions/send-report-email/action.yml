@@ -9,6 +9,11 @@ runs:
       run: |
         set -euo pipefail
 
+        if [ "${COTACOES_SEND_REPORT_EMAIL:-true}" != "true" ]; then
+          echo "Envio de relatorio por email desativado por COTACOES_SEND_REPORT_EMAIL."
+          exit 0
+        fi
+
         if [ -z "${SMTP_HOST}" ] || [ -z "${SMTP_PORT}" ] || [ -z "${SMTP_USER}" ] || [ -z "${SMTP_PASSWORD}" ] || [ -z "${REPORT_EMAIL_FROM}" ] || [ -z "${REPORT_EMAIL_TO}" ]; then
           echo "Secrets de email nao configurados. Pulando envio do relatorio."
           exit 0
