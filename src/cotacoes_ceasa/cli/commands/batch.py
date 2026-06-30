@@ -112,14 +112,25 @@ class SourceRunResult:
     error_message: str | None = None
 
 
+@dataclass
+class PipelineStats:
+    download_completed: int = 0
+    download_partial: int = 0
+    download_failed: int = 0
+    persistence_started: int = 0
+    persistence_completed: int = 0
+    persistence_failed: int = 0
+    persistence_skipped: int = 0
+
+
 def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
     """Executa a operacao solicitada para todas as fontes configuradas."""
     if args.download_and_process:
-        download_args = copy(args)
-        download_args.download_and_process = False
-        download_args.download_only = True
-        download_args.process_raw = False
-        download_args.save = False
+        if _should_run_download_and_process_pipeline(args, config):
+            _run_download_and_process_pipeline(args, config, output)
+            return
+
+        download_args = _build_download_phase_args(args)
         downloaded_files = run_all_sources_phase(
             download_args,
             config,
@@ -127,11 +138,7 @@ def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
             "Download",
         )
 
-        process_args = copy(args)
-        process_args.download_and_process = False
-        process_args.download_only = False
-        process_args.process_raw = True
-        process_args.save = False
+        process_args = _build_process_phase_args(args)
         run_all_sources_phase(
             process_args,
             config,
@@ -142,6 +149,210 @@ def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
         return
 
     run_all_sources_phase(args, config, output, resolve_source_operation(args))
+
+
+def _build_download_phase_args(args):
+    download_args = copy(args)
+    download_args.download_and_process = False
+    download_args.download_only = True
+    download_args.process_raw = False
+    download_args.save = False
+
+    return download_args
+
+
+def _build_process_phase_args(args):
+    process_args = copy(args)
+    process_args.download_and_process = False
+    process_args.download_only = False
+    process_args.process_raw = True
+    process_args.save = False
+
+    return process_args
+
+
+def _should_run_download_and_process_pipeline(args, config: AppConfig) -> bool:
+    return args.workers > 1 and len(config.sources) > 1
+
+
+def _run_download_and_process_pipeline(
+    args,
+    config: AppConfig,
+    output: TerminalOutput,
+) -> None:
+    download_args = _build_download_phase_args(args)
+    process_args = _build_process_phase_args(args)
+    effective_workers = min(args.workers, len(config.sources))
+    stats = PipelineStats()
+
+    output.header(
+        "Download e persistencia em pipeline",
+        _build_pipeline_details(args, config, effective_workers),
+    )
+    output.info(
+        "Pipeline iniciado: downloads em paralelo e persistencia sequencial "
+        "conforme cada fonte termina."
+    )
+
+    with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+        futures = {
+            executor.submit(
+                _run_source_download_worker,
+                source_slug,
+                download_args,
+                config,
+            ): source_slug
+            for source_slug in config.sources
+        }
+
+        try:
+            for future in as_completed(futures):
+                source_slug = futures[future]
+                result = _resolve_source_future(future, source_slug)
+                _consume_pipeline_result(
+                    result,
+                    process_args,
+                    config,
+                    output,
+                    stats,
+                )
+        except KeyboardInterrupt:
+            for future in futures:
+                future.cancel()
+            raise
+
+    output.summary(
+        (
+            ("Fontes com download concluido", stats.download_completed),
+            ("Fontes com download parcial", stats.download_partial),
+            ("Fontes com download falho", stats.download_failed),
+            ("Fontes enviadas para persistencia", stats.persistence_started),
+            ("Fontes persistidas", stats.persistence_completed),
+            ("Fontes com falha na persistencia", stats.persistence_failed),
+            ("Fontes ignoradas na persistencia", stats.persistence_skipped),
+        ),
+        report_title="Download e persistencia em pipeline",
+    )
+
+
+def _build_pipeline_details(
+    args,
+    config: AppConfig,
+    effective_workers: int,
+) -> tuple[tuple[str, object], ...]:
+    return (
+        ("Fontes configuradas", len(config.sources)),
+        ("Data limite", args.target_date or "ultima disponivel"),
+        ("Cotacoes anteriores", format_quotes_back(args.quotes_back)),
+        (
+            "Historico incremental",
+            format_incremental_history(
+                config.incremental_history,
+                args.target_date,
+                args.quotes_back,
+            ),
+        ),
+        (
+            "Workers de download",
+            (
+                f"{effective_workers} de {args.workers} solicitado(s)"
+                if effective_workers != args.workers
+                else args.workers
+            ),
+        ),
+        ("Consumidores de persistencia", 1),
+        ("Fila de persistencia", "resultados concluidos em memoria"),
+        ("Persistencia SQLite concorrente", "nao"),
+    )
+
+
+def _consume_pipeline_result(
+    result: SourceRunResult,
+    process_args,
+    config: AppConfig,
+    output: TerminalOutput,
+    stats: PipelineStats,
+) -> None:
+    _replay_buffered_events(output, result.events)
+    _record_pipeline_download_status(stats, result)
+
+    if result.status == "failed":
+        if not result.events:
+            output.warning(
+                f"{result.source_slug} | {result.error_type}: "
+                f"{result.error_message}"
+            )
+
+        stats.persistence_skipped += 1
+        output.warning(
+            f"{result.source_slug} | persistencia ignorada porque o download falhou."
+        )
+        return
+
+    raw_files = list(result.files)
+
+    if result.status == "partial" and not raw_files:
+        stats.persistence_skipped += 1
+        output.warning(
+            f"{result.source_slug} | persistencia ignorada porque nao ha raw parcial."
+        )
+        return
+
+    output.info(
+        f"{result.source_slug} | {len(raw_files)} arquivo(s) enviado(s) "
+        "para a fila de persistencia."
+    )
+    stats.persistence_started += 1
+
+    if _run_pipeline_persistence(
+        result.source_slug,
+        raw_files,
+        process_args,
+        config,
+        output,
+    ):
+        stats.persistence_completed += 1
+    else:
+        stats.persistence_failed += 1
+
+
+def _record_pipeline_download_status(
+    stats: PipelineStats,
+    result: SourceRunResult,
+) -> None:
+    if result.status == "completed":
+        stats.download_completed += 1
+    elif result.status == "partial":
+        stats.download_partial += 1
+    else:
+        stats.download_failed += 1
+
+
+def _run_pipeline_persistence(
+    source_slug: str,
+    raw_files: list[Path],
+    process_args,
+    config: AppConfig,
+    output: TerminalOutput,
+) -> bool:
+    source_args = _build_source_args(process_args, source_slug, output)
+
+    try:
+        run_source(
+            source_args,
+            config,
+            output,
+            show_summary=False,
+            raw_files=raw_files,
+        )
+    except Exception as error:
+        output.warning(
+            f"{source_slug} | persistencia falhou: "
+            f"{type(error).__name__}: {error}"
+        )
+        return False
+
+    return True
 
 
 def run_all_sources_phase(

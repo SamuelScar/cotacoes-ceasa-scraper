@@ -4,52 +4,11 @@
 
 | Pendencia | Resumo |
 | --- | --- |
-| [Pipeline de download e persistencia](#pipeline-de-download-e-persistencia) | Processar e salvar uma fonte assim que seu download terminar, enquanto outras fontes continuam baixando. |
 | [Enviar relatorio automatico uma vez ao dia](#enviar-relatorio-automatico-uma-vez-ao-dia) | Reduzir os e-mails do workflow para apenas um relatorio diario consolidado. |
 | [Blindar publicacao do pacote](#blindar-publicacao-do-pacote) | Evitar substituir o pacote da release quando a rodada tiver falha relevante. |
 | [Desempenho do processamento de raws](#desempenho-do-processamento-de-raws) | Medir e reduzir o custo do processamento, principalmente na extracao de PDFs e nas fontes mais lentas. |
 | [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
 | [Migrar documentacao extensa para GitHub Wiki](#migrar-documentacao-extensa-para-github-wiki) | Reorganizar guias longos na Wiki quando o repositorio puder ficar publico. |
-
-## Pipeline de download e persistencia
-
-Depois do paralelismo de download entre fontes, avaliar uma evolucao em pipeline
-para o comando `tudo`. Nesse fluxo, uma fonte que terminou o download entra em
-uma fila de processamento enquanto outras fontes continuam baixando.
-
-Fluxo futuro:
-
-1. Baixar fontes em paralelo com limite de workers.
-2. Enviar cada fonte concluida para uma fila de persistencia.
-3. Manter apenas um consumidor processando raws e salvando no SQLite.
-4. Preservar os arquivos parciais quando uma fonte falhar durante o download.
-5. Consolidar o relatorio sem misturar eventos de download e persistencia.
-
-Exemplo conceitual:
-
-```text
-downloads paralelos:
-  worker 1 baixa ceasa-pe
-  worker 2 baixa ceasa-mg
-  worker 3 baixa ceasa-pr
-
-fila de persistencia:
-  ceasa-mg terminou -> processa/salva ceasa-mg
-  ceasa-pe terminou -> processa/salva ceasa-pe
-  ceasa-pr terminou -> processa/salva ceasa-pr
-```
-
-Cuidados necessarios:
-
-- nao permitir mais de uma escrita simultanea no SQLite;
-- separar claramente logs de download e logs de persistencia;
-- cancelar downloads e esvaziar a fila de forma controlada em interrupcoes;
-- definir como ordenar o relatorio quando download e persistencia ocorrerem ao
-  mesmo tempo;
-- medir se o ganho adicional compensa a complexidade.
-
-Essa pendencia fica depois do crawler por workflow estar estavel, porque aumenta
-a complexidade do relatorio e da coordenacao entre download e persistencia.
 
 ## Enviar relatorio automatico uma vez ao dia
 

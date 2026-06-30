@@ -10,6 +10,7 @@ apresentacao ou envio final.
 | --- | --- | --- |
 | Crawler por workflow e release fixa | Feita | O GitHub Actions passou a restaurar, atualizar e republicar o pacote `data/` como asset da release `latest-data`. |
 | Persistencia de coletas parciais | Feita | `tudo` passou a processar raws baixados antes de uma falha de fonte. |
+| Pipeline de download e persistencia | Feita | `tudo` com mais de um worker passou a processar cada fonte assim que seu download termina. |
 | Progresso de execucao com Rich | Feita | Comandos longos passaram a exibir progresso por fonte, categoria e arquivo. |
 | Dependencias centralizadas | Feita | O projeto passou a usar `pyproject.toml` como fonte unica de dependencias. |
 | Script de pacote de dados | Feita | `scripts/cotacoes.py` passou a compactar e descompactar `ceasa-data-latest.tar.gz` com `tar` e `pigz`. |
@@ -81,8 +82,8 @@ de concluir todo o download.
 
 - O processamento parcial ocorre somente para arquivos efetivamente salvos em
   disco antes da falha.
-- Se a execucao inteira for interrompida antes da fase de persistencia, o
-  comando `salvar` continua sendo a recuperacao manual.
+- Se a execucao inteira for interrompida antes de algum raw entrar na
+  persistencia, o comando `salvar` continua sendo a recuperacao manual.
 
 ## 3. Progresso de execucao com Rich
 
@@ -214,5 +215,35 @@ dos parsers nem a estrutura dos dados persistidos.
 - O paralelismo de processamento ficou anotado como possibilidade futura, mas
   nao foi implementado nesta rodada.
 
+## 7. Pipeline de download e persistencia
 
+### Objetivo
+
+Aproveitar o tempo ocioso entre requisicoes HTTP processando fontes que ja
+terminaram o download, sem abrir escrita concorrente no SQLite.
+
+### O que foi feito
+
+- Criado um fluxo em pipeline para `tudo` quando `COTACOES_WORKERS` ou
+  `--workers` for maior que `1`.
+- Mantidos varios produtores de download com `ThreadPoolExecutor`.
+- Usada uma fila em memoria baseada nos resultados concluidos por fonte,
+  carregando apenas metadados, logs bufferizados e caminhos dos raws.
+- Mantido um unico consumidor de persistencia, executando processamento e
+  escrita no SQLite de forma sequencial.
+- Preservado o relatorio completo com eventos de download, processamento,
+  persistencia, falhas parciais e resumo consolidado do pipeline.
+
+### Arquivos relacionados
+
+- `src/cotacoes_ceasa/cli/commands/batch.py`
+- `docs/comandos.md`
+- `docs/pendencias.md`
+
+### Observacoes
+
+- Os arquivos HTML e PDF continuam em disco; a fila nao carrega o conteudo dos
+  raws em memoria.
+- `workers=1` continua usando o fluxo sequencial anterior.
+- O processamento paralelo de raws/PDFs continua fora desta etapa.
 

@@ -22,7 +22,9 @@ Uma falha em uma fonte nao interrompe o lote das demais.
 Sem `--source`, a CLI executa todas as fontes presentes em `config/fontes.json`.
 Nos comandos `baixar` e `tudo`, `COTACOES_WORKERS` ou `--workers` definem
 quantas fontes podem baixar ao mesmo tempo. O padrao `1` mantem o fluxo
-sequencial.
+sequencial. No `tudo`, quando ha mais de um worker, a persistencia entra em
+pipeline: uma fonte que terminou o download e enviada para processamento
+enquanto as outras continuam baixando.
 
 Com `COTACOES_INCREMENTAL_HISTORY=true`, pedidos de historico continuam antes
 do raw ativo mais antigo de cada fonte. A coleta atual com `quotes_back=0`
@@ -82,10 +84,16 @@ acessar a fonte.
 
 O fluxo `tudo` processa somente os arquivos selecionados pelo download da
 execucao atual. Assim, `quotes_back` tambem limita o volume da persistencia.
+Com `COTACOES_WORKERS` maior que `1`, os downloads rodam em paralelo e os
+resultados concluidos entram em uma fila de persistencia em memoria. Essa fila
+guarda somente o resultado da fonte e os caminhos dos raws; os arquivos HTML e
+PDF continuam em disco. Um unico consumidor processa e salva uma fonte por vez
+no SQLite, preservando o relatorio completo para depuracao.
+
 Se uma fonte falhar depois de baixar parte dos raws, o proprio `tudo` processa
-esses arquivos parciais na fase de persistencia e mantem a falha registrada no
-relatorio. Se a execucao inteira for interrompida antes da persistencia,
-execute `docker compose run --rm salvar` para aproveitar os raws ja salvos.
+esses arquivos parciais e mantem a falha registrada no relatorio. Se a execucao
+inteira for interrompida antes de algum raw entrar na persistencia, execute
+`docker compose run --rm salvar` para aproveitar os raws ja salvos.
 
 ## Parametros uteis
 
@@ -115,8 +123,9 @@ docker compose run --rm app --download-only --workers 3
 docker compose run --rm app --download-and-process --workers 3
 ```
 
-Mesmo com `--workers`, cada fonte continua sequencial internamente e a
-persistencia no SQLite continua sem escrita concorrente.
+Mesmo com `--workers`, cada fonte continua sequencial internamente. No `tudo`,
+a persistencia pode comecar antes de todos os downloads terminarem, mas o
+SQLite continua sem escrita concorrente.
 
 Para usar os atalhos `baixar` e `tudo`, configure `COTACOES_WORKERS=3` no
 `.env` e execute os comandos normais.
