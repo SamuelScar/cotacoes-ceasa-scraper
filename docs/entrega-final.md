@@ -152,8 +152,8 @@ formato de pacote publicado na release fixa.
 
 ### O que foi feito
 
-- Ajustado `scripts/cotacoes.py` para operar com os comandos `compactar` e
-  `descompactar`.
+- Ajustado `scripts/cotacoes.py` para operar dentro do container com os comandos
+  `compactar` e `descompactar`.
 - Mantido o lock em `.cotacoes-data.lock` para impedir duas operacoes
   simultaneas no pacote.
 - Automatizada a compactacao em `ceasa-data-latest.tar.gz.tmp`, validacao e
@@ -171,7 +171,10 @@ formato de pacote publicado na release fixa.
 
 ### Observacoes
 
-- O host precisa apenas de Python, Docker e Docker Compose.
+- O host precisa apenas de Docker e Docker Compose; Python, `tar` e `pigz` sao
+  usados a partir do container `app`.
+- O script recusa execucao direta no host para evitar depender de ferramentas
+  instaladas fora da imagem.
 - O pacote temporario so substitui o final depois que passa na validacao.
 - O script nao executa mais o scraper; ele apenas compacta ou descompacta o
   pacote de dados.
@@ -246,4 +249,3 @@ terminaram o download, sem abrir escrita concorrente no SQLite.
   raws em memoria.
 - `workers=1` continua usando o fluxo sequencial anterior.
 - O processamento paralelo de raws/PDFs continua fora desta etapa.
-

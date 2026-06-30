@@ -7,8 +7,9 @@
 
 O container usa Python 3.12 e instala as dependencias declaradas em
 `pyproject.toml`.
-Ele tambem instala `pigz`, usado pelo script de pacote para compactar e
-descompactar `ceasa-data-latest.tar.gz` com multiplas threads.
+Ele tambem instala `pigz`, usado pelo script de pacote executado dentro do
+container para compactar e descompactar `ceasa-data-latest.tar.gz` com multiplas
+threads.
 Os horarios dos relatorios usam o fuso `America/Sao_Paulo`.
 
 ## Preparacao

@@ -22,14 +22,14 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     package_file = args.arquivo.resolve()
-    compose_command = resolve_compose_command()
+    ensure_package_tools()
     lock_fd = acquire_lock()
 
     try:
         if args.comando == "compactar":
-            compact_data(compose_command, package_file)
+            compact_data(package_file)
         elif args.comando == "descompactar":
-            extract_data(compose_command, package_file)
+            extract_data(package_file)
         else:
             parser.error(f"comando invalido: {args.comando}")
     except Exception as error:
@@ -62,18 +62,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_compose_command() -> list[str]:
-    docker_compose = ["docker", "compose"]
+def ensure_package_tools() -> None:
+    if not running_inside_container():
+        raise CommandError(
+            "Execute este script pelo container app com Docker Compose."
+        )
 
-    if command_exists([*docker_compose, "version"]):
-        return docker_compose
+    if command_exists(["tar", "--version"]) and command_exists(["pigz", "--version"]):
+        return
 
-    legacy_compose = ["docker-compose"]
+    raise CommandError(
+        "tar ou pigz nao encontrados. Execute este script dentro do container app."
+    )
 
-    if command_exists([*legacy_compose, "version"]):
-        return legacy_compose
 
-    raise CommandError("Docker Compose nao encontrado.")
+def running_inside_container() -> bool:
+    return Path("/.dockerenv").exists() or os.getenv("container") is not None
 
 
 def command_exists(command: list[str]) -> bool:
@@ -116,7 +120,7 @@ def release_lock(lock_fd: int) -> None:
             pass
 
 
-def compact_data(compose_command: list[str], package_file: Path) -> None:
+def compact_data(package_file: Path) -> None:
     if not DATA_DIR.exists():
         raise CommandError("data/ nao existe para compactar.")
 
@@ -125,13 +129,11 @@ def compact_data(compose_command: list[str], package_file: Path) -> None:
 
     print(f"Compactando data/ em {temp_package_file.name} com pigz.")
     run_tar(
-        compose_command,
         ["-I", "pigz", "-cf", temp_package_file.name, "data"],
     )
 
     print(f"Validando {temp_package_file.name}.")
     run_tar(
-        compose_command,
         ["-I", "pigz", "-tf", temp_package_file.name],
         stdout=subprocess.DEVNULL,
     )
@@ -140,13 +142,12 @@ def compact_data(compose_command: list[str], package_file: Path) -> None:
     print(f"Pacote atualizado: {package_file.name}")
 
 
-def extract_data(compose_command: list[str], package_file: Path) -> None:
+def extract_data(package_file: Path) -> None:
     if not package_file.exists():
         raise CommandError(f"Arquivo nao encontrado: {package_file}")
 
     print(f"Descompactando {package_file.name} com pigz.")
     run_tar(
-        compose_command,
         ["-I", "pigz", "-xf", package_file.name],
     )
     print("Pasta data/ restaurada.")
@@ -159,13 +160,9 @@ def remove_file(path: Path) -> None:
         pass
 
 
-def run_tar(
-    compose_command: list[str],
-    tar_args: list[str],
-    stdout=None,
-) -> None:
+def run_tar(tar_args: list[str], stdout=None) -> None:
     subprocess.run(
-        [*compose_command, "run", "--rm", "--entrypoint", "tar", "app", *tar_args],
+        ["tar", *tar_args],
         cwd=PROJECT_ROOT,
         stdout=stdout,
         check=True,

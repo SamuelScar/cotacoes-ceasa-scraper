@@ -21,7 +21,8 @@ runs:
           echo "Release ${{ inputs.release-tag }} encontrada. Tentando baixar ${{ inputs.asset-name }}."
           if gh release download "${{ inputs.release-tag }}" --pattern "${{ inputs.asset-name }}" --clobber; then
             echo "Pacote atual baixado."
-            python scripts/cotacoes.py descompactar --arquivo "${{ inputs.asset-name }}"
+            docker compose run --rm --entrypoint python app \
+              scripts/cotacoes.py descompactar --arquivo "${{ inputs.asset-name }}"
           else
             echo "Asset ${{ inputs.asset-name }} ainda nao existe. A coleta comecara sem data/ restaurado."
           fi
@@ -33,4 +34,3 @@ runs:
         echo "Conteudo inicial de data/:"
         du -sh data || true
         find data -maxdepth 2 -type f | head -n 20 || true
-

@@ -170,7 +170,8 @@ jobs:
         if: steps.janela.outputs.should_run == 'true'
         run: |
           set -euo pipefail
-          python scripts/cotacoes.py compactar --arquivo "$DATA_ASSET_NAME"
+          docker compose run --rm --entrypoint python app \
+            scripts/cotacoes.py compactar --arquivo "$DATA_ASSET_NAME"
           ls -lh "$DATA_ASSET_NAME"
 
       - name: Publicar pacote na release fixa

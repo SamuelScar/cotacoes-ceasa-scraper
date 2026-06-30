@@ -3,8 +3,8 @@
 ## Comandos principais
 
 Estes sao os comandos usados na operacao normal. A pasta `data/` fica fora
-do Git e pode ser empacotada ou restaurada com `python scripts/cotacoes.py`
-quando necessario.
+do Git e pode ser empacotada ou restaurada pelo container com
+`scripts/cotacoes.py` quando necessario.
 
 | Comando | Operacao |
 | --- | --- |
@@ -174,13 +174,15 @@ asset da release `latest-data`, com o nome `ceasa-data-latest.tar.gz`.
 Use o script abaixo para compactar ou restaurar esse pacote:
 
 ```bash
-python scripts/cotacoes.py compactar
-python scripts/cotacoes.py descompactar
-python scripts/cotacoes.py compactar --arquivo ceasa-data-latest.tar.gz
-python scripts/cotacoes.py descompactar --arquivo ceasa-data-latest.tar.gz
+docker compose run --rm --entrypoint python app scripts/cotacoes.py compactar
+docker compose run --rm --entrypoint python app scripts/cotacoes.py descompactar
+docker compose run --rm --entrypoint python app scripts/cotacoes.py compactar --arquivo ceasa-data-latest.tar.gz
+docker compose run --rm --entrypoint python app scripts/cotacoes.py descompactar --arquivo ceasa-data-latest.tar.gz
 ```
 
-O script faz somente a operacao de pacote:
+O script deve ser executado dentro do container `app`, porque usa o Python,
+`tar` e `pigz` instalados na imagem. Ele recusa execucao direta no host e faz
+somente a operacao de pacote:
 
 1. cria um lock para impedir duas operacoes simultaneas no pacote;
 2. em `compactar`, compacta `data/` em um `.tar.gz.tmp` com `tar` e `pigz`;
@@ -189,8 +191,7 @@ O script faz somente a operacao de pacote:
 5. em `descompactar`, restaura a pasta `data/` a partir do `.tar.gz` informado.
 
 O `pigz` roda dentro do container e usa multiplas threads para compactar e
-descompactar mais rapido. O host precisa apenas de Python, Docker e Docker
-Compose.
+descompactar mais rapido. O host precisa apenas de Docker e Docker Compose.
 
 Para inspecionar manualmente o pacote sem descompactar:
 
@@ -211,7 +212,7 @@ Fluxo executado pelo workflow:
 3. construir a imagem Docker;
 4. baixar e descompactar `ceasa-data-latest.tar.gz` da release fixa, se existir;
 5. executar `docker compose run --rm tudo`;
-6. compactar `data/` novamente com `python scripts/cotacoes.py compactar`;
+6. compactar `data/` novamente pelo container com `scripts/cotacoes.py compactar`;
 7. substituir o asset `ceasa-data-latest.tar.gz` na release `latest-data`;
 8. enviar o ultimo relatorio por e-mail se os secrets SMTP estiverem presentes.
 
