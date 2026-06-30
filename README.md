@@ -70,11 +70,20 @@ um processo Python permanente.
 O workflow `.github/workflows/scraper-release.yml` roda em horarios agendados e
 tambem pode ser disparado manualmente. A cada execucao valida, ele:
 
-1. restaura `ceasa-data-latest.tar.gz` da release `latest-data`, quando existir;
+1. restaura o pacote completo do OneDrive quando configurado, ou
+   `ceasa-data-latest.tar.gz` da release `latest-data` como fallback;
 2. executa `docker compose run --rm tudo`;
-3. compacta a pasta `data/`;
-4. publica novamente o asset `ceasa-data-latest.tar.gz` na mesma release;
-5. envia o ultimo relatorio por e-mail quando os secrets SMTP estao configurados.
+3. mesmo se o scraper terminar com erro, tenta compactar e salvar os dados;
+4. salva o pacote completo com SQLite no OneDrive quando configurado;
+5. publica o pacote enxuto sem SQLite como `ceasa-data-latest.tar.gz`;
+6. valida se ao menos um pacote foi salvo fora do runner;
+7. anexa ao relatorio o status de restauracao, backup e publicacao;
+8. envia o ultimo relatorio por e-mail quando os secrets SMTP estao configurados.
+
+O pacote da release preserva raws, cache e relatorios, mas nao inclui
+`data/cotacoes.sqlite`. O pacote do OneDrive inclui o SQLite.
+Se o OneDrive ainda nao estiver configurado, o workflow segue pelo fluxo da
+release do GitHub e nao bloqueia a coleta.
 
 Esse fluxo e o crawler oficial do projeto neste momento. Um servico local
 `docker compose up crawler` fica reservado para uma evolucao futura, caso sejam
@@ -107,7 +116,7 @@ do raw ativo mais antigo. `COTACOES_TARGET_DATE` manual tem prioridade e
 
 - `data/raw/<fonte>/`: raws ativos usados no reprocessamento.
 - `data/raw/<fonte>/old/`: versoes anteriores geradas no mesmo dia.
-- `data/cotacoes.sqlite`: banco consolidado.
+- `data/cotacoes.sqlite`: banco consolidado local, regeneravel a partir dos raws.
 - `data/relatorios/<fluxo>_<data_e_hora>.md`: relatorio completo de cada comando.
 
 O processamento ignora `old/` e arquivos `.zip`. Quando o schema ou uma regra

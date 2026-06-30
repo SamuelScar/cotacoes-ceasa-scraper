@@ -12,6 +12,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_PACKAGE_FILE = PROJECT_ROOT / "ceasa-data-latest.tar.gz"
 LOCK_FILE = PROJECT_ROOT / ".cotacoes-data.lock"
+PACKAGE_EXCLUDES = (
+    "data/cotacoes.sqlite",
+    "data/cotacoes.sqlite-shm",
+    "data/cotacoes.sqlite-wal",
+)
 
 
 class CommandError(RuntimeError):
@@ -27,9 +32,9 @@ def main() -> int:
 
     try:
         if args.comando == "compactar":
-            compact_data(package_file)
+            compact_data(package_file, include_sqlite=args.incluir_sqlite)
         elif args.comando == "descompactar":
-            extract_data(package_file)
+            extract_data(package_file, include_sqlite=args.incluir_sqlite)
         else:
             parser.error(f"comando invalido: {args.comando}")
     except Exception as error:
@@ -58,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Arquivo .tar.gz usado na operacao. "
             "Padrao: ceasa-data-latest.tar.gz."
         ),
+    )
+    parser.add_argument(
+        "--incluir-sqlite",
+        action="store_true",
+        help="Inclui ou restaura o SQLite no pacote de dados.",
     )
     return parser
 
@@ -120,16 +130,24 @@ def release_lock(lock_fd: int) -> None:
             pass
 
 
-def compact_data(package_file: Path) -> None:
+def compact_data(package_file: Path, include_sqlite: bool) -> None:
     if not DATA_DIR.exists():
         raise CommandError("data/ nao existe para compactar.")
 
     temp_package_file = package_file.with_name(f"{package_file.name}.tmp")
     remove_file(temp_package_file)
+    exclude_args = [] if include_sqlite else build_exclude_args(PACKAGE_EXCLUDES)
 
     print(f"Compactando data/ em {temp_package_file.name} com pigz.")
     run_tar(
-        ["-I", "pigz", "-cf", temp_package_file.name, "data"],
+        [
+            "-I",
+            "pigz",
+            *exclude_args,
+            "-cf",
+            temp_package_file.name,
+            "data",
+        ],
     )
 
     print(f"Validando {temp_package_file.name}.")
@@ -142,14 +160,19 @@ def compact_data(package_file: Path) -> None:
     print(f"Pacote atualizado: {package_file.name}")
 
 
-def extract_data(package_file: Path) -> None:
+def extract_data(package_file: Path, include_sqlite: bool) -> None:
     if not package_file.exists():
         raise CommandError(f"Arquivo nao encontrado: {package_file}")
 
+    remove_package_excluded_files()
     print(f"Descompactando {package_file.name} com pigz.")
     run_tar(
         ["-I", "pigz", "-xf", package_file.name],
     )
+
+    if not include_sqlite:
+        remove_package_excluded_files()
+
     print("Pasta data/ restaurada.")
 
 
@@ -158,6 +181,15 @@ def remove_file(path: Path) -> None:
         path.unlink()
     except FileNotFoundError:
         pass
+
+
+def build_exclude_args(patterns: tuple[str, ...]) -> list[str]:
+    return [f"--exclude={pattern}" for pattern in patterns]
+
+
+def remove_package_excluded_files() -> None:
+    for pattern in PACKAGE_EXCLUDES:
+        remove_file(PROJECT_ROOT / pattern)
 
 
 def run_tar(tar_args: list[str], stdout=None) -> None:

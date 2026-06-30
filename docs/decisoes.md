@@ -26,10 +26,14 @@ operacao do projeto.
 
 - A execucao continua atual e feita por GitHub Actions, usando
   `.github/workflows/scraper-release.yml`.
-- O estado entre rodadas fica no asset `ceasa-data-latest.tar.gz` da release
-  fixa `latest-data`.
+- Raws, cache e relatorios entre rodadas ficam no pacote enxuto
+  `ceasa-data-latest.tar.gz` da release fixa `latest-data`.
 - Cada rodada restaura `data/`, executa `docker compose run --rm tudo`, compacta
   a pasta e publica novamente o asset.
+- O SQLite nao entra no pacote publicado no GitHub Release; ele entra no pacote
+  completo salvo no OneDrive quando esse backup esta configurado.
+- Quando configurado, o workflow salva uma copia do pacote no OneDrive por
+  `rclone` antes de publicar o asset enxuto na release.
 - Um servico local `crawler` permanente nao faz parte da operacao atual.
 
 ## Acesso HTTP

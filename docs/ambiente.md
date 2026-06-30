@@ -26,14 +26,47 @@ em `data/` permanecem na maquina.
 
 O crawler atual roda no GitHub Actions pelo workflow
 `.github/workflows/scraper-release.yml`. Ele cria um `.env` temporario no runner,
-restaura `data/` a partir da release `latest-data`, executa o servico `tudo` e
-republica `ceasa-data-latest.tar.gz`.
+restaura `data/` primeiro pelo OneDrive quando configurado, usa a release
+`latest-data` como fallback, executa o servico `tudo` e tenta salvar os dados
+gerados antes de encerrar a rodada.
+
+O pacote do GitHub Release nao inclui `data/cotacoes.sqlite`; ele guarda raws,
+cache e relatorios. O pacote do OneDrive inclui o SQLite para preservar o banco
+consolidado entre execucoes.
 
 As variaveis usadas pelo agendamento ficam no environment `Crowler`, em
 **Settings > Environments > Crowler > Environment variables**. O disparo manual
 tambem aceita os mesmos valores como campos opcionais em **Run workflow**.
 Secrets SMTP sao opcionais e ficam em **Environment secrets**, apenas para envio
 de relatorio por e-mail.
+
+Para manter uma copia no OneDrive fora do GitHub, configure no environment
+`Crowler`:
+
+| Chave | Tipo | Uso |
+| --- | --- | --- |
+| `DATA_ONEDRIVE_BACKUP_ENABLED` | Variable | Use `true` para ativar o backup no OneDrive |
+| `DATA_ONEDRIVE_ASSET_NAME` | Variable | Nome do pacote completo. Padrao: `ceasa-data-full-latest.tar.gz` |
+| `DATA_ONEDRIVE_REMOTE` | Variable | Nome do remote no `rclone`. Padrao: `onedrive` |
+| `DATA_ONEDRIVE_DIR` | Variable | Diretorio base no OneDrive. Padrao: `cotacoes-ceasa` |
+| `RCLONE_CONFIG` | Secret | Conteudo do arquivo `rclone.conf` com acesso ao OneDrive |
+
+O workflow instala `rclone` no runner, grava o `RCLONE_CONFIG` temporariamente e
+sincroniza o pacote em `latest/` e `history/` dentro de `DATA_ONEDRIVE_DIR`.
+Se `DATA_ONEDRIVE_BACKUP_ENABLED` estiver ausente, estiver `false` ou o secret
+`RCLONE_CONFIG` nao existir, o workflow nao tenta usar OneDrive e segue pelo
+fluxo antigo com GitHub Release.
+
+Para gerar o secret `RCLONE_CONFIG`, configure o remote uma vez na sua maquina:
+
+```bash
+rclone config
+rclone config file
+```
+
+O remote precisa ter o mesmo nome de `DATA_ONEDRIVE_REMOTE`, por padrao
+`onedrive`. Depois copie o conteudo do arquivo `rclone.conf` indicado pelo
+comando e salve em **Environment secrets > RCLONE_CONFIG**.
 
 ## Variaveis locais
 

@@ -5,7 +5,7 @@
 | Pendencia | Resumo |
 | --- | --- |
 | [Enviar relatorio automatico uma vez ao dia](#enviar-relatorio-automatico-uma-vez-ao-dia) | Reduzir os e-mails do workflow para apenas um relatorio diario consolidado. |
-| [Blindar publicacao do pacote](#blindar-publicacao-do-pacote) | Evitar substituir o pacote da release quando a rodada tiver falha relevante. |
+| [Criterios de qualidade da rodada](#criterios-de-qualidade-da-rodada) | Definir quando uma rodada com falha parcial deve ser marcada como invalida. |
 | [Desempenho do processamento de raws](#desempenho-do-processamento-de-raws) | Medir e reduzir o custo do processamento, principalmente na extracao de PDFs e nas fontes mais lentas. |
 | [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
 | [Migrar documentacao extensa para GitHub Wiki](#migrar-documentacao-extensa-para-github-wiki) | Reorganizar guias longos na Wiki quando o repositorio puder ficar publico. |
@@ -29,23 +29,21 @@ Uma forma simples de implementar e criar uma janela diaria especifica para o
 email, ou salvar um marcador diario na propria release para saber se o relatorio
 ja foi enviado.
 
-## Blindar publicacao do pacote
+## Criterios de qualidade da rodada
 
-O workflow atual publica novamente `ceasa-data-latest.tar.gz` ao final da
-execucao. Antes de ativar mais paralelismo ou aumentar a frequencia, vale
-endurecer as regras de publicacao para evitar substituir um pacote bom por uma
-rodada com falha relevante.
+O workflow ja tenta salvar o que foi processado mesmo quando uma etapa posterior
+falha: o pacote completo vai para o OneDrive, o pacote enxuto vai para a release
+e a validacao final falha somente depois das tentativas de salvamento.
+
+Ainda falta definir criterios de qualidade para decidir quando uma rodada com
+falha parcial deve ser considerada invalida para consumo.
 
 Comportamento esperado:
 
 1. detectar no relatorio ou na saida quando houve falha de fonte;
 2. diferenciar falha parcial aproveitavel de falha que invalida a rodada;
-3. bloquear a publicacao quando o pacote novo nao representar melhoria confiavel;
-4. preservar o asset anterior da release quando a publicacao for bloqueada;
-5. registrar no log do workflow o motivo da decisao.
-
-Essa pendencia nao impede o crawler atual de funcionar, mas reduz risco
-operacional quando a coleta ficar mais frequente.
+3. registrar no log do workflow se a rodada e valida, parcial ou invalida;
+4. enviar essa classificacao no relatorio.
 
 ## Desempenho do processamento de raws
 

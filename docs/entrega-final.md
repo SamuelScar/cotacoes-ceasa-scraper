@@ -14,6 +14,7 @@ apresentacao ou envio final.
 | Progresso de execucao com Rich | Feita | Comandos longos passaram a exibir progresso por fonte, categoria e arquivo. |
 | Dependencias centralizadas | Feita | O projeto passou a usar `pyproject.toml` como fonte unica de dependencias. |
 | Script de pacote de dados | Feita | `scripts/cotacoes.py` passou a compactar e descompactar `ceasa-data-latest.tar.gz` com `tar` e `pigz`. |
+| Backup externo do pacote | Feita | O workflow salva o pacote completo no OneDrive e publica no GitHub apenas o pacote enxuto. |
 | Otimizacoes de processamento | Feita | Raws ja persistidos podem ser ignorados, textos de PDFs passaram a ser cacheados e relatorios ganharam metricas de desempenho. |
 
 ## 1. Crawler por workflow e release fixa
@@ -160,6 +161,8 @@ formato de pacote publicado na release fixa.
   substituicao segura do pacote final.
 - Automatizada a restauracao de `ceasa-data-latest.tar.gz` para `data/`.
 - Mantido o uso de `pigz` com `tar -I pigz` dentro do container.
+- Adicionado `--incluir-sqlite` para permitir pacote completo no OneDrive,
+  mantendo o pacote padrao sem SQLite para reduzir tamanho na release.
 
 ### Arquivos relacionados
 
@@ -179,7 +182,39 @@ formato de pacote publicado na release fixa.
 - O script nao executa mais o scraper; ele apenas compacta ou descompacta o
   pacote de dados.
 
-## 6. Otimizacoes de processamento
+## 6. Backup externo do pacote
+
+### Objetivo
+
+Manter uma copia automatica do pacote fora do GitHub antes de substituir o asset
+da release fixa.
+
+### O que foi feito
+
+- Criada a action `.github/actions/backup-release-data` para enviar o pacote ao
+  OneDrive com `rclone` antes da publicacao na release.
+- O backup externo mantem um pacote completo com SQLite em `latest/` e uma copia
+  historica em `history/`.
+- A restauracao passou a tentar primeiro o pacote completo do OneDrive e usar o
+  pacote enxuto da release como fallback.
+- O workflow passou a continuar para compactacao e salvamento mesmo quando o
+  scraper termina com erro, validando no fim se algum pacote saiu do runner.
+- O ultimo relatorio em `data/relatorios` passou a receber uma secao com os
+  resultados das etapas de restauracao, backup, publicacao e validacao.
+- A publicacao na release valida o tamanho do pacote antes de remover qualquer
+  asset antigo, evitando perda quando o GitHub recusar arquivos grandes.
+- O pacote da release continua sem SQLite para reduzir tamanho.
+
+### Arquivos relacionados
+
+- `.github/actions/backup-release-data/action.yml`
+- `.github/actions/restore-release-data/action.yml`
+- `.github/actions/publish-release-data/action.yml`
+- `.github/workflows/scraper-release.yml`
+- `docs/ambiente.md`
+- `docs/comandos.md`
+
+## 7. Otimizacoes de processamento
 
 ### Objetivo
 
@@ -218,7 +253,7 @@ dos parsers nem a estrutura dos dados persistidos.
 - O paralelismo de processamento ficou anotado como possibilidade futura, mas
   nao foi implementado nesta rodada.
 
-## 7. Pipeline de download e persistencia
+## 8. Pipeline de download e persistencia
 
 ### Objetivo
 

@@ -1,0 +1,89 @@
+name: Backup do pacote no OneDrive
+description: Envia ou restaura o pacote de dados no OneDrive usando rclone.
+
+inputs:
+  mode:
+    required: true
+    description: Operacao desejada: upload ou download.
+  asset-name:
+    required: true
+    description: Nome do pacote compactado.
+  rclone-config:
+    required: true
+    description: Conteudo do arquivo rclone.conf.
+  rclone-remote:
+    required: false
+    default: "onedrive"
+    description: Nome do remote configurado no rclone.
+  backup-dir:
+    required: false
+    default: "cotacoes-ceasa"
+    description: Diretorio base do backup dentro do OneDrive.
+
+runs:
+  using: composite
+  steps:
+    - name: Sincronizar pacote
+      shell: bash
+      env:
+        RCLONE_CONFIG_CONTENT: ${{ inputs.rclone-config }}
+      run: |
+        set -euo pipefail
+
+        mode="${{ inputs.mode }}"
+        asset_name="${{ inputs.asset-name }}"
+        rclone_remote="${{ inputs.rclone-remote }}"
+        backup_dir="${{ inputs.backup-dir }}"
+
+        if [ "$mode" != "upload" ] && [ "$mode" != "download" ]; then
+          echo "Modo invalido: $mode"
+          exit 1
+        fi
+
+        if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+          echo "RCLONE_CONFIG nao configurado."
+          exit 1
+        fi
+
+        if ! command -v rclone >/dev/null 2>&1; then
+          sudo apt-get update
+          sudo apt-get install -y rclone
+        fi
+
+        rclone_config_dir="${RUNNER_TEMP}/rclone"
+        mkdir -p "$rclone_config_dir"
+        chmod 700 "$rclone_config_dir"
+        printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "${rclone_config_dir}/rclone.conf"
+        chmod 600 "${rclone_config_dir}/rclone.conf"
+        export RCLONE_CONFIG="${rclone_config_dir}/rclone.conf"
+
+        backup_dir="${backup_dir%/}"
+        latest_path="${backup_dir}/latest/${asset_name}"
+
+        if [ "$mode" = "download" ]; then
+          echo "Restaurando ${rclone_remote}:${latest_path}."
+          rclone copyto "${rclone_remote}:${latest_path}" "$asset_name" --progress
+          ls -lh "$asset_name"
+          exit 0
+        fi
+
+        if [ ! -f "$asset_name" ]; then
+          echo "Arquivo nao encontrado para backup: $asset_name"
+          exit 1
+        fi
+
+        timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+        asset_stem="${asset_name%.tar.gz}"
+        history_name="${asset_stem}-${timestamp}-${GITHUB_RUN_ID}.tar.gz"
+        history_path="${backup_dir}/history/${history_name}"
+
+        echo "Enviando backup historico para ${rclone_remote}:${history_path}."
+        rclone mkdir "${rclone_remote}:${backup_dir}/history"
+        rclone copyto "$asset_name" "${rclone_remote}:${history_path}" --progress
+
+        echo "Atualizando backup mais recente em ${rclone_remote}:${latest_path}."
+        rclone mkdir "${rclone_remote}:${backup_dir}/latest"
+        rclone copyto "${rclone_remote}:${history_path}" "${rclone_remote}:${latest_path}" --progress \
+          || rclone copyto "$asset_name" "${rclone_remote}:${latest_path}" --progress
+
+        echo "Backup do OneDrive atualizado."

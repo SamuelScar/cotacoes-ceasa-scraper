@@ -1,5 +1,5 @@
-name: Restaurar pacote de dados da release
-description: Baixa e descompacta o asset atual da release fixa, quando existir.
+name: Restaurar pacote de dados
+description: Baixa e descompacta o pacote do OneDrive ou da release fixa.
 
 inputs:
   release-tag:
@@ -7,27 +7,106 @@ inputs:
     description: Tag da release fixa.
   asset-name:
     required: true
-    description: Nome do asset compactado.
+    description: Nome do asset enxuto da release.
+  backup-asset-name:
+    required: false
+    default: ""
+    description: Nome do pacote completo salvo no OneDrive.
+  backup-enabled:
+    required: false
+    default: "false"
+    description: Define se deve tentar restaurar do OneDrive quando a release falhar.
+  rclone-config:
+    required: false
+    default: ""
+    description: Conteudo do arquivo rclone.conf.
+  rclone-remote:
+    required: false
+    default: "onedrive"
+    description: Nome do remote configurado no rclone.
+  backup-dir:
+    required: false
+    default: "cotacoes-ceasa"
+    description: Diretorio base do backup dentro do OneDrive.
 
 runs:
   using: composite
   steps:
     - name: Restaurar data
       shell: bash
+      env:
+        RCLONE_CONFIG_CONTENT: ${{ inputs.rclone-config }}
       run: |
         set -euo pipefail
+        restored=false
+        backup_asset_name="${{ inputs.backup-asset-name }}"
 
-        if gh release view "${{ inputs.release-tag }}" >/dev/null 2>&1; then
+        if [ -z "$backup_asset_name" ]; then
+          backup_asset_name="${{ inputs.asset-name }}"
+        fi
+
+        if [ "${{ inputs.backup-enabled }}" = "true" ]; then
+          echo "Tentando restaurar pacote completo pelo OneDrive."
+          rclone_remote="${{ inputs.rclone-remote }}"
+          backup_dir="${{ inputs.backup-dir }}"
+
+          if [ -z "$RCLONE_CONFIG_CONTENT" ] || [ -z "$rclone_remote" ] || [ -z "$backup_dir" ]; then
+            echo "Backup OneDrive incompleto. A release sera tentada como fallback."
+            rclone_ready=false
+          else
+            rclone_ready=true
+          fi
+
+          if [ "${rclone_ready:-false}" = "true" ] && ! command -v rclone >/dev/null 2>&1; then
+            if ! sudo apt-get update || ! sudo apt-get install -y rclone; then
+              echo "Nao foi possivel instalar rclone. A release sera tentada como fallback."
+              rclone_ready=false
+            fi
+          fi
+
+          if [ "${rclone_ready:-false}" = "true" ]; then
+            rclone_config_dir="${RUNNER_TEMP}/rclone"
+            mkdir -p "$rclone_config_dir"
+            chmod 700 "$rclone_config_dir"
+            printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "${rclone_config_dir}/rclone.conf"
+            chmod 600 "${rclone_config_dir}/rclone.conf"
+            export RCLONE_CONFIG="${rclone_config_dir}/rclone.conf"
+
+            backup_dir="${backup_dir%/}"
+            latest_path="${backup_dir}/latest/${backup_asset_name}"
+
+            if rclone copyto "${rclone_remote}:${latest_path}" "$backup_asset_name" --progress; then
+              if docker compose run --rm --entrypoint python app \
+                scripts/cotacoes.py descompactar --incluir-sqlite --arquivo "$backup_asset_name"; then
+                restored=true
+              else
+                echo "Falha ao descompactar pacote completo do OneDrive. A release sera tentada como fallback."
+                rm -f "$backup_asset_name"
+              fi
+            else
+              echo "Backup OneDrive nao encontrado ou indisponivel. A release sera tentada como fallback."
+            fi
+          fi
+        fi
+
+        if [ "$restored" = "false" ] && gh release view "${{ inputs.release-tag }}" >/dev/null 2>&1; then
           echo "Release ${{ inputs.release-tag }} encontrada. Tentando baixar ${{ inputs.asset-name }}."
           if gh release download "${{ inputs.release-tag }}" --pattern "${{ inputs.asset-name }}" --clobber; then
             echo "Pacote atual baixado."
-            docker compose run --rm --entrypoint python app \
-              scripts/cotacoes.py descompactar --arquivo "${{ inputs.asset-name }}"
+            if docker compose run --rm --entrypoint python app \
+              scripts/cotacoes.py descompactar --arquivo "${{ inputs.asset-name }}"; then
+              restored=true
+            else
+              echo "Falha ao descompactar asset da release. A coleta seguira sem data/ restaurado."
+              rm -f "${{ inputs.asset-name }}"
+            fi
           else
             echo "Asset ${{ inputs.asset-name }} ainda nao existe. A coleta comecara sem data/ restaurado."
           fi
         else
-          echo "Release ${{ inputs.release-tag }} ainda nao existe. Ela sera criada no final."
+          if [ "$restored" = "false" ]; then
+            echo "Release ${{ inputs.release-tag }} ainda nao existe. Ela sera criada no final."
+          fi
         fi
 
         mkdir -p data

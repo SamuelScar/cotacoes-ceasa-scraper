@@ -56,6 +56,10 @@ jobs:
     env:
       DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'latest-data' }}
       DATA_ASSET_NAME: ${{ vars.DATA_ASSET_NAME || 'ceasa-data-latest.tar.gz' }}
+      DATA_ONEDRIVE_ASSET_NAME: ${{ vars.DATA_ONEDRIVE_ASSET_NAME || 'ceasa-data-full-latest.tar.gz' }}
+      DATA_ONEDRIVE_BACKUP_ENABLED: ${{ vars.DATA_ONEDRIVE_BACKUP_ENABLED || 'false' }}
+      DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
+      DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
       COTACOES_TARGET_DATE: ${{ github.event_name == 'workflow_dispatch' && inputs.target_date || vars.COTACOES_TARGET_DATE || '' }}
       COTACOES_QUOTES_BACK: ${{ github.event_name == 'workflow_dispatch' && inputs.quotes_back || vars.COTACOES_QUOTES_BACK || '100' }}
       COTACOES_INCREMENTAL_HISTORY: ${{ github.event_name == 'workflow_dispatch' && inputs.incremental_history || vars.COTACOES_INCREMENTAL_HISTORY || 'false' }}
@@ -131,11 +135,35 @@ jobs:
           docker --version
           docker compose version
 
+      - name: Resolver backup OneDrive
+        id: onedrive_config
+        if: steps.janela.outputs.should_run == 'true'
+        env:
+          RCLONE_CONFIG_PRESENT: ${{ secrets.RCLONE_CONFIG != '' && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+
+          onedrive_enabled=false
+
+          if [ "$DATA_ONEDRIVE_BACKUP_ENABLED" = "true" ]; then
+            if [ "$RCLONE_CONFIG_PRESENT" = "true" ]; then
+              onedrive_enabled=true
+              echo "Backup OneDrive ativo."
+            else
+              echo "Backup OneDrive solicitado, mas RCLONE_CONFIG nao foi configurado. O workflow seguira sem OneDrive."
+            fi
+          else
+            echo "Backup OneDrive desativado. O workflow seguira pelo fluxo GitHub Release."
+          fi
+
+          echo "enabled=${onedrive_enabled}" >> "$GITHUB_OUTPUT"
+
       - name: Build da imagem Docker
         if: steps.janela.outputs.should_run == 'true'
         run: docker compose build
 
-      - name: Restaurar pacote atual da release
+      - name: Restaurar pacote atual
+        id: restaurar_data
         if: steps.janela.outputs.should_run == 'true'
         uses: ./.github/actions/restore-release-data
         env:
@@ -143,14 +171,22 @@ jobs:
         with:
           release-tag: ${{ env.DATA_RELEASE_TAG }}
           asset-name: ${{ env.DATA_ASSET_NAME }}
-
+          backup-asset-name: ${{ env.DATA_ONEDRIVE_ASSET_NAME }}
+          backup-enabled: ${{ steps.onedrive_config.outputs.enabled }}
+          rclone-config: ${{ secrets.RCLONE_CONFIG }}
+          rclone-remote: ${{ env.DATA_ONEDRIVE_REMOTE }}
+          backup-dir: ${{ env.DATA_ONEDRIVE_DIR }}
 
       - name: Executar scraper
+        id: executar_scraper
         if: steps.janela.outputs.should_run == 'true'
+        continue-on-error: true
         run: docker compose run --rm tudo
 
       - name: Conferir pasta data gerada
+        id: conferir_data
         if: steps.janela.outputs.should_run == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
 
@@ -166,8 +202,32 @@ jobs:
           echo "Relatorios recentes:"
           find data/relatorios -maxdepth 1 -type f -printf "%TY-%Tm-%Td %TH:%TM %p\n" 2>/dev/null | sort | tail -n 10 || true
 
-      - name: Compactar pacote de dados
+      - name: Compactar pacote completo para OneDrive
+        id: pacote_onedrive
+        if: steps.janela.outputs.should_run == 'true' && steps.onedrive_config.outputs.enabled == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          docker compose run --rm --entrypoint python app \
+            scripts/cotacoes.py compactar --incluir-sqlite --arquivo "$DATA_ONEDRIVE_ASSET_NAME"
+          ls -lh "$DATA_ONEDRIVE_ASSET_NAME"
+
+      - name: Salvar backup do pacote no OneDrive
+        id: backup_onedrive
+        if: steps.janela.outputs.should_run == 'true' && steps.onedrive_config.outputs.enabled == 'true' && steps.pacote_onedrive.outcome == 'success'
+        continue-on-error: true
+        uses: ./.github/actions/backup-release-data
+        with:
+          mode: upload
+          asset-name: ${{ env.DATA_ONEDRIVE_ASSET_NAME }}
+          rclone-config: ${{ secrets.RCLONE_CONFIG }}
+          rclone-remote: ${{ env.DATA_ONEDRIVE_REMOTE }}
+          backup-dir: ${{ env.DATA_ONEDRIVE_DIR }}
+
+      - name: Compactar pacote enxuto para GitHub
+        id: pacote_github
         if: steps.janela.outputs.should_run == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
           docker compose run --rm --entrypoint python app \
@@ -175,13 +235,129 @@ jobs:
           ls -lh "$DATA_ASSET_NAME"
 
       - name: Publicar pacote na release fixa
-        if: steps.janela.outputs.should_run == 'true'
+        id: publicar_github
+        if: steps.janela.outputs.should_run == 'true' && steps.pacote_github.outcome == 'success'
+        continue-on-error: true
         uses: ./.github/actions/publish-release-data
         env:
           GH_TOKEN: ${{ github.token }}
         with:
           release-tag: ${{ env.DATA_RELEASE_TAG }}
           asset-name: ${{ env.DATA_ASSET_NAME }}
+
+      - name: Validar salvamento da rodada
+        id: validar_salvamento
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          scraper_outcome="${{ steps.executar_scraper.outcome }}"
+          onedrive_outcome="${{ steps.backup_onedrive.outcome }}"
+          github_outcome="${{ steps.publicar_github.outcome }}"
+          saved=false
+
+          if [ "${{ steps.onedrive_config.outputs.enabled }}" = "true" ] && [ "$onedrive_outcome" = "success" ]; then
+            saved=true
+            echo "Pacote completo salvo no OneDrive."
+          fi
+
+          if [ "$github_outcome" = "success" ]; then
+            saved=true
+            echo "Pacote enxuto publicado na release do GitHub."
+          fi
+
+          if [ "$saved" != "true" ]; then
+            echo "Nenhum pacote foi salvo fora do runner."
+            exit 1
+          fi
+
+          if [ "$scraper_outcome" != "success" ]; then
+            echo "O scraper terminou com falha, mas as tentativas de salvamento foram executadas."
+            exit 1
+          fi
+
+          echo "Rodada processada e salva."
+
+      - name: Registrar salvamento no relatorio
+        if: always() && steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ -d data ]; then
+            sudo chown "$(id -u):$(id -g)" data || true
+          fi
+
+          if [ -d data/relatorios ]; then
+            sudo chown -R "$(id -u):$(id -g)" data/relatorios || true
+          fi
+
+          latest_report=""
+          if [ -d data/relatorios ]; then
+            latest_report=$(find data/relatorios -maxdepth 1 -type f -name "*.md" -printf "%T@ %p\n" | sort -n | tail -n 1 | cut -d " " -f 2-)
+          fi
+
+          if [ -z "$latest_report" ]; then
+            mkdir -p data/relatorios
+            timestamp=$(date -u +%Y%m%d_%H%M%S)
+            latest_report="data/relatorios/workflow_salvamento_${timestamp}.md"
+            {
+              echo "# Salvamento do workflow"
+              echo
+              echo "Nenhum relatorio do scraper foi encontrado. Este relatorio foi criado pelo workflow para registrar as etapas de salvamento."
+            } > "$latest_report"
+          fi
+
+          onedrive_size="nao gerado"
+          if [ -f "$DATA_ONEDRIVE_ASSET_NAME" ]; then
+            onedrive_size=$(du -h "$DATA_ONEDRIVE_ASSET_NAME" | cut -f 1)
+          fi
+
+          github_size="nao gerado"
+          if [ -f "$DATA_ASSET_NAME" ]; then
+            github_size=$(du -h "$DATA_ASSET_NAME" | cut -f 1)
+          fi
+
+          saved_outside_runner="nao"
+          if [ "${{ steps.backup_onedrive.outcome }}" = "success" ] || [ "${{ steps.publicar_github.outcome }}" = "success" ]; then
+            saved_outside_runner="sim"
+          fi
+
+          {
+            echo
+            echo "## Salvamento e backups do workflow"
+            echo
+            echo "| Item | Valor |"
+            echo "| --- | --- |"
+            echo "| Run ID | ${GITHUB_RUN_ID} |"
+            echo "| Run attempt | ${GITHUB_RUN_ATTEMPT} |"
+            echo "| Evento | ${GITHUB_EVENT_NAME} |"
+            echo "| Ref | ${GITHUB_REF} |"
+            echo "| Commit | ${GITHUB_SHA} |"
+            echo "| Pacote salvo fora do runner | ${saved_outside_runner} |"
+            echo "| OneDrive solicitado | ${DATA_ONEDRIVE_BACKUP_ENABLED} |"
+            echo "| OneDrive ativo efetivo | ${{ steps.onedrive_config.outputs.enabled }} |"
+            echo "| OneDrive remote | ${DATA_ONEDRIVE_REMOTE} |"
+            echo "| OneDrive diretorio | ${DATA_ONEDRIVE_DIR} |"
+            echo "| Pacote completo OneDrive | ${DATA_ONEDRIVE_ASSET_NAME} |"
+            echo "| Tamanho pacote OneDrive | ${onedrive_size} |"
+            echo "| Pacote enxuto GitHub | ${DATA_ASSET_NAME} |"
+            echo "| Tamanho pacote GitHub | ${github_size} |"
+            echo "| Release tag | ${DATA_RELEASE_TAG} |"
+            echo
+            echo "| Etapa | Resultado |"
+            echo "| --- | --- |"
+            echo "| Resolver backup OneDrive | ${{ steps.onedrive_config.outcome }} |"
+            echo "| Restaurar pacote atual | ${{ steps.restaurar_data.outcome }} |"
+            echo "| Executar scraper | ${{ steps.executar_scraper.outcome }} |"
+            echo "| Conferir data/ | ${{ steps.conferir_data.outcome }} |"
+            echo "| Compactar pacote completo OneDrive | ${{ steps.pacote_onedrive.outcome }} |"
+            echo "| Salvar backup OneDrive | ${{ steps.backup_onedrive.outcome }} |"
+            echo "| Compactar pacote enxuto GitHub | ${{ steps.pacote_github.outcome }} |"
+            echo "| Publicar release GitHub | ${{ steps.publicar_github.outcome }} |"
+            echo "| Validar salvamento | ${{ steps.validar_salvamento.outcome }} |"
+          } >> "$latest_report"
+
+          echo "Salvamento registrado no relatorio: $latest_report"
 
       - name: Enviar relatorio por email
         if: always() && steps.janela.outputs.should_run == 'true'
