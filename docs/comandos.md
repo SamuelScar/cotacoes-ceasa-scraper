@@ -39,7 +39,11 @@ texto e tambem fica registrado no relatorio.
 Cada comando gera um relatorio em `data/relatorios/`, inclusive quando termina
 com erro ou e interrompido. O arquivo registra somente as fases executadas e
 inclui configuracoes sem credenciais, duracao, resultados por fonte, alertas,
-erros e historico cronologico.
+erros e historico cronologico. No `tudo` com pipeline, o relatorio inclui uma
+secao de desempenho com tempo total, janela de downloads, tempo acumulado de
+downloads, tempo acumulado de persistencia, estimativa sem sobreposicao,
+ganho estimado por sobreposicao, espera na fila, backlog maximo e raws por
+minuto.
 Por padrao, o historico nao registra uma linha `OK` para cada raw processado;
 os totais por fonte continuam no resumo. Use `--raw-detail-report` quando
 precisar auditar arquivo por arquivo.
@@ -125,7 +129,9 @@ docker compose run --rm app --download-and-process --workers 3
 
 Mesmo com `--workers`, cada fonte continua sequencial internamente. No `tudo`,
 a persistencia pode comecar antes de todos os downloads terminarem, mas o
-SQLite continua sem escrita concorrente.
+SQLite continua sem escrita concorrente. Para comparar desempenho entre
+rodadas, use no relatorio as secoes `Desempenho do pipeline`, `Desempenho por
+fonte no pipeline` e `Desempenho do processamento <fonte>`.
 
 Para usar os atalhos `baixar` e `tudo`, configure `COTACOES_WORKERS=3` no
 `.env` e execute os comandos normais.

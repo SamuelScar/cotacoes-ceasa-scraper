@@ -271,6 +271,9 @@ terminaram o download, sem abrir escrita concorrente no SQLite.
   escrita no SQLite de forma sequencial.
 - Preservado o relatorio completo com eventos de download, processamento,
   persistencia, falhas parciais e resumo consolidado do pipeline.
+- Adicionadas metricas de desempenho do pipeline no relatorio, incluindo
+  tempos de download e persistencia, espera na fila, backlog maximo, estimativa
+  sem sobreposicao, ganho estimado por sobreposicao e detalhamento por fonte.
 
 ### Arquivos relacionados
 
@@ -284,3 +287,5 @@ terminaram o download, sem abrir escrita concorrente no SQLite.
   raws em memoria.
 - `workers=1` continua usando o fluxo sequencial anterior.
 - O processamento paralelo de raws/PDFs continua fora desta etapa.
+- As metricas permitem comparar rodadas com diferentes valores de
+  `COTACOES_WORKERS` sem depender apenas da duracao total da action.

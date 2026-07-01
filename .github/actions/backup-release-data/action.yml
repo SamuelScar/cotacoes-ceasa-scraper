@@ -4,7 +4,7 @@ description: Envia ou restaura o pacote de dados no OneDrive usando rclone.
 inputs:
   mode:
     required: true
-    description: Operacao desejada: upload ou download.
+    description: "Operacao desejada: upload ou download."
   asset-name:
     required: true
     description: Nome do pacote compactado.

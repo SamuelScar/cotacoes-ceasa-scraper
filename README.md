@@ -127,8 +127,10 @@ Cada relatorio apresenta primeiro o comando solicitado, o escopo, um resumo
 executivo, resultados consolidados, alertas principais e as configuracoes
 efetivamente usadas sem credenciais. Em seguida, registra somente as operacoes
 realizadas pelo comando, com resultados por fonte e fase, avisos, erros e o
-historico cronologico completo. O arquivo tambem e gerado quando a execucao
-termina com erro ou e interrompida.
+historico cronologico completo. No fluxo `tudo` em pipeline, o relatorio tambem
+registra tempo total, janela de downloads, tempo acumulado de persistencia,
+espera na fila, backlog maximo, throughput de raws e detalhamento por fonte.
+O arquivo tambem e gerado quando a execucao termina com erro ou e interrompida.
 
 ## Documentacao
 

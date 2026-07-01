@@ -110,6 +110,8 @@ etapa antes das otimizacoes.
 
 Medicoes necessarias:
 
+- comparar por rodada `COTACOES_WORKERS`, tempo total do pipeline, janela de
+  downloads, tempo acumulado de persistencia, espera na fila e backlog maximo;
 - listagem e leitura dos arquivos;
 - extracao de texto dos PDFs;
 - parser especifico de cada fonte;

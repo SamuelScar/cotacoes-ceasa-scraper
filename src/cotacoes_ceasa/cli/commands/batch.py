@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import copy
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import perf_counter
 
 from cotacoes_ceasa.cli.commands.source import resolve_source_operation, run_source
 from cotacoes_ceasa.cli.output import TerminalOutput
@@ -110,6 +111,8 @@ class SourceRunResult:
     events: tuple[BufferedOutputEvent, ...] = ()
     error_type: str | None = None
     error_message: str | None = None
+    download_started_at: float | None = None
+    download_finished_at: float | None = None
 
 
 @dataclass
@@ -121,6 +124,155 @@ class PipelineStats:
     persistence_completed: int = 0
     persistence_failed: int = 0
     persistence_skipped: int = 0
+
+
+@dataclass
+class PipelineSourceMetric:
+    source_slug: str
+    status: str
+    persistence_status: str
+    files: int
+    download_started_at: float | None = None
+    download_finished_at: float | None = None
+    download_seconds: float | None = None
+    queue_wait_seconds: float | None = None
+    persistence_seconds: float | None = None
+
+
+@dataclass
+class PipelineMetrics:
+    started_at: float = field(default_factory=perf_counter)
+    max_backlog: int = 0
+    sources: list[PipelineSourceMetric] = field(default_factory=list)
+    _finished_at: float | None = field(default=None, init=False, repr=False)
+
+    def record_backlog(self, backlog_size: int) -> None:
+        self.max_backlog = max(self.max_backlog, backlog_size)
+
+    def record_source(
+        self,
+        result: SourceRunResult,
+        persistence_status: str,
+        queue_wait_seconds: float | None = None,
+        persistence_seconds: float | None = None,
+    ) -> None:
+        self.sources.append(
+            PipelineSourceMetric(
+                source_slug=result.source_slug,
+                status=result.status,
+                persistence_status=persistence_status,
+                files=len(result.files),
+                download_started_at=result.download_started_at,
+                download_finished_at=result.download_finished_at,
+                download_seconds=_elapsed_seconds(
+                    result.download_started_at,
+                    result.download_finished_at,
+                ),
+                queue_wait_seconds=queue_wait_seconds,
+                persistence_seconds=persistence_seconds,
+            )
+        )
+
+    @property
+    def download_span_seconds(self) -> float:
+        starts = [
+            source.download_started_at
+            for source in self.sources
+            if source.download_started_at is not None
+        ]
+        finishes = [
+            source.download_finished_at
+            for source in self.sources
+            if source.download_finished_at is not None
+        ]
+
+        if not starts or not finishes:
+            return 0.0
+
+        return max(finishes) - min(starts)
+
+    @property
+    def total_download_seconds(self) -> float:
+        return sum(source.download_seconds or 0.0 for source in self.sources)
+
+    @property
+    def total_queue_wait_seconds(self) -> float:
+        return sum(source.queue_wait_seconds or 0.0 for source in self.sources)
+
+    @property
+    def max_queue_wait_seconds(self) -> float:
+        waits = [
+            source.queue_wait_seconds
+            for source in self.sources
+            if source.queue_wait_seconds is not None
+        ]
+
+        return max(waits) if waits else 0.0
+
+    @property
+    def total_persistence_seconds(self) -> float:
+        return sum(source.persistence_seconds or 0.0 for source in self.sources)
+
+    @property
+    def files_sent_to_persistence(self) -> int:
+        return sum(
+            source.files
+            for source in self.sources
+            if source.persistence_seconds is not None
+        )
+
+    @property
+    def total_seconds(self) -> float:
+        finished_at = self.finished_at or perf_counter()
+
+        return finished_at - self.started_at
+
+    @property
+    def finished_at(self) -> float | None:
+        return self._finished_at
+
+    def finish(self) -> None:
+        self._finished_at = perf_counter()
+
+    @property
+    def no_overlap_estimate_seconds(self) -> float:
+        return self.download_span_seconds + self.total_persistence_seconds
+
+    @property
+    def overlap_gain_seconds(self) -> float:
+        return max(0.0, self.no_overlap_estimate_seconds - self.total_seconds)
+
+    @property
+    def files_per_minute(self) -> float:
+        if self.total_seconds <= 0:
+            return 0.0
+
+        return self.files_sent_to_persistence / self.total_seconds * 60
+
+
+def _elapsed_seconds(
+    started_at: float | None,
+    finished_at: float | None,
+) -> float | None:
+    if started_at is None or finished_at is None:
+        return None
+
+    return max(0.0, finished_at - started_at)
+
+
+def _format_seconds(seconds: float) -> str:
+    return f"{seconds:.2f}"
+
+
+def _format_optional_seconds(seconds: float | None) -> str:
+    if seconds is None:
+        return "nao medido"
+
+    return _format_seconds(seconds)
+
+
+def _format_rate(value: float) -> str:
+    return f"{value:.2f}"
 
 
 def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
@@ -184,6 +336,7 @@ def _run_download_and_process_pipeline(
     process_args = _build_process_phase_args(args)
     effective_workers = min(args.workers, len(config.sources))
     stats = PipelineStats()
+    metrics = PipelineMetrics()
 
     output.header(
         "Download e persistencia em pipeline",
@@ -204,10 +357,13 @@ def _run_download_and_process_pipeline(
             ): source_slug
             for source_slug in config.sources
         }
+        pending_futures = set(futures)
 
         try:
             for future in as_completed(futures):
                 source_slug = futures[future]
+                pending_futures.remove(future)
+                metrics.record_backlog(_count_pipeline_backlog(pending_futures))
                 result = _resolve_source_future(future, source_slug)
                 _consume_pipeline_result(
                     result,
@@ -215,12 +371,14 @@ def _run_download_and_process_pipeline(
                     config,
                     output,
                     stats,
+                    metrics,
                 )
         except KeyboardInterrupt:
             for future in futures:
                 future.cancel()
             raise
 
+    metrics.finish()
     output.summary(
         (
             ("Fontes com download concluido", stats.download_completed),
@@ -233,6 +391,7 @@ def _run_download_and_process_pipeline(
         ),
         report_title="Download e persistencia em pipeline",
     )
+    _report_pipeline_metrics(output, metrics)
 
 
 def _build_pipeline_details(
@@ -266,15 +425,110 @@ def _build_pipeline_details(
     )
 
 
+def _count_pipeline_backlog(pending_futures: set) -> int:
+    return 1 + sum(1 for future in pending_futures if future.done())
+
+
+def _report_pipeline_metrics(
+    output: TerminalOutput,
+    metrics: PipelineMetrics,
+) -> None:
+    output.report_summary(
+        _build_pipeline_performance_rows(metrics),
+        report_title="Desempenho do pipeline",
+    )
+    output.report_summary(
+        _build_pipeline_source_rows(metrics),
+        report_title="Desempenho por fonte no pipeline",
+    )
+
+
+def _build_pipeline_performance_rows(
+    metrics: PipelineMetrics,
+) -> tuple[tuple[str, object], ...]:
+    return (
+        ("Fontes metricadas", len(metrics.sources)),
+        ("Tempo total pipeline (s)", _format_seconds(metrics.total_seconds)),
+        ("Janela de downloads (s)", _format_seconds(metrics.download_span_seconds)),
+        (
+            "Tempo acumulado downloads (s)",
+            _format_seconds(metrics.total_download_seconds),
+        ),
+        (
+            "Tempo acumulado persistencia (s)",
+            _format_seconds(metrics.total_persistence_seconds),
+        ),
+        (
+            "Tempo estimado sem sobrepor persistencia (s)",
+            _format_seconds(metrics.no_overlap_estimate_seconds),
+        ),
+        (
+            "Ganho estimado por sobreposicao (s)",
+            _format_seconds(metrics.overlap_gain_seconds),
+        ),
+        (
+            "Espera acumulada na fila (s)",
+            _format_seconds(metrics.total_queue_wait_seconds),
+        ),
+        (
+            "Maior espera de fonte na fila (s)",
+            _format_seconds(metrics.max_queue_wait_seconds),
+        ),
+        ("Backlog maximo da fila", metrics.max_backlog),
+        ("Raws enviados para persistencia", metrics.files_sent_to_persistence),
+        ("Raws enviados por minuto", _format_rate(metrics.files_per_minute)),
+    )
+
+
+def _build_pipeline_source_rows(
+    metrics: PipelineMetrics,
+) -> tuple[tuple[str, object], ...]:
+    rows: list[tuple[str, object]] = []
+
+    for metric in metrics.sources:
+        prefix = f"{metric.source_slug} | "
+        rows.extend(
+            (
+                (f"{prefix}status download", _format_download_status(metric.status)),
+                (f"{prefix}status persistencia", metric.persistence_status),
+                (f"{prefix}raws", metric.files),
+                (
+                    f"{prefix}download (s)",
+                    _format_optional_seconds(metric.download_seconds),
+                ),
+                (
+                    f"{prefix}espera fila (s)",
+                    _format_optional_seconds(metric.queue_wait_seconds),
+                ),
+                (
+                    f"{prefix}persistencia (s)",
+                    _format_optional_seconds(metric.persistence_seconds),
+                ),
+            )
+        )
+
+    return tuple(rows)
+
+
+def _format_download_status(status: str) -> str:
+    return {
+        "completed": "concluido",
+        "partial": "parcial",
+        "failed": "falhou",
+    }.get(status, status)
+
+
 def _consume_pipeline_result(
     result: SourceRunResult,
     process_args,
     config: AppConfig,
     output: TerminalOutput,
     stats: PipelineStats,
+    metrics: PipelineMetrics,
 ) -> None:
     _replay_buffered_events(output, result.events)
     _record_pipeline_download_status(stats, result)
+    handling_started_at = perf_counter()
 
     if result.status == "failed":
         if not result.events:
@@ -287,6 +541,14 @@ def _consume_pipeline_result(
         output.warning(
             f"{result.source_slug} | persistencia ignorada porque o download falhou."
         )
+        metrics.record_source(
+            result,
+            persistence_status="ignorada",
+            queue_wait_seconds=_elapsed_seconds(
+                result.download_finished_at,
+                handling_started_at,
+            ),
+        )
         return
 
     raw_files = list(result.files)
@@ -296,6 +558,14 @@ def _consume_pipeline_result(
         output.warning(
             f"{result.source_slug} | persistencia ignorada porque nao ha raw parcial."
         )
+        metrics.record_source(
+            result,
+            persistence_status="ignorada",
+            queue_wait_seconds=_elapsed_seconds(
+                result.download_finished_at,
+                handling_started_at,
+            ),
+        )
         return
 
     output.info(
@@ -303,6 +573,11 @@ def _consume_pipeline_result(
         "para a fila de persistencia."
     )
     stats.persistence_started += 1
+    persistence_started_at = perf_counter()
+    queue_wait_seconds = _elapsed_seconds(
+        result.download_finished_at,
+        persistence_started_at,
+    )
 
     if _run_pipeline_persistence(
         result.source_slug,
@@ -312,8 +587,17 @@ def _consume_pipeline_result(
         output,
     ):
         stats.persistence_completed += 1
+        persistence_status = "concluida"
     else:
         stats.persistence_failed += 1
+        persistence_status = "falhou"
+
+    metrics.record_source(
+        result,
+        persistence_status=persistence_status,
+        queue_wait_seconds=queue_wait_seconds,
+        persistence_seconds=perf_counter() - persistence_started_at,
+    )
 
 
 def _record_pipeline_download_status(
@@ -605,6 +889,7 @@ def _run_source_download_worker(
     config: AppConfig,
 ) -> SourceRunResult:
     output = BufferedOutput()
+    download_started_at = perf_counter()
 
     try:
         source_args = _build_source_args(args, source_slug, output)
@@ -630,6 +915,8 @@ def _run_source_download_worker(
             events=tuple(output.events),
             error_type=type(error.original_error).__name__,
             error_message=str(error.original_error),
+            download_started_at=download_started_at,
+            download_finished_at=perf_counter(),
         )
     except Exception as error:
         output.warning(f"{source_slug} | {type(error).__name__}: {error}")
@@ -639,6 +926,8 @@ def _run_source_download_worker(
             events=tuple(output.events),
             error_type=type(error).__name__,
             error_message=str(error),
+            download_started_at=download_started_at,
+            download_finished_at=perf_counter(),
         )
 
     return SourceRunResult(
@@ -646,6 +935,8 @@ def _run_source_download_worker(
         status="completed",
         files=tuple(source_files or ()),
         events=tuple(output.events),
+        download_started_at=download_started_at,
+        download_finished_at=perf_counter(),
     )
 
 
@@ -658,6 +949,7 @@ def _resolve_source_future(future, source_slug: str) -> SourceRunResult:
             status="failed",
             error_type=type(error).__name__,
             error_message=str(error),
+            download_finished_at=perf_counter(),
         )
 
 
