@@ -26,8 +26,7 @@ operacao do projeto.
 
 - A execucao continua atual e feita por GitHub Actions, usando
   `.github/workflows/scraper-release.yml`.
-- Raws, cache e relatorios entre rodadas ficam no pacote enxuto
-  `ceasa-data-latest.tar.gz` da release fixa `latest-data`.
+- A release fixa `latest-data` publica apenas `cotacoes.sqlite.xz`; raws, cache e relatorios ficam preservados no pacote completo do OneDrive.
 - Cada rodada restaura `data/`, executa `docker compose run --rm tudo`, compacta
   a pasta e publica novamente o asset.
 - O SQLite nao entra no pacote publicado no GitHub Release; ele entra no pacote

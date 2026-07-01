@@ -29,6 +29,10 @@ services:
     <<: *app
     command: ["--archive-raw-old"]
 
+  otimizar-pdfs:
+    <<: *app
+    entrypoint: ["python", "scripts/otimizar_pdfs_qpdf.py"]
+
   complementar-prohort:
     <<: *app
     command: ["--complement-prohort"]

@@ -9,7 +9,7 @@ WORKDIR /app
 COPY . .
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pigz \
+    && apt-get install -y --no-install-recommends xz-utils pigz qpdf \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -e .

@@ -1,5 +1,5 @@
-name: Publicar pacote de dados na release
-description: Cria a release fixa se necessario, valida o pacote e publica o novo.
+name: Publicar dados na release
+description: Cria a release fixa se necessario, valida o asset e publica o novo.
 
 inputs:
   release-tag:
@@ -7,7 +7,7 @@ inputs:
     description: Tag da release fixa.
   asset-name:
     required: true
-    description: Nome do asset compactado.
+    description: Nome do asset publicado.
   max-asset-size-bytes:
     required: false
     default: "2147483647"
@@ -43,7 +43,7 @@ runs:
           echo "Criando release ${{ inputs.release-tag }}."
           gh release create "${{ inputs.release-tag }}" \
             --title "Dados CEASA mais recentes" \
-            --notes "Pacote de dados atualizado automaticamente pelo GitHub Actions."
+            --notes "Dados atualizados automaticamente pelo GitHub Actions."
         fi
 
         if gh release view "${{ inputs.release-tag }}" --json assets --jq '.assets[].name' | grep -Fx "${{ inputs.asset-name }}" >/dev/null; then

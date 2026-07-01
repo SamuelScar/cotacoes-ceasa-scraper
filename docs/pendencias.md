@@ -8,6 +8,7 @@
 | [Criterios de qualidade da rodada](#criterios-de-qualidade-da-rodada) | Definir quando uma rodada com falha parcial deve ser marcada como invalida. |
 | [Dificuldades nas coletas recentes](#dificuldades-nas-coletas-recentes) | Investigar fontes com timeouts, historico parcial e falhas de parser/persistencia. |
 | [Desempenho do processamento de raws](#desempenho-do-processamento-de-raws) | Medir e reduzir o custo do processamento, principalmente na extracao de PDFs e nas fontes mais lentas. |
+| [Avaliar otimizacao dos PDFs brutos](#avaliar-otimizacao-dos-pdfs-brutos) | Testar melhor a reducao de tamanho com qpdf antes de usar no backup oficial. |
 | [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
 | [Migrar documentacao extensa para GitHub Wiki](#migrar-documentacao-extensa-para-github-wiki) | Reorganizar guias longos na Wiki quando o repositorio puder ficar publico. |
 
@@ -19,7 +20,7 @@ e-mail deve ser ajustado para nao mandar um relatorio a cada rodada.
 Comportamento esperado:
 
 1. Manter as coletas agendadas ao longo do dia.
-2. Publicar o pacote `ceasa-data-latest.tar.gz` normalmente a cada execucao.
+2. Publicar `cotacoes.sqlite.xz` normalmente a cada execucao.
 3. Enviar e-mail com relatorio somente uma vez por dia.
 4. Evitar e-mails duplicados quando houver execucao manual ou mais de uma janela
    automatica no mesmo dia.
@@ -33,7 +34,7 @@ ja foi enviado.
 ## Criterios de qualidade da rodada
 
 O workflow ja tenta salvar o que foi processado mesmo quando uma etapa posterior
-falha: o pacote completo vai para o OneDrive, o pacote enxuto vai para a release
+falha: o pacote completo vai para o OneDrive, o banco compactado vai para a release
 e a validacao final falha somente depois das tentativas de salvamento.
 
 Ainda falta definir criterios de qualidade para decidir quando uma rodada com
@@ -134,6 +135,39 @@ Qualquer otimizacao deve preservar os resultados atuais dos parsers, a
 proveniencia dos registros e a capacidade de reconstruir o banco a partir dos
 raws.
 
+## Avaliar otimizacao dos PDFs brutos
+
+Foram feitos testes locais usando `qpdf` para reduzir o tamanho dos PDFs brutos
+sem alterar o conteudo aparente dos arquivos. A ideia pode ajudar a diminuir o
+tamanho do backup completo, principalmente no OneDrive, mas ainda nao deve entrar
+no fluxo oficial.
+
+Motivo da cautela:
+
+1. alguns PDFs das fontes ja chegam danificados ou fora do padrao esperado;
+2. o `qpdf` consegue emitir avisos e reconstruir parcialmente alguns arquivos,
+   mas isso precisa ser avaliado com cuidado;
+3. ainda falta confirmar que o PDF otimizado nao interfere na extracao de texto,
+   na interpretacao dos parsers e na persistencia correta no SQLite;
+4. qualquer ganho de espaco nao pode comprometer a capacidade de reconstruir o
+   banco a partir dos raws.
+
+Decisao atual:
+
+- manter o otimizador de PDF apenas como experimento local;
+- nao incluir a otimizacao de PDFs no workflow oficial por enquanto;
+- continuar preservando os raws originais no backup completo;
+- usar `xz` no empacotamento oficial, porque ja reduz o tamanho do backup sem
+  mexer no conteudo interno dos PDFs.
+
+Antes de considerar essa otimizacao como parte do produto, validar pelo menos:
+
+- tamanho antes/depois por fonte;
+- quantidade de PDFs com aviso ou erro do `qpdf`;
+- comparacao da extracao de texto antes/depois;
+- comparacao das cotacoes persistidas antes/depois;
+- impacto no tempo total do workflow.
+
 ## Aprimorar sincronizacao incremental com Supabase
 
 Atualmente, a sincronizacao incremental envia registros novos e atualiza as
@@ -166,7 +200,7 @@ Conteudos candidatos para a Wiki:
 - fluxo de coleta;
 - fontes e limitacoes;
 - modelo de dados;
-- pacote `ceasa-data-latest.tar.gz`;
+- banco `cotacoes.sqlite.xz`;
 - sincronizacao com Supabase;
 - estrategias anti-bloqueio;
 - decisoes tecnicas com contexto;

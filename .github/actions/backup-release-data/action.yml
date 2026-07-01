@@ -73,8 +73,25 @@ runs:
         fi
 
         timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-        asset_stem="${asset_name%.tar.gz}"
-        history_name="${asset_stem}-${timestamp}-${GITHUB_RUN_ID}.tar.gz"
+        case "$asset_name" in
+          *.tar.xz)
+            asset_stem="${asset_name%.tar.xz}"
+            asset_ext=".tar.xz"
+            ;;
+          *.tar.gz)
+            asset_stem="${asset_name%.tar.gz}"
+            asset_ext=".tar.gz"
+            ;;
+          *.sqlite.xz)
+            asset_stem="${asset_name%.sqlite.xz}"
+            asset_ext=".sqlite.xz"
+            ;;
+          *)
+            asset_stem="${asset_name%.*}"
+            asset_ext=".${asset_name##*.}"
+            ;;
+        esac
+        history_name="${asset_stem}-${timestamp}-${GITHUB_RUN_ID}${asset_ext}"
         history_path="${backup_dir}/history/${history_name}"
 
         echo "Enviando backup historico para ${rclone_remote}:${history_path}."

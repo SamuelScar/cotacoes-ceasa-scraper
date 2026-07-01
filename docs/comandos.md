@@ -174,61 +174,60 @@ estao presentes antes de excluir o SQLite.
 
 ## Pacote de dados
 
-A pasta `data/` nao e versionada no Git. O pacote enxuto mais recente fica como
-asset da release `latest-data`, com o nome `ceasa-data-latest.tar.gz`. Quando o
-backup no OneDrive esta ativo, o pacote completo fica em
-`ceasa-data-full-latest.tar.gz`.
+A pasta `data/` nao e versionada no Git. O backup completo fica no OneDrive,
+quando ativo, como `ceasa-data-full-latest.tar.xz`. A release `latest-data` do
+GitHub publica somente o banco pronto para uso, como `cotacoes.sqlite.xz`.
 
-Depois de baixar manualmente `ceasa-data-latest.tar.gz` e colocar o arquivo na
-raiz do repositorio, extraia o pacote pelo container:
+Comandos manuais pelo container:
 
 ```bash
-docker compose run --rm --entrypoint python app scripts/cotacoes.py compactar
-docker compose run --rm --entrypoint python app scripts/cotacoes.py descompactar
-docker compose run --rm --entrypoint python app scripts/cotacoes.py compactar --arquivo ceasa-data-latest.tar.gz
-docker compose run --rm --entrypoint python app scripts/cotacoes.py descompactar --arquivo ceasa-data-latest.tar.gz
-docker compose run --rm --entrypoint python app scripts/cotacoes.py compactar --incluir-sqlite --arquivo ceasa-data-full-latest.tar.gz
-docker compose run --rm --entrypoint python app scripts/cotacoes.py descompactar --incluir-sqlite --arquivo ceasa-data-full-latest.tar.gz
+docker compose run --rm --entrypoint python app scripts/cotacoes.py compactar --incluir-sqlite --arquivo ceasa-data-full-latest.tar.xz
+docker compose run --rm --entrypoint python app scripts/cotacoes.py descompactar --incluir-sqlite --arquivo ceasa-data-full-latest.tar.xz
+docker compose run --rm --entrypoint python app scripts/cotacoes.py compactar-banco --arquivo cotacoes.sqlite.xz
+docker compose run --rm --entrypoint python app scripts/cotacoes.py descompactar-banco --arquivo cotacoes.sqlite.xz
 ```
 
 O script deve ser executado dentro do container `app`, porque usa o Python,
-`tar` e `pigz` instalados na imagem. Ele recusa execucao direta no host e faz
+`tar`, `xz` e `pigz` instalados na imagem. Ele recusa execucao direta no host e faz
 somente a operacao de pacote:
 
 1. cria um lock para impedir duas operacoes simultaneas no pacote;
-2. em `compactar`, compacta `data/` em um `.tar.gz.tmp` com `tar` e `pigz`;
+2. em `compactar`, compacta `data/` em `.tar.xz.tmp` com `tar` e `xz -T0 -9`, ou em `.tar.gz.tmp` com `pigz -9` quando esse formato legado for informado;
 3. valida o pacote temporario;
-4. substitui o `.tar.gz` final somente depois da validacao;
-5. em `descompactar`, restaura a pasta `data/` a partir do `.tar.gz` informado.
+4. substitui o `.tar.xz` final somente depois da validacao;
+5. em `descompactar`, restaura a pasta `data/` a partir do `.tar.xz` ou `.tar.gz` informado;
+6. em `compactar-banco`, cria um snapshot consistente de `data/cotacoes.sqlite` e compacta em `.sqlite.xz`;
+7. em `descompactar-banco`, restaura somente `data/cotacoes.sqlite` a partir de `.xz` ou `.gz`.
 
-Por padrao, o SQLite `data/cotacoes.sqlite` e os arquivos auxiliares
-`-wal`/`-shm` ficam fora do pacote. Esse e o formato usado no GitHub Release.
-Com `--incluir-sqlite`, o pacote tambem carrega o banco local; esse e o formato
-usado no backup do OneDrive. Se for necessario recriar o banco completo depois
-de restaurar um pacote enxuto, reprocesse os raws:
+Por padrao, o pacote completo pode excluir o SQLite. Com `--incluir-sqlite`, o
+pacote tambem carrega o banco local; esse e o formato usado no backup do
+OneDrive. A release do GitHub nao carrega raws, cache nem relatorios. Se for
+necessario reconstruir o banco depois de restaurar apenas o pacote completo de
+raws, reprocesse os raws:
 
 ```bash
 docker compose run --rm app --process-raw --force-reprocess
 ```
 
-Durante a restauracao, o script remove esses arquivos SQLite antes de extrair o
-pacote. Sem `--incluir-sqlite`, eles tambem sao removidos depois da extracao
-para evitar reaproveitar um banco antigo por acidente.
+Durante a restauracao do pacote completo sem `--incluir-sqlite`, o script remove
+o SQLite e os arquivos auxiliares `-wal`/`-shm` para evitar reaproveitar um
+banco antigo por acidente. Na restauracao do banco isolado, ele valida o SQLite
+antes de substituir `data/cotacoes.sqlite`.
 
-O `pigz` roda dentro do container e usa multiplas threads para compactar e
-descompactar mais rapido. O host precisa apenas de Docker e Docker Compose.
+O `xz` roda dentro do container com `-T0`, usando multiplas threads quando o
+ambiente permite. O host precisa apenas de Docker e Docker Compose.
 
-Para inspecionar manualmente o pacote sem descompactar:
+Para inspecionar manualmente o pacote completo sem descompactar:
 
 ```bash
-docker compose run --rm --entrypoint tar app -I pigz -tf ceasa-data-latest.tar.gz
+docker compose run --rm --entrypoint tar app -I "xz -T0" -tf ceasa-data-full-latest.tar.xz
 ```
 
 ## Crawler por workflow
 
 O crawler atual do projeto e o workflow `.github/workflows/scraper-release.yml`.
 Ele usa o GitHub Actions como agendador, o OneDrive como backup completo quando
-configurado e a release `latest-data` como fallback enxuto do pacote `data/`.
+configurado e a release `latest-data` como fallback do banco SQLite.
 
 Fluxo executado pelo workflow:
 
@@ -237,16 +236,16 @@ Fluxo executado pelo workflow:
 3. construir a imagem Docker;
 4. tentar baixar e descompactar o pacote completo do OneDrive, quando
    configurado;
-5. se o OneDrive falhar, tentar baixar e descompactar
-   `ceasa-data-latest.tar.gz` da release fixa;
+5. se o OneDrive falhar, tentar baixar e restaurar `cotacoes.sqlite.xz` da
+   release fixa; se ainda nao existir, tentar o pacote legado `ceasa-data-latest.tar.gz`;
 6. executar `docker compose run --rm tudo`;
 7. mesmo se o scraper terminar com erro, tentar compactar e salvar os dados
    gerados;
 8. compactar o pacote completo com SQLite e salvar no OneDrive em `latest/` e
    `history/`, quando configurado;
-9. compactar o pacote enxuto sem SQLite e tentar substituir o asset
-   `ceasa-data-latest.tar.gz` na release `latest-data`;
-10. validar se ao menos um pacote foi salvo fora do runner;
+9. compactar o banco SQLite e tentar substituir o asset `cotacoes.sqlite.xz` na
+   release `latest-data`;
+10. validar se ao menos um artefato foi salvo fora do runner;
 11. anexar ao ultimo relatorio os resultados de restauracao, scraper,
     compactacao, backup OneDrive, publicacao GitHub e validacao final;
 12. enviar o ultimo relatorio por e-mail se os secrets SMTP estiverem presentes.
@@ -256,8 +255,8 @@ Variaveis principais do workflow:
 | Variavel | Uso atual |
 | --- | --- |
 | `DATA_RELEASE_TAG` | Tag da release fixa. Padrao: `latest-data` |
-| `DATA_ASSET_NAME` | Nome do pacote enxuto publicado no GitHub. Padrao: `ceasa-data-latest.tar.gz` |
-| `DATA_ONEDRIVE_ASSET_NAME` | Nome do pacote completo salvo no OneDrive. Padrao: `ceasa-data-full-latest.tar.gz` |
+| `DATA_ASSET_NAME` | Nome do banco publicado no GitHub. Padrao: `cotacoes.sqlite.xz` |
+| `DATA_ONEDRIVE_ASSET_NAME` | Nome do pacote completo salvo no OneDrive. Padrao: `ceasa-data-full-latest.tar.xz` |
 | `DATA_ONEDRIVE_BACKUP_ENABLED` | Ativa backup no OneDrive antes da publicacao. Padrao: `false` |
 | `DATA_ONEDRIVE_REMOTE` | Nome do remote no `rclone`. Padrao: `onedrive` |
 | `DATA_ONEDRIVE_DIR` | Diretorio base no OneDrive. Padrao: `cotacoes-ceasa` |
@@ -276,18 +275,17 @@ Quando `DATA_ONEDRIVE_BACKUP_ENABLED=true`, configure tambem o secret
 `RCLONE_CONFIG` no environment `Crawler`. O backup do OneDrive salva uma copia
 historica em `history/` e atualiza uma copia fixa em `latest/` com o mesmo nome
 de `DATA_ONEDRIVE_ASSET_NAME`. Se o backup do OneDrive nao puder ser restaurado,
-o workflow tenta baixar o pacote enxuto da release.
+o workflow tenta baixar o banco da release. Na primeira rodada apos a troca para `.xz`, ele tambem tenta restaurar pacotes `.tar.gz` legados quando o `.tar.xz` novo ainda nao existir.
 
 Se as variaveis do OneDrive ainda nao estiverem configuradas, ou se
 `RCLONE_CONFIG` estiver ausente, a coleta continua normalmente. Nesse caso o
-workflow pula as etapas de OneDrive e usa somente o pacote enxuto da release.
+workflow pula as etapas de OneDrive e usa somente o banco da release como
+snapshot inicial.
 
 Esse workflow substitui, por enquanto, a ideia de manter um container `crawler`
-rodando continuamente. O estado entre execucoes fica no pacote da release e,
-quando configurado, tambem no backup completo do OneDrive. A idempotencia de
-download continua dependendo dos raws salvos e, quando o pacote completo e
-restaurado, do SQLite salvo no OneDrive.
-
+rodando continuamente. O estado completo entre execucoes fica no backup do
+OneDrive quando configurado. A release do GitHub fica como snapshot pronto para
+consumo, nao como fonte completa de reprocessamento.
 ## Complemento PROHORT
 
 Para complementar automaticamente depois de qualquer fluxo que salva no

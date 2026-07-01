@@ -1,5 +1,5 @@
-name: Restaurar pacote de dados
-description: Baixa e descompacta o pacote do OneDrive ou da release fixa.
+name: Restaurar dados
+description: Baixa e restaura o pacote completo do OneDrive ou o banco da release fixa.
 
 inputs:
   release-tag:
@@ -7,7 +7,7 @@ inputs:
     description: Tag da release fixa.
   asset-name:
     required: true
-    description: Nome do asset enxuto da release.
+    description: Nome do banco compactado da release.
   backup-asset-name:
     required: false
     default: ""
@@ -73,35 +73,59 @@ runs:
             export RCLONE_CONFIG="${rclone_config_dir}/rclone.conf"
 
             backup_dir="${backup_dir%/}"
-            latest_path="${backup_dir}/latest/${backup_asset_name}"
+            backup_candidates="$backup_asset_name"
+            if [[ "$backup_asset_name" == *.tar.xz ]]; then
+              backup_candidates="$backup_candidates ${backup_asset_name%.tar.xz}.tar.gz"
+            fi
 
-            if rclone copyto "${rclone_remote}:${latest_path}" "$backup_asset_name" --progress; then
-              if docker compose run --rm --entrypoint python app \
-                scripts/cotacoes.py descompactar --incluir-sqlite --arquivo "$backup_asset_name"; then
-                restored=true
+            for candidate in $backup_candidates; do
+              latest_path="${backup_dir}/latest/${candidate}"
+              echo "Tentando restaurar ${rclone_remote}:${latest_path}."
+
+              if rclone copyto "${rclone_remote}:${latest_path}" "$candidate" --progress; then
+                if docker compose run --rm --entrypoint python app \
+                  scripts/cotacoes.py descompactar --incluir-sqlite --arquivo "$candidate"; then
+                  restored=true
+                  break
+                else
+                  echo "Falha ao descompactar pacote completo $candidate. A release sera tentada como fallback."
+                  rm -f "$candidate"
+                fi
               else
-                echo "Falha ao descompactar pacote completo do OneDrive. A release sera tentada como fallback."
-                rm -f "$backup_asset_name"
+                echo "Backup $candidate nao encontrado ou indisponivel."
               fi
-            else
-              echo "Backup OneDrive nao encontrado ou indisponivel. A release sera tentada como fallback."
+            done
+
+            if [ "$restored" != "true" ]; then
+              echo "Nenhum backup OneDrive foi restaurado. A release sera tentada como fallback."
             fi
           fi
         fi
 
         if [ "$restored" = "false" ] && gh release view "${{ inputs.release-tag }}" >/dev/null 2>&1; then
-          echo "Release ${{ inputs.release-tag }} encontrada. Tentando baixar ${{ inputs.asset-name }}."
+          echo "Release ${{ inputs.release-tag }} encontrada. Tentando baixar banco ${{ inputs.asset-name }}."
           if gh release download "${{ inputs.release-tag }}" --pattern "${{ inputs.asset-name }}" --clobber; then
-            echo "Pacote atual baixado."
+            echo "Banco atual baixado."
             if docker compose run --rm --entrypoint python app \
-              scripts/cotacoes.py descompactar --arquivo "${{ inputs.asset-name }}"; then
+              scripts/cotacoes.py descompactar-banco --arquivo "${{ inputs.asset-name }}"; then
               restored=true
             else
-              echo "Falha ao descompactar asset da release. A coleta seguira sem data/ restaurado."
+              echo "Falha ao restaurar banco da release. A coleta seguira sem banco restaurado."
               rm -f "${{ inputs.asset-name }}"
             fi
           else
-            echo "Asset ${{ inputs.asset-name }} ainda nao existe. A coleta comecara sem data/ restaurado."
+            echo "Banco ${{ inputs.asset-name }} ainda nao existe. Tentando pacote legado ceasa-data-latest.tar.gz."
+            if gh release download "${{ inputs.release-tag }}" --pattern "ceasa-data-latest.tar.gz" --clobber; then
+              if docker compose run --rm --entrypoint python app \
+                scripts/cotacoes.py descompactar --arquivo ceasa-data-latest.tar.gz; then
+                restored=true
+              else
+                echo "Falha ao descompactar pacote legado da release. A coleta seguira sem data/ restaurado."
+                rm -f ceasa-data-latest.tar.gz
+              fi
+            else
+              echo "Nenhum asset compativel encontrado na release. A coleta comecara sem dados restaurados."
+            fi
           fi
         else
           if [ "$restored" = "false" ]; then

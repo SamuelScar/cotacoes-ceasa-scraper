@@ -3,9 +3,24 @@ __pycache__/
 .env
 
 data/*
+data_pdf_otimizado/*
 data.tar.gz
 data.tar.gz.tmp
 ceasa-data-latest.tar.gz
 ceasa-data-latest.tar.gz.tmp
 .cotacoes-data.lock
 
+
+cotacoes.sqlite.xz
+cotacoes.sqlite.xz.tmp
+cotacoes.sqlite.xz.snapshot.sqlite
+ceasa-data-latest.tar.xz
+ceasa-data-latest.tar.xz.tmp
+ceasa-data-full-latest.tar.xz
+ceasa-data-full-latest.tar.xz.tmp
+scripts/otimizar_pdfs_qpdf.py
+cotacoes.sqlite.gz
+cotacoes.sqlite.gz.tmp
+cotacoes.sqlite.gz.snapshot.sqlite
+ceasa-data-full-latest.tar.gz
+ceasa-data-full-latest.tar.gz.tmp

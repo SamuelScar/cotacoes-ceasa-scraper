@@ -23,8 +23,8 @@ jobs:
     timeout-minutes: 360
     env:
       DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'latest-data' }}
-      DATA_ASSET_NAME: ${{ vars.DATA_ASSET_NAME || 'ceasa-data-latest.tar.gz' }}
-      DATA_ONEDRIVE_ASSET_NAME: ${{ vars.DATA_ONEDRIVE_ASSET_NAME || 'ceasa-data-full-latest.tar.gz' }}
+      DATA_ASSET_NAME: ${{ vars.DATA_ASSET_NAME || 'cotacoes.sqlite.xz' }}
+      DATA_ONEDRIVE_ASSET_NAME: ${{ vars.DATA_ONEDRIVE_ASSET_NAME || 'ceasa-data-full-latest.tar.xz' }}
       DATA_ONEDRIVE_BACKUP_ENABLED: ${{ vars.DATA_ONEDRIVE_BACKUP_ENABLED || 'false' }}
       DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
       DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
@@ -214,19 +214,19 @@ jobs:
           rclone-remote: ${{ env.DATA_ONEDRIVE_REMOTE }}
           backup-dir: ${{ env.DATA_ONEDRIVE_DIR }}
 
-      - name: Compactar pacote enxuto para GitHub
-        id: pacote_github
+      - name: Compactar banco para GitHub
+        id: banco_github
         if: steps.janela.outputs.should_run == 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
           docker compose run --rm --entrypoint python app \
-            scripts/cotacoes.py compactar --arquivo "$DATA_ASSET_NAME"
+            scripts/cotacoes.py compactar-banco --arquivo "$DATA_ASSET_NAME"
           ls -lh "$DATA_ASSET_NAME"
 
-      - name: Publicar pacote na release fixa
+      - name: Publicar banco na release fixa
         id: publicar_github
-        if: steps.janela.outputs.should_run == 'true' && steps.pacote_github.outcome == 'success'
+        if: steps.janela.outputs.should_run == 'true' && steps.banco_github.outcome == 'success'
         continue-on-error: true
         uses: ./.github/actions/publish-release-data
         env:
@@ -253,7 +253,7 @@ jobs:
 
           if [ "$github_outcome" = "success" ]; then
             saved=true
-            echo "Pacote enxuto publicado na release do GitHub."
+            echo "Banco SQLite publicado na release do GitHub."
           fi
 
           if [ "$saved" != "true" ]; then
@@ -330,8 +330,8 @@ jobs:
             echo "| OneDrive diretorio | ${DATA_ONEDRIVE_DIR} |"
             echo "| Pacote completo OneDrive | ${DATA_ONEDRIVE_ASSET_NAME} |"
             echo "| Tamanho pacote OneDrive | ${onedrive_size} |"
-            echo "| Pacote enxuto GitHub | ${DATA_ASSET_NAME} |"
-            echo "| Tamanho pacote GitHub | ${github_size} |"
+            echo "| Banco GitHub | ${DATA_ASSET_NAME} |"
+            echo "| Tamanho banco GitHub | ${github_size} |"
             echo "| Release tag | ${DATA_RELEASE_TAG} |"
             echo
             echo "| Etapa | Resultado |"
@@ -342,7 +342,7 @@ jobs:
             echo "| Conferir data/ | ${{ steps.conferir_data.outcome }} |"
             echo "| Compactar pacote completo OneDrive | ${{ steps.pacote_onedrive.outcome }} |"
             echo "| Salvar backup OneDrive | ${{ steps.backup_onedrive.outcome }} |"
-            echo "| Compactar pacote enxuto GitHub | ${{ steps.pacote_github.outcome }} |"
+            echo "| Compactar banco GitHub | ${{ steps.banco_github.outcome }} |"
             echo "| Publicar release GitHub | ${{ steps.publicar_github.outcome }} |"
             echo "| Validar salvamento | ${{ steps.validar_salvamento.outcome }} |"
           } >> "$latest_report"

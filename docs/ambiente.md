@@ -7,9 +7,7 @@
 
 O container usa Python 3.12 e instala as dependencias declaradas em
 `pyproject.toml`.
-Ele tambem instala `pigz`, usado pelo script de pacote executado dentro do
-container para compactar e descompactar `ceasa-data-latest.tar.gz` com multiplas
-threads.
+Ele tambem instala `xz` e `pigz`, usados pelo script de pacote executado dentro do container para compactar e descompactar os artefatos de dados. Os novos pacotes usam `.xz`; `.gz` fica suportado para restaurar artefatos legados.
 Os horarios dos relatorios usam o fuso `America/Sao_Paulo`.
 
 ## Preparacao
@@ -26,13 +24,9 @@ em `data/` permanecem na maquina.
 
 O crawler atual roda no GitHub Actions pelo workflow
 `.github/workflows/scraper-release.yml`. Ele cria um `.env` temporario no runner,
-restaura `data/` primeiro pelo OneDrive quando configurado, usa a release
-`latest-data` como fallback, executa o servico `tudo` e tenta salvar os dados
-gerados antes de encerrar a rodada.
+restaura o pacote completo pelo OneDrive quando configurado, usa o banco da release `latest-data` como fallback, executa o servico `tudo` e tenta salvar os dados gerados antes de encerrar a rodada.
 
-O pacote do GitHub Release nao inclui `data/cotacoes.sqlite`; ele guarda raws,
-cache e relatorios. O pacote do OneDrive inclui o SQLite para preservar o banco
-consolidado entre execucoes.
+O GitHub Release publica somente `cotacoes.sqlite.xz`, pronto para consumo. O pacote do OneDrive preserva o backup completo, com raws, cache, relatorios e SQLite.
 
 As variaveis usadas pelo agendamento ficam no environment `Crawler`, em
 **Settings > Environments > Crawler > Environment variables**. O disparo manual
@@ -46,7 +40,7 @@ Para manter uma copia no OneDrive fora do GitHub, configure no environment
 | Chave | Tipo | Uso |
 | --- | --- | --- |
 | `DATA_ONEDRIVE_BACKUP_ENABLED` | Variable | Use `true` para ativar o backup no OneDrive |
-| `DATA_ONEDRIVE_ASSET_NAME` | Variable | Nome do pacote completo. Padrao: `ceasa-data-full-latest.tar.gz` |
+| `DATA_ONEDRIVE_ASSET_NAME` | Variable | Nome do pacote completo. Padrao: `ceasa-data-full-latest.tar.xz` |
 | `DATA_ONEDRIVE_REMOTE` | Variable | Nome do remote no `rclone`. Padrao: `onedrive` |
 | `DATA_ONEDRIVE_DIR` | Variable | Diretorio base no OneDrive. Padrao: `cotacoes-ceasa` |
 | `RCLONE_CONFIG` | Secret | Conteudo do arquivo `rclone.conf` com acesso ao OneDrive |
@@ -55,7 +49,7 @@ O workflow instala `rclone` no runner, grava o `RCLONE_CONFIG` temporariamente e
 sincroniza o pacote em `latest/` e `history/` dentro de `DATA_ONEDRIVE_DIR`.
 Se `DATA_ONEDRIVE_BACKUP_ENABLED` estiver ausente, estiver `false` ou o secret
 `RCLONE_CONFIG` nao existir, o workflow nao tenta usar OneDrive e segue pelo
-fluxo antigo com GitHub Release.
+fluxo com o banco do GitHub Release.
 
 Para gerar o secret `RCLONE_CONFIG`, configure o remote uma vez na sua maquina:
 
