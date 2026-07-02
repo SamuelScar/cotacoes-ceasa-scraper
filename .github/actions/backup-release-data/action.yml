@@ -20,23 +20,63 @@ inputs:
     default: "cotacoes-ceasa"
     description: Diretorio base do backup dentro do OneDrive.
 
+outputs:
+  duration_seconds:
+    description: Duracao da sincronizacao.
+    value: ${{ steps.sync_package.outputs.duration_seconds }}
+  asset_size:
+    description: Tamanho local do asset sincronizado.
+    value: ${{ steps.sync_package.outputs.asset_size }}
+  history_path:
+    description: Caminho historico criado no OneDrive.
+    value: ${{ steps.sync_package.outputs.history_path }}
+  latest_path:
+    description: Caminho latest atualizado no OneDrive.
+    value: ${{ steps.sync_package.outputs.latest_path }}
+
 runs:
   using: composite
   steps:
     - name: Sincronizar pacote
+      id: sync_package
       shell: bash
       env:
         RCLONE_CONFIG_CONTENT: ${{ inputs.rclone-config }}
       run: |
         set -euo pipefail
+        started_at="$(date +%s)"
 
         mode="${{ inputs.mode }}"
         asset_name="${{ inputs.asset-name }}"
         rclone_remote="${{ inputs.rclone-remote }}"
         backup_dir="${{ inputs.backup-dir }}"
+        asset_size="nao identificado"
+        history_path=""
+        latest_path=""
+
+        write_outputs() {
+          local finished_at duration
+          finished_at="$(date +%s)"
+          duration=$((finished_at - started_at))
+
+          {
+            echo "duration_seconds=${duration}"
+            echo "asset_size=${asset_size}"
+            echo "history_path=${history_path}"
+            echo "latest_path=${latest_path}"
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        trap write_outputs EXIT
 
         if [ "$mode" != "upload" ] && [ "$mode" != "download" ]; then
           echo "Modo invalido: $mode"
+          exit 1
+        fi
+
+        if [ "$mode" = "upload" ] && [[ "$asset_name" == *.gz ]]; then
+          echo "Upload de novos backups .gz nao e mais suportado: $asset_name"
+          echo "Use um arquivo .xz."
           exit 1
         fi
 
@@ -64,6 +104,8 @@ runs:
           echo "Restaurando ${rclone_remote}:${latest_path}."
           rclone copyto "${rclone_remote}:${latest_path}" "$asset_name" --progress
           ls -lh "$asset_name"
+          asset_size="$(du -h "$asset_name" 2>/dev/null | cut -f 1 || true)"
+          asset_size="${asset_size:-nao identificado}"
           exit 0
         fi
 
@@ -71,6 +113,9 @@ runs:
           echo "Arquivo nao encontrado para backup: $asset_name"
           exit 1
         fi
+
+        asset_size="$(du -h "$asset_name" 2>/dev/null | cut -f 1 || true)"
+        asset_size="${asset_size:-nao identificado}"
 
         timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
         case "$asset_name" in

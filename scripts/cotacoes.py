@@ -55,7 +55,7 @@ def main() -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compacta ou descompacta dados do projeto com xz ou gzip."
+        description="Compacta dados com xz e restaura pacotes xz ou gzip legados."
     )
     parser.add_argument(
         "comando",
@@ -203,7 +203,13 @@ def resolve_tar_filter(package_file: Path, operation: str) -> str:
         return "xz -T0 -9" if operation == "compress" else "xz -T0"
 
     if file_name.endswith(".tar.gz"):
-        return "pigz -9" if operation == "compress" else "pigz"
+        if operation == "compress":
+            raise CommandError(
+                f"Compactacao em gzip nao e mais suportada: {package_file.name}. "
+                "Use .tar.xz."
+            )
+
+        return "pigz"
 
     raise CommandError(
         f"Formato de pacote nao suportado: {package_file.name}. "
@@ -312,7 +318,10 @@ def build_database_compress_command(output_path: Path, source_path: Path) -> lis
         return ["xz", "-T0", "-9", "-c", str(source_path)]
 
     if output_path.name.endswith(".gz"):
-        return ["pigz", "-9", "-c", str(source_path)]
+        raise CommandError(
+            f"Compactacao de banco em gzip nao e mais suportada: {output_path.name}. "
+            "Use .xz."
+        )
 
     raise CommandError(
         f"Formato de banco compactado nao suportado: {output_path.name}. "

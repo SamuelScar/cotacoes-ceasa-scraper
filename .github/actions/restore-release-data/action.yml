@@ -29,17 +29,56 @@ inputs:
     default: "cotacoes-ceasa"
     description: Diretorio base do backup dentro do OneDrive.
 
+outputs:
+  restored:
+    description: Define se algum dado foi restaurado.
+    value: ${{ steps.restore_data.outputs.restored }}
+  restored_source:
+    description: Origem restaurada.
+    value: ${{ steps.restore_data.outputs.restored_source }}
+  restored_asset:
+    description: Asset restaurado.
+    value: ${{ steps.restore_data.outputs.restored_asset }}
+  duration_seconds:
+    description: Duracao total da restauracao.
+    value: ${{ steps.restore_data.outputs.duration_seconds }}
+  data_size:
+    description: Tamanho final de data/.
+    value: ${{ steps.restore_data.outputs.data_size }}
+
 runs:
   using: composite
   steps:
     - name: Restaurar data
+      id: restore_data
       shell: bash
       env:
         RCLONE_CONFIG_CONTENT: ${{ inputs.rclone-config }}
       run: |
         set -euo pipefail
+        started_at="$(date +%s)"
         restored=false
+        restored_source="none"
+        restored_asset=""
         backup_asset_name="${{ inputs.backup-asset-name }}"
+
+        write_outputs() {
+          local finished_at duration data_size
+          finished_at="$(date +%s)"
+          duration=$((finished_at - started_at))
+          data_size="$(du -sh data 2>/dev/null | cut -f 1 || true)"
+          data_size="${data_size:-nao gerado}"
+
+          {
+            echo "restored=${restored}"
+            echo "restored_source=${restored_source}"
+            echo "restored_asset=${restored_asset}"
+            echo "duration_seconds=${duration}"
+            echo "data_size=${data_size}"
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        trap write_outputs EXIT
 
         if [ -z "$backup_asset_name" ]; then
           backup_asset_name="${{ inputs.asset-name }}"
@@ -86,6 +125,8 @@ runs:
                 if docker compose run --rm --entrypoint python app \
                   scripts/cotacoes.py descompactar --incluir-sqlite --arquivo "$candidate"; then
                   restored=true
+                  restored_source="onedrive"
+                  restored_asset="$candidate"
                   break
                 else
                   echo "Falha ao descompactar pacote completo $candidate. A release sera tentada como fallback."
@@ -109,6 +150,8 @@ runs:
             if docker compose run --rm --entrypoint python app \
               scripts/cotacoes.py descompactar-banco --arquivo "${{ inputs.asset-name }}"; then
               restored=true
+              restored_source="github-release-database"
+              restored_asset="${{ inputs.asset-name }}"
             else
               echo "Falha ao restaurar banco da release. A coleta seguira sem banco restaurado."
               rm -f "${{ inputs.asset-name }}"
@@ -119,6 +162,8 @@ runs:
               if docker compose run --rm --entrypoint python app \
                 scripts/cotacoes.py descompactar --arquivo ceasa-data-latest.tar.gz; then
                 restored=true
+                restored_source="github-release-legacy-package"
+                restored_asset="ceasa-data-latest.tar.gz"
               else
                 echo "Falha ao descompactar pacote legado da release. A coleta seguira sem data/ restaurado."
                 rm -f ceasa-data-latest.tar.gz

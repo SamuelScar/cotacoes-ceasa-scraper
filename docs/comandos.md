@@ -192,12 +192,12 @@ O script deve ser executado dentro do container `app`, porque usa o Python,
 somente a operacao de pacote:
 
 1. cria um lock para impedir duas operacoes simultaneas no pacote;
-2. em `compactar`, compacta `data/` em `.tar.xz.tmp` com `tar` e `xz -T0 -9`, ou em `.tar.gz.tmp` com `pigz -9` quando esse formato legado for informado;
+2. em `compactar`, compacta `data/` em `.tar.xz.tmp` com `tar` e `xz -T0 -9`;
 3. valida o pacote temporario;
 4. substitui o `.tar.xz` final somente depois da validacao;
 5. em `descompactar`, restaura a pasta `data/` a partir do `.tar.xz` ou `.tar.gz` informado;
 6. em `compactar-banco`, cria um snapshot consistente de `data/cotacoes.sqlite` e compacta em `.sqlite.xz`;
-7. em `descompactar-banco`, restaura somente `data/cotacoes.sqlite` a partir de `.xz` ou `.gz`.
+7. em `descompactar-banco`, restaura somente `data/cotacoes.sqlite` a partir de `.xz` ou `.gz` legado.
 
 Por padrao, o pacote completo pode excluir o SQLite. Com `--incluir-sqlite`, o
 pacote tambem carrega o banco local; esse e o formato usado no backup do
@@ -234,21 +234,23 @@ Fluxo executado pelo workflow:
 1. selecionar a janela diaria de execucao;
 2. criar o `.env` sem credenciais pelo action local `prepare-scraper`;
 3. construir a imagem Docker;
-4. tentar baixar e descompactar o pacote completo do OneDrive, quando
+4. normalizar nomes de artefatos para impedir novos backups `.gz`;
+5. tentar baixar e descompactar o pacote completo do OneDrive, quando
    configurado;
-5. se o OneDrive falhar, tentar baixar e restaurar `cotacoes.sqlite.xz` da
+6. se o OneDrive falhar, tentar baixar e restaurar `cotacoes.sqlite.xz` da
    release fixa; se ainda nao existir, tentar o pacote legado `ceasa-data-latest.tar.gz`;
-6. executar `docker compose run --rm tudo`;
-7. mesmo se o scraper terminar com erro, tentar compactar e salvar os dados
+7. executar `docker compose run --rm tudo`;
+8. mesmo se o scraper terminar com erro, tentar compactar e salvar os dados
    gerados;
-8. compactar o pacote completo com SQLite e salvar no OneDrive em `latest/` e
+9. compactar o pacote completo com SQLite em `.tar.xz` e salvar no OneDrive em `latest/` e
    `history/`, quando configurado;
-9. compactar o banco SQLite e tentar substituir o asset `cotacoes.sqlite.xz` na
-   release `latest-data`;
-10. validar se ao menos um artefato foi salvo fora do runner;
-11. anexar ao ultimo relatorio os resultados de restauracao, scraper,
-    compactacao, backup OneDrive, publicacao GitHub e validacao final;
-12. enviar o ultimo relatorio por e-mail se os secrets SMTP estiverem presentes.
+10. compactar o banco SQLite, remover pacotes completos legados da release e
+   tentar substituir o asset `cotacoes.sqlite.xz` na release `latest-data`;
+11. validar se ao menos um artefato foi salvo fora do runner;
+12. anexar ao ultimo relatorio os resultados de restauracao, scraper,
+    compactacao, backup OneDrive, publicacao GitHub, validacao final e ambiente
+    do runner;
+13. enviar o ultimo relatorio por e-mail se os secrets SMTP estiverem presentes.
 
 Variaveis principais do workflow:
 
@@ -274,8 +276,24 @@ Se uma variavel nao existir, o padrao acima e usado para nao perder a execucao.
 Quando `DATA_ONEDRIVE_BACKUP_ENABLED=true`, configure tambem o secret
 `RCLONE_CONFIG` no environment `Crawler`. O backup do OneDrive salva uma copia
 historica em `history/` e atualiza uma copia fixa em `latest/` com o mesmo nome
-de `DATA_ONEDRIVE_ASSET_NAME`. Se o backup do OneDrive nao puder ser restaurado,
-o workflow tenta baixar o banco da release. Na primeira rodada apos a troca para `.xz`, ele tambem tenta restaurar pacotes `.tar.gz` legados quando o `.tar.xz` novo ainda nao existir.
+de `DATA_ONEDRIVE_ASSET_NAME`. Se essa variavel ainda estiver configurada com
+`.tar.gz`, o workflow troca o sufixo para `.tar.xz` antes de compactar e salvar
+novos backups. Se o backup do OneDrive nao puder ser restaurado, o workflow
+tenta baixar o banco da release. Na primeira rodada apos a troca para `.xz`, ele
+tambem tenta restaurar pacotes `.tar.gz` legados quando o `.tar.xz` novo ainda
+nao existir.
+
+O workflow nao limpa nem altera os pacotes ja existentes em `history/` no
+OneDrive. Cada execucao bem-sucedida cria um novo arquivo historico com
+timestamp e `GITHUB_RUN_ID`, e apenas atualiza a copia fixa em `latest/`.
+
+O relatorio final concentra as metricas de depuracao da rodada. As metricas
+internas do scraper registram tempos de download, processamento, parsers,
+persistencia SQLite, fila e quantidade de raws. O workflow tambem anexa metricas
+operacionais: tempo de restauracao, origem restaurada, tamanho de `data/`, tempo
+de compactacao do pacote completo, tempo de upload OneDrive, tempo de
+compactacao do banco, tempo de publicacao da release, tamanhos dos artefatos e
+informacoes do runner.
 
 Se as variaveis do OneDrive ainda nao estiverem configuradas, ou se
 `RCLONE_CONFIG` estiver ausente, a coleta continua normalmente. Nesse caso o

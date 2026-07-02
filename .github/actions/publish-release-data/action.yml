@@ -13,13 +13,41 @@ inputs:
     default: "2147483647"
     description: Tamanho maximo aceito pelo GitHub Release Asset.
 
+outputs:
+  duration_seconds:
+    description: Duracao da publicacao.
+    value: ${{ steps.publish_asset.outputs.duration_seconds }}
+  asset_size:
+    description: Tamanho do asset publicado.
+    value: ${{ steps.publish_asset.outputs.asset_size }}
+  removed_legacy_assets:
+    description: Pacotes completos legados removidos da release.
+    value: ${{ steps.publish_asset.outputs.removed_legacy_assets }}
+
 runs:
   using: composite
   steps:
     - name: Publicar asset
+      id: publish_asset
       shell: bash
       run: |
         set -euo pipefail
+        started_at="$(date +%s)"
+        removed_legacy_assets=""
+
+        write_outputs() {
+          local finished_at duration
+          finished_at="$(date +%s)"
+          duration=$((finished_at - started_at))
+
+          {
+            echo "duration_seconds=${duration}"
+            echo "asset_size=${asset_size:-nao identificado}"
+            echo "removed_legacy_assets=${removed_legacy_assets:-nenhum}"
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        trap write_outputs EXIT
 
         if [ ! -f "${{ inputs.asset-name }}" ]; then
           echo "Asset local nao encontrado: ${{ inputs.asset-name }}"
@@ -45,6 +73,30 @@ runs:
             --title "Dados CEASA mais recentes" \
             --notes "Dados atualizados automaticamente pelo GitHub Actions."
         fi
+
+        release_assets="$(gh release view "${{ inputs.release-tag }}" --json assets --jq '.assets[].name')"
+        legacy_assets=(
+          "ceasa-data-latest.tar.gz"
+          "ceasa-data-latest.tar.xz"
+          "ceasa-data-full-latest.tar.gz"
+          "ceasa-data-full-latest.tar.xz"
+        )
+
+        for legacy_asset in "${legacy_assets[@]}"; do
+          if [ "$legacy_asset" = "${{ inputs.asset-name }}" ]; then
+            continue
+          fi
+
+          if printf "%s\n" "$release_assets" | grep -Fx "$legacy_asset" >/dev/null; then
+            echo "Removendo pacote completo legado da release: $legacy_asset."
+            gh release delete-asset "${{ inputs.release-tag }}" "$legacy_asset" -y
+            if [ -z "$removed_legacy_assets" ]; then
+              removed_legacy_assets="$legacy_asset"
+            else
+              removed_legacy_assets="${removed_legacy_assets}, ${legacy_asset}"
+            fi
+          fi
+        done
 
         if gh release view "${{ inputs.release-tag }}" --json assets --jq '.assets[].name' | grep -Fx "${{ inputs.asset-name }}" >/dev/null; then
           echo "Removendo asset antigo ${{ inputs.asset-name }}."

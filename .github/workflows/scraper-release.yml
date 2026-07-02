@@ -148,6 +148,43 @@ jobs:
 
           echo "enabled=${onedrive_enabled}" >> "$GITHUB_OUTPUT"
 
+      - name: Resolver nomes dos artefatos
+        id: data_assets
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          release_asset_name="$DATA_ASSET_NAME"
+          onedrive_asset_name="$DATA_ONEDRIVE_ASSET_NAME"
+
+          if [[ "$onedrive_asset_name" == *.tar.gz ]]; then
+            migrated_name="${onedrive_asset_name%.tar.gz}.tar.xz"
+            echo "DATA_ONEDRIVE_ASSET_NAME legado detectado: $onedrive_asset_name."
+            echo "Usando $migrated_name para compactacao e novos backups."
+            onedrive_asset_name="$migrated_name"
+          fi
+
+          if [[ "$release_asset_name" == *.gz ]]; then
+            echo "DATA_ASSET_NAME nao pode mais usar .gz: $release_asset_name."
+            echo "Use um nome .xz, como cotacoes.sqlite.xz."
+            exit 1
+          fi
+
+          if [[ "$onedrive_asset_name" != *.tar.xz ]]; then
+            echo "DATA_ONEDRIVE_ASSET_NAME deve terminar com .tar.xz: $onedrive_asset_name."
+            exit 1
+          fi
+
+          if [[ "$release_asset_name" != *.xz ]]; then
+            echo "DATA_ASSET_NAME deve terminar com .xz: $release_asset_name."
+            exit 1
+          fi
+
+          echo "DATA_ASSET_NAME=$release_asset_name" >> "$GITHUB_ENV"
+          echo "DATA_ONEDRIVE_ASSET_NAME=$onedrive_asset_name" >> "$GITHUB_ENV"
+          echo "release_asset_name=$release_asset_name" >> "$GITHUB_OUTPUT"
+          echo "onedrive_asset_name=$onedrive_asset_name" >> "$GITHUB_OUTPUT"
+
       - name: Build da imagem Docker
         if: steps.janela.outputs.should_run == 'true'
         run: docker compose build
@@ -160,8 +197,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         with:
           release-tag: ${{ env.DATA_RELEASE_TAG }}
-          asset-name: ${{ env.DATA_ASSET_NAME }}
-          backup-asset-name: ${{ env.DATA_ONEDRIVE_ASSET_NAME }}
+          asset-name: ${{ steps.data_assets.outputs.release_asset_name }}
+          backup-asset-name: ${{ steps.data_assets.outputs.onedrive_asset_name }}
           backup-enabled: ${{ steps.onedrive_config.outputs.enabled }}
           rclone-config: ${{ secrets.RCLONE_CONFIG }}
           rclone-remote: ${{ env.DATA_ONEDRIVE_REMOTE }}
@@ -171,7 +208,19 @@ jobs:
         id: executar_scraper
         if: steps.janela.outputs.should_run == 'true'
         continue-on-error: true
-        run: docker compose run --rm tudo
+        run: |
+          set -euo pipefail
+          started_at="$(date +%s)"
+
+          finish() {
+            local finished_at duration
+            finished_at="$(date +%s)"
+            duration=$((finished_at - started_at))
+            echo "duration_seconds=${duration}" >> "$GITHUB_OUTPUT"
+          }
+
+          trap finish EXIT
+          docker compose run --rm tudo
 
       - name: Conferir pasta data gerada
         id: conferir_data
@@ -179,6 +228,23 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
+          started_at="$(date +%s)"
+
+          finish() {
+            local finished_at duration data_size data_files
+            finished_at="$(date +%s)"
+            duration=$((finished_at - started_at))
+            data_size="$(du -sh data 2>/dev/null | cut -f 1 || true)"
+            data_files="$(find data -type f 2>/dev/null | wc -l || true)"
+
+            {
+              echo "duration_seconds=${duration}"
+              echo "data_size=${data_size:-nao gerado}"
+              echo "data_files=${data_files:-0}"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          trap finish EXIT
 
           if [ ! -d data ]; then
             echo "A pasta data/ nao foi gerada."
@@ -192,12 +258,133 @@ jobs:
           echo "Relatorios recentes:"
           find data/relatorios -maxdepth 1 -type f -printf "%TY-%Tm-%Td %TH:%TM %p\n" 2>/dev/null | sort | tail -n 10 || true
 
+      - name: Registrar ambiente no relatorio
+        if: always() && steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ -d data ]; then
+            sudo chown "$(id -u):$(id -g)" data || true
+          fi
+
+          if [ -d data/relatorios ]; then
+            sudo chown -R "$(id -u):$(id -g)" data/relatorios || true
+          fi
+
+          latest_report=""
+          if [ -d data/relatorios ]; then
+            latest_report=$(find data/relatorios -maxdepth 1 -type f -name "*.md" -printf "%T@ %p\n" | sort -n | tail -n 1 | cut -d " " -f 2-)
+          fi
+
+          if [ -z "$latest_report" ]; then
+            mkdir -p data/relatorios
+            timestamp=$(date -u +%Y%m%d_%H%M%S)
+            latest_report="data/relatorios/workflow_ambiente_${timestamp}.md"
+            {
+              echo "# Ambiente do workflow"
+              echo
+              echo "Nenhum relatorio do scraper foi encontrado. Este relatorio foi criado pelo workflow para registrar o ambiente do runner."
+            } > "$latest_report"
+          fi
+
+          single_line() {
+            "$@" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'
+          }
+
+          read_meminfo_kb() {
+            local field="$1"
+            awk -v field="$field" '$1 == field ":" { print $2 }' /proc/meminfo 2>/dev/null || true
+          }
+
+          format_kb() {
+            local value="$1"
+
+            if [ -z "$value" ]; then
+              echo "nao identificado"
+              return
+            fi
+
+            awk -v kb="$value" 'BEGIN { printf "%.1f GiB", kb / 1024 / 1024 }'
+          }
+
+          cpu_model="$(awk -F': ' '/model name/ { print $2; exit }' /proc/cpuinfo 2>/dev/null || true)"
+          cpu_model="${cpu_model:-nao identificado}"
+          cpu_count="$(nproc 2>/dev/null || true)"
+          cpu_count="${cpu_count:-nao identificado}"
+          mem_total="$(format_kb "$(read_meminfo_kb MemTotal)")"
+          mem_available="$(format_kb "$(read_meminfo_kb MemAvailable)")"
+          workspace_usage="$(du -sh "$GITHUB_WORKSPACE" 2>/dev/null | cut -f 1 || true)"
+          workspace_usage="${workspace_usage:-nao identificado}"
+          workspace_disk="$(df -h "$GITHUB_WORKSPACE" 2>/dev/null | awk 'NR == 2 { print $2 " total, " $4 " livre, " $5 " usado" }' || true)"
+          workspace_disk="${workspace_disk:-nao identificado}"
+          docker_version="$(single_line docker --version)"
+          docker_version="${docker_version:-nao identificado}"
+          compose_version="$(single_line docker compose version)"
+          compose_version="${compose_version:-nao identificado}"
+          runner_os_release="$(single_line bash -c 'cat /etc/os-release')"
+          runner_os_release="${runner_os_release:-nao identificado}"
+
+          {
+            echo
+            echo "## Contexto do workflow"
+            echo
+            echo "| Item | Valor |"
+            echo "| --- | --- |"
+            echo "| Run ID | ${GITHUB_RUN_ID} |"
+            echo "| Run attempt | ${GITHUB_RUN_ATTEMPT} |"
+            echo "| Evento | ${GITHUB_EVENT_NAME} |"
+            echo "| Ref | ${GITHUB_REF} |"
+            echo "| Commit | ${GITHUB_SHA} |"
+            echo "| Release tag | ${DATA_RELEASE_TAG} |"
+            echo "| Banco GitHub | ${DATA_ASSET_NAME} |"
+            echo "| Pacote completo OneDrive | ${DATA_ONEDRIVE_ASSET_NAME} |"
+            echo
+            echo "## Ambiente do runner"
+            echo
+            echo "| Item | Valor |"
+            echo "| --- | --- |"
+            echo "| Runner OS | ${RUNNER_OS:-nao identificado} |"
+            echo "| Runner arch | ${RUNNER_ARCH:-nao identificado} |"
+            echo "| Runner name | ${RUNNER_NAME:-nao identificado} |"
+            echo "| Runner temp | ${RUNNER_TEMP:-nao identificado} |"
+            echo "| Workspace | ${GITHUB_WORKSPACE:-nao identificado} |"
+            echo "| Hostname | $(hostname 2>/dev/null || echo nao identificado) |"
+            echo "| Kernel | $(uname -a 2>/dev/null || echo nao identificado) |"
+            echo "| OS release | ${runner_os_release} |"
+            echo "| CPU | ${cpu_model} |"
+            echo "| CPUs disponiveis | ${cpu_count} |"
+            echo "| Memoria total | ${mem_total} |"
+            echo "| Memoria disponivel | ${mem_available} |"
+            echo "| Uso do workspace | ${workspace_usage} |"
+            echo "| Disco do workspace | ${workspace_disk} |"
+            echo "| Docker | ${docker_version} |"
+            echo "| Docker Compose | ${compose_version} |"
+          } >> "$latest_report"
+
+          echo "Ambiente registrado no relatorio: $latest_report"
+
       - name: Compactar pacote completo para OneDrive
         id: pacote_onedrive
         if: steps.janela.outputs.should_run == 'true' && steps.onedrive_config.outputs.enabled == 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
+          started_at="$(date +%s)"
+
+          finish() {
+            local finished_at duration package_size
+            finished_at="$(date +%s)"
+            duration=$((finished_at - started_at))
+            package_size="$(du -h "$DATA_ONEDRIVE_ASSET_NAME" 2>/dev/null | cut -f 1 || true)"
+
+            {
+              echo "duration_seconds=${duration}"
+              echo "package_size=${package_size:-nao gerado}"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          trap finish EXIT
+
           docker compose run --rm --entrypoint python app \
             scripts/cotacoes.py compactar --incluir-sqlite --arquivo "$DATA_ONEDRIVE_ASSET_NAME"
           ls -lh "$DATA_ONEDRIVE_ASSET_NAME"
@@ -209,7 +396,7 @@ jobs:
         uses: ./.github/actions/backup-release-data
         with:
           mode: upload
-          asset-name: ${{ env.DATA_ONEDRIVE_ASSET_NAME }}
+          asset-name: ${{ steps.data_assets.outputs.onedrive_asset_name }}
           rclone-config: ${{ secrets.RCLONE_CONFIG }}
           rclone-remote: ${{ env.DATA_ONEDRIVE_REMOTE }}
           backup-dir: ${{ env.DATA_ONEDRIVE_DIR }}
@@ -220,6 +407,22 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
+          started_at="$(date +%s)"
+
+          finish() {
+            local finished_at duration database_size
+            finished_at="$(date +%s)"
+            duration=$((finished_at - started_at))
+            database_size="$(du -h "$DATA_ASSET_NAME" 2>/dev/null | cut -f 1 || true)"
+
+            {
+              echo "duration_seconds=${duration}"
+              echo "database_size=${database_size:-nao gerado}"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          trap finish EXIT
+
           docker compose run --rm --entrypoint python app \
             scripts/cotacoes.py compactar-banco --arquivo "$DATA_ASSET_NAME"
           ls -lh "$DATA_ASSET_NAME"
@@ -233,7 +436,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         with:
           release-tag: ${{ env.DATA_RELEASE_TAG }}
-          asset-name: ${{ env.DATA_ASSET_NAME }}
+          asset-name: ${{ steps.data_assets.outputs.release_asset_name }}
 
       - name: Validar salvamento da rodada
         id: validar_salvamento
@@ -345,6 +548,28 @@ jobs:
             echo "| Compactar banco GitHub | ${{ steps.banco_github.outcome }} |"
             echo "| Publicar release GitHub | ${{ steps.publicar_github.outcome }} |"
             echo "| Validar salvamento | ${{ steps.validar_salvamento.outcome }} |"
+            echo
+            echo "## Metricas de desempenho do workflow"
+            echo
+            echo "| Metrica | Valor |"
+            echo "| --- | --- |"
+            echo "| Tempo restauracao dados (s) | ${{ steps.restaurar_data.outputs.duration_seconds || 'nao medido' }} |"
+            echo "| Restauracao origem | ${{ steps.restaurar_data.outputs.restored_source || 'nao identificado' }} |"
+            echo "| Restauracao asset | ${{ steps.restaurar_data.outputs.restored_asset || 'nenhum' }} |"
+            echo "| Tamanho data apos restauracao | ${{ steps.restaurar_data.outputs.data_size || 'nao medido' }} |"
+            echo "| Tempo scraper (s) | ${{ steps.executar_scraper.outputs.duration_seconds || 'nao medido' }} |"
+            echo "| Tempo conferencia data (s) | ${{ steps.conferir_data.outputs.duration_seconds || 'nao medido' }} |"
+            echo "| Tamanho data final | ${{ steps.conferir_data.outputs.data_size || 'nao medido' }} |"
+            echo "| Arquivos em data final | ${{ steps.conferir_data.outputs.data_files || 'nao medido' }} |"
+            echo "| Tempo compactacao OneDrive (s) | ${{ steps.pacote_onedrive.outputs.duration_seconds || 'nao medido' }} |"
+            echo "| Tamanho pacote OneDrive | ${{ steps.pacote_onedrive.outputs.package_size || 'nao gerado' }} |"
+            echo "| Tempo upload OneDrive (s) | ${{ steps.backup_onedrive.outputs.duration_seconds || 'nao medido' }} |"
+            echo "| Caminho OneDrive latest | ${{ steps.backup_onedrive.outputs.latest_path || 'nao gerado' }} |"
+            echo "| Caminho OneDrive history novo | ${{ steps.backup_onedrive.outputs.history_path || 'nao gerado' }} |"
+            echo "| Tempo compactacao banco (s) | ${{ steps.banco_github.outputs.duration_seconds || 'nao medido' }} |"
+            echo "| Tamanho banco compactado | ${{ steps.banco_github.outputs.database_size || 'nao gerado' }} |"
+            echo "| Tempo publicacao release (s) | ${{ steps.publicar_github.outputs.duration_seconds || 'nao medido' }} |"
+            echo "| Assets legados removidos da release | ${{ steps.publicar_github.outputs.removed_legacy_assets || 'nenhum' }} |"
           } >> "$latest_report"
 
           echo "Salvamento registrado no relatorio: $latest_report"
