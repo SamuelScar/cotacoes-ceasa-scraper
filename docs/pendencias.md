@@ -8,6 +8,7 @@
 | [Criterios de qualidade da rodada](#criterios-de-qualidade-da-rodada) | Definir quando uma rodada com falha parcial deve ser marcada como invalida. |
 | [Dificuldades nas coletas recentes](#dificuldades-nas-coletas-recentes) | Investigar fontes com timeouts, historico parcial e falhas de parser/persistencia. |
 | [Desempenho do processamento de raws](#desempenho-do-processamento-de-raws) | Medir e reduzir o custo do processamento, principalmente na extracao de PDFs e nas fontes mais lentas. |
+| [Avaliar pipeline produtor-consumidor por raw](#avaliar-pipeline-produtor-consumidor-por-raw) | Considerar uma fila real entre download e persistencia se o processamento virar gargalo. |
 | [Avaliar otimizacao dos PDFs brutos](#avaliar-otimizacao-dos-pdfs-brutos) | Testar melhor a reducao de tamanho com qpdf antes de usar no backup oficial. |
 | [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
 | [Migrar documentacao extensa para GitHub Wiki](#migrar-documentacao-extensa-para-github-wiki) | Reorganizar guias longos na Wiki quando o repositorio puder ficar publico. |
@@ -134,6 +135,37 @@ Melhorias a avaliar:
 Qualquer otimizacao deve preservar os resultados atuais dos parsers, a
 proveniencia dos registros e a capacidade de reconstruir o banco a partir dos
 raws.
+
+## Avaliar pipeline produtor-consumidor por raw
+
+O fluxo atual ja sobrepoe download e persistencia entre fontes quando
+`COTACOES_WORKERS` e maior que `1`: os downloads rodam em paralelo e a
+persistencia sequencial consome os resultados conforme cada fonte termina.
+Ainda assim, o processamento so comeca depois que a fonte conclui o download
+completo ou parcial.
+
+A melhoria futura seria trocar esse modelo por uma fila produtor-consumidor por
+raw: cada arquivo baixado entraria em uma fila, enquanto um consumidor de
+persistencia processaria os raws continuamente sem interromper a raspagem.
+
+No estado atual, os relatorios recentes indicam que o gargalo principal ainda e
+o download. A persistencia acumulada ficou baixa em comparacao com a janela de
+downloads, entao a mudanca nao parece prioritaria para ganho de tempo agora.
+
+Avaliar essa implementacao somente se os relatorios mostrarem:
+
+- aumento relevante do tempo acumulado de persistencia;
+- crescimento do backlog ou da espera na fila;
+- processamento de raws virando gargalo em relacao aos downloads;
+- necessidade operacional de isolar melhor download e persistencia.
+
+Cuidados antes de implementar:
+
+- garantir que arquivos ainda em escrita nao sejam processados;
+- preservar o tratamento de downloads parciais por fonte;
+- manter a persistencia SQLite sem escrita concorrente perigosa;
+- registrar metricas separadas de fila, processamento e salvamento;
+- manter a capacidade de reconstruir o banco a partir dos raws.
 
 ## Avaliar otimizacao dos PDFs brutos
 
