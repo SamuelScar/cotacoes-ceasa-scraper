@@ -221,7 +221,7 @@ def compact_database(package_file: Path) -> None:
     if not DATABASE_FILE.exists():
         raise CommandError(f"Banco SQLite nao encontrado: {DATABASE_FILE}")
 
-    temp_package_file = package_file.with_name(f"{package_file.name}.tmp")
+    temp_package_file = package_file.with_name(f"{package_file.stem}.tmp{package_file.suffix}")
     snapshot_file = package_file.with_name(f"{package_file.name}.snapshot.sqlite")
     remove_file(temp_package_file)
     remove_file(snapshot_file)
