@@ -1,5 +1,7 @@
 from io import BytesIO
 import json
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -8,11 +10,16 @@ from pathlib import Path
 PDF_TEXT_CACHE_VERSION = "pypdf-layout-v1"
 
 
+class PdfTextDependencyError(RuntimeError):
+    """Indica que uma dependencia de extracao de PDF nao esta instalada."""
+
+
 @dataclass
 class PdfTextCacheStats:
     hits: int = 0
     misses: int = 0
     writes: int = 0
+    fallbacks: int = 0
 
 
 _pdf_text_cache_dir: Path | None = None
@@ -35,6 +42,7 @@ def get_pdf_text_cache_stats() -> PdfTextCacheStats:
         hits=_pdf_text_cache_stats.hits,
         misses=_pdf_text_cache_stats.misses,
         writes=_pdf_text_cache_stats.writes,
+        fallbacks=_pdf_text_cache_stats.fallbacks,
     )
 
 
@@ -50,9 +58,23 @@ def extract_pdf_pages(content: bytes) -> list[str]:
     _pdf_text_cache_stats.misses += 1
 
     try:
+        texts = _extract_pdf_pages_with_pypdf(content)
+    except PdfTextDependencyError:
+        raise
+    except Exception as error:
+        texts = _extract_pdf_pages_with_pdftotext(content, error)
+        _pdf_text_cache_stats.fallbacks += 1
+
+    _write_cached_pages(cache_key, texts)
+
+    return texts
+
+
+def _extract_pdf_pages_with_pypdf(content: bytes) -> list[str]:
+    try:
         from pypdf import PdfReader
     except ModuleNotFoundError as error:
-        raise RuntimeError(
+        raise PdfTextDependencyError(
             "Dependencia pypdf nao instalada. "
             "Instale as dependencias atualizadas do projeto."
         ) from error
@@ -68,9 +90,49 @@ def extract_pdf_pages(content: bytes) -> list[str]:
 
         texts.append(page_text)
 
-    _write_cached_pages(cache_key, texts)
-
     return texts
+
+
+def _extract_pdf_pages_with_pdftotext(
+    content: bytes,
+    original_error: Exception,
+) -> list[str]:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        pdf_path = Path(temp_dir) / "input.pdf"
+        pdf_path.write_bytes(content)
+        result = _run_pdftotext(pdf_path)
+
+    text = result.stdout.decode("utf-8", errors="replace")
+    pages = _split_pdftotext_pages(text)
+
+    if pages:
+        return pages
+
+    raise original_error
+
+
+def _run_pdftotext(pdf_path: Path) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            ["pdftotext", "-layout", "-enc", "UTF-8", str(pdf_path), "-"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError as error:
+        raise PdfTextDependencyError(
+            "Dependencia pdftotext nao instalada. "
+            "Instale poppler-utils na imagem do projeto."
+        ) from error
+
+
+def _split_pdftotext_pages(text: str) -> list[str]:
+    pages = text.split("\f")
+
+    if pages and not pages[-1].strip():
+        pages.pop()
+
+    return [page for page in pages if page.strip()]
 
 
 def extract_pdf_text(content: bytes) -> str:

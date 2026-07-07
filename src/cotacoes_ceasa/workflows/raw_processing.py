@@ -196,6 +196,7 @@ def process_raw_and_report(
             ("Cache PDF acertos", pdf_cache_stats.hits),
             ("Cache PDF misses", pdf_cache_stats.misses),
             ("Cache PDF gravacoes", pdf_cache_stats.writes),
+            ("Fallback PDF pdftotext", pdf_cache_stats.fallbacks),
         ),
         report_title=f"Desempenho do processamento {source_slug}",
     )

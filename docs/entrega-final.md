@@ -16,6 +16,8 @@ apresentacao ou envio final.
 | Script de pacote de dados | Feita | `scripts/cotacoes.py` passou a compactar e descompactar `ceasa-data-latest.tar.gz` com `tar` e `pigz`. |
 | Backup externo do pacote | Feita | O workflow salva o pacote completo no OneDrive e publica no GitHub apenas o pacote enxuto. |
 | Otimizacoes de processamento | Feita | Raws ja persistidos podem ser ignorados, textos de PDFs passaram a ser cacheados e relatorios ganharam metricas de desempenho. |
+| Robustez da CEASA-PR | Feita | A persistencia passou a rejeitar cotacoes invalidas sem derrubar o lote, preencher data ausente pelo raw quando seguro e recuperar PDFs malformados com fallback global. |
+| Tratamento de raws sem cotacao | Feita | A CEASA-PE passou a diferenciar paginas sem cotacao de falhas reais e o relatorio passou a separar raws com e sem cotacao. |
 
 ## 1. Crawler por workflow e release fixa
 
@@ -289,3 +291,60 @@ terminaram o download, sem abrir escrita concorrente no SQLite.
 - O processamento paralelo de raws/PDFs continua fora desta etapa.
 - As metricas permitem comparar rodadas com diferentes valores de
   `COTACOES_WORKERS` sem depender apenas da duracao total da action.
+
+## 9. Ajustes pos-analise dos relatorios de 2026-07-07
+
+### Objetivo
+
+Corrigir os pontos de maior perda ou ruido identificados nos relatorios mais
+recentes do crawler, principalmente CEASA-PR e CEASA-PE.
+
+### O que foi feito
+
+- Tornada a persistencia mais tolerante a registros invalidos no fluxo de
+  `--process-raw` e `--save`, separando cotacoes validas de rejeitadas antes da
+  escrita no SQLite.
+- Adicionado resumo de `Cotacoes rejeitadas` para deixar claro quando algum
+  registro foi descartado por falta de data, falta de preco ou preco negativo.
+- Ajustado o parser da CEASA-PR para ignorar cabecalhos adicionais que estavam
+  virando pseudo-produtos.
+- Adicionado preenchimento de data ausente da CEASA-PR a partir da data do raw,
+  quando o parser nao encontra data no texto extraido.
+- Ajustado o parser da CEASA-PE para tratar paginas 404 internas e paginas sem
+  registro como ausencia de cotacao, nao como erro de parser.
+- Adicionadas metricas de `Raws com cotacao` e `Raws sem cotacao` ao
+  processamento de raws.
+- Adicionado fallback global de extracao de PDF com `pdftotext`, acionado apenas
+  quando o `pypdf` falha em PDFs malformados.
+- Adicionada a dependencia `poppler-utils` na imagem Docker para disponibilizar
+  `pdftotext` dentro do container.
+- Adicionada a metrica `Fallback PDF pdftotext` ao relatorio de processamento.
+
+### Validacoes observadas
+
+- CEASA-PR deixou de falhar por `Cotacao sem data` no teste isolado e persistiu
+  `530163` cotacoes, sem rejeicoes.
+- CEASA-PE deixou de registrar avisos de tabela ausente no teste isolado e
+  processou `4088` raws, separando `3201` com cotacao e `887` sem cotacao.
+- A investigacao dos PDFs problematicos da CEASA-PR mostrou que os `26` avisos
+  correspondiam a apenas `5` PDFs unicos repetidos em coletas diferentes.
+- Esses PDFs foram confirmados como malformados pelo `qpdf`, mas com texto
+  recuperavel por `pdftotext`.
+
+### Arquivos relacionados
+
+- `Dockerfile`
+- `src/cotacoes_ceasa/parsers/pdf.py`
+- `src/cotacoes_ceasa/parsers/ceasa_pe.py`
+- `src/cotacoes_ceasa/parsers/ceasa_pr.py`
+- `src/cotacoes_ceasa/workflows/raw_processing.py`
+- `src/cotacoes_ceasa/cli/commands/source.py`
+
+### Observacoes
+
+- O fallback de PDF e global, mas nao substitui o caminho principal: PDFs normais
+  continuam sendo extraidos com `pypdf`.
+- Para validar o fallback no ambiente oficial, a imagem Docker precisa ser
+  reconstruida para instalar `poppler-utils`.
+- Ainda falta rodar uma execucao completa de todas as fontes apos essas
+  alteracoes para medir o impacto consolidado no relatorio final.
