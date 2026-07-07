@@ -53,7 +53,9 @@
     "state": "Bahia",
     "uf": "BA",
     "city": "Salvador",
-    "base_url": "https://www.ba.gov.br/sde/boletim-informativo-ceasa"
+    "base_url": "https://www.ba.gov.br/sde/boletim-informativo-ceasa",
+    "limited_history": true,
+    "max_quotes_back": 1
   },
   "ceasa-df": {
     "name": "CEASA-DF",

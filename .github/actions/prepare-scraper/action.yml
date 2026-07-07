@@ -17,6 +17,9 @@ inputs:
   request-delay-seconds:
     required: true
     description: Intervalo entre requisicoes.
+  complement-prohort:
+    required: true
+    description: Habilita ou desabilita o complemento PROHORT.
 
 runs:
   using: composite
@@ -37,7 +40,7 @@ runs:
         COTACOES_WORKERS=${{ inputs.workers }}
         COTACOES_REUSE_RAW_BEFORE_REQUEST=false
         COTACOES_INCREMENTAL_HISTORY=${{ inputs.incremental-history }}
-        COTACOES_COMPLEMENT_PROHORT=false
+        COTACOES_COMPLEMENT_PROHORT=${{ inputs.complement-prohort }}
         COTACOES_TARGET_DATE=${{ inputs.target-date }}
         COTACOES_QUOTES_BACK=${{ inputs.quotes-back }}
         EOF

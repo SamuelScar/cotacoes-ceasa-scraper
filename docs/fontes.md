@@ -12,7 +12,7 @@ somente diferencas que afetam a operacao.
 | `ceasa-go` | HTML + PDF | Sim | Navega por ano, mes e PDF diario |
 | `ceasa-ce` | HTML + PDF | Nao | Coleta somente os boletins atuais |
 | `ceasa-rj` | HTML + PDF | Sim | Navega por ano, mes e PDF diario |
-| `ceasa-ba` | HTML + PDF | Sim | Usa a lista historica de boletins |
+| `ceasa-ba` | HTML + PDF | Sim, limitado | A pagina pode expor apenas a janela mais recente e bloquear algumas origens |
 | `ceasa-df` | HTML + PDF | Nao | Coleta somente o boletim SIMA atual |
 | `ceagesp-sp` | HTML | Sim, limitado | A pagina expoe apenas uma janela recente |
 | `ceasa-es` | HTML | Sim | Cada mercado possui datas independentes |

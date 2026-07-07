@@ -124,6 +124,8 @@ registros do SQLite, apenas força nova extracao de texto dos PDFs.
 Com `COTACOES_COMPLEMENT_PROHORT=true`, todo fluxo que salva no SQLite executa
 o complemento PROHORT uma vez ao final. A URL versionada fica em
 `config/prohort.json`, nao no `.env`.
+No workflow do GitHub Actions, defina essa variavel no Environment `Crawler`
+para habilitar o complemento na execucao automatica.
 
 O `.env` e local e nao deve ser versionado. Atualize `.env.example` quando uma
 nova configuracao obrigatoria for adicionada.

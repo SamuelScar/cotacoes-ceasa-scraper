@@ -18,7 +18,7 @@ apresentacao ou envio final.
 | Otimizacoes de processamento | Feita | Raws ja persistidos podem ser ignorados, textos de PDFs passaram a ser cacheados e relatorios ganharam metricas de desempenho. |
 | Robustez da CEASA-PR | Feita | A persistencia passou a rejeitar cotacoes invalidas sem derrubar o lote, preencher data ausente pelo raw quando seguro e recuperar PDFs malformados com fallback global. |
 | Tratamento de raws sem cotacao | Feita | A CEASA-PE passou a diferenciar paginas sem cotacao de falhas reais e o relatorio passou a separar raws com e sem cotacao. |
-| Historico limitado por fonte | Feita | A CEAGESP-SP passou a ter limite proprio de historico e o relatorio informa quando o `quotes_back` efetivo foi reduzido. |
+| Historico limitado por fonte | Feita | CEAGESP-SP e CEASA-BA passaram a ter limite proprio de historico e o relatorio informa quando o `quotes_back` efetivo foi reduzido. |
 
 ## 1. Crawler por workflow e release fixa
 
@@ -321,6 +321,7 @@ recentes do crawler, principalmente CEASA-PR, CEASA-PE e CEAGESP-SP.
   `pdftotext` dentro do container.
 - Adicionada a metrica `Fallback PDF pdftotext` ao relatorio de processamento.
 - Marcada a CEAGESP-SP como fonte de historico limitado em `config/fontes.json`, com `max_quotes_back=10`.
+- Marcada a CEASA-BA como fonte de historico limitado em `config/fontes.json`, com `max_quotes_back=1`, porque a pagina passou a expor apenas uma janela recente e pode bloquear algumas origens.
 - Adicionado calculo de `quotes_back` efetivo por fonte, preservando o valor
   solicitado no relatorio quando houver reducao.
 - Ajustada a resolucao historica para aceitar as datas encontradas em fontes
@@ -340,6 +341,9 @@ recentes do crawler, principalmente CEASA-PR, CEASA-PE e CEAGESP-SP.
 - A CEAGESP-SP ainda precisa ser validada em uma execucao Docker, mas a regra
   agora limita a busca efetiva a `10` cotacoes anteriores e registra a reducao
   no relatorio.
+- A CEASA-BA foi tratada como fonte limitada e bloqueavel; quando o download
+  oficial falhar ou a janela exposta for curta, o complemento PROHORT pode
+  reduzir perda de cotacoes correspondentes.
 
 ### Arquivos relacionados
 
@@ -352,6 +356,8 @@ recentes do crawler, principalmente CEASA-PR, CEASA-PE e CEAGESP-SP.
 - `src/cotacoes_ceasa/workflows/raw_processing.py`
 - `src/cotacoes_ceasa/workflows/collection.py`
 - `src/cotacoes_ceasa/cli/commands/source.py`
+- `.github/workflows/scraper-release.yml`
+- `.github/actions/prepare-scraper/action.yml`
 
 ### Observacoes
 
@@ -362,4 +368,7 @@ recentes do crawler, principalmente CEASA-PR, CEASA-PE e CEAGESP-SP.
 - Ainda falta rodar uma execucao completa de todas as fontes apos essas
   alteracoes para medir o impacto consolidado no relatorio final.
 - Para CEAGESP-SP, `quotes_back=100` passa a ser limitado para `10` internamente;
-  outras fontes continuam usando o valor solicitado, salvo configuracao propria.
+  para CEASA-BA, passa a ser limitado para `1`; outras fontes continuam usando o
+  valor solicitado, salvo configuracao propria.
+- O workflow agora respeita `COTACOES_COMPLEMENT_PROHORT` definido no Environment
+  `Crawler` e repassa o valor para o `.env` gerado no runner.

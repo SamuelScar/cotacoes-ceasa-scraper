@@ -51,6 +51,7 @@ jobs:
           REPO_COTACOES_INCREMENTAL_HISTORY: ${{ vars.COTACOES_INCREMENTAL_HISTORY || '' }}
           REPO_COTACOES_WORKERS: ${{ vars.COTACOES_WORKERS || '' }}
           REPO_COTACOES_REQUEST_DELAY_SECONDS: ${{ vars.COTACOES_REQUEST_DELAY_SECONDS || '' }}
+          REPO_COTACOES_COMPLEMENT_PROHORT: ${{ vars.COTACOES_COMPLEMENT_PROHORT || '' }}
           REPO_COTACOES_SEND_REPORT_EMAIL: ${{ vars.COTACOES_SEND_REPORT_EMAIL || '' }}
         run: |
           set -euo pipefail
@@ -84,6 +85,7 @@ jobs:
           incremental_history="$(resolve_value COTACOES_INCREMENTAL_HISTORY "$REPO_COTACOES_INCREMENTAL_HISTORY" "false")"
           workers="$(resolve_value COTACOES_WORKERS "$REPO_COTACOES_WORKERS" "1")"
           request_delay_seconds="$(resolve_value COTACOES_REQUEST_DELAY_SECONDS "$REPO_COTACOES_REQUEST_DELAY_SECONDS" "7.0")"
+          complement_prohort="$(resolve_value COTACOES_COMPLEMENT_PROHORT "$REPO_COTACOES_COMPLEMENT_PROHORT" "false")"
           send_report_email="$(resolve_value COTACOES_SEND_REPORT_EMAIL "$REPO_COTACOES_SEND_REPORT_EMAIL" "true")"
 
           write_config target_date COTACOES_TARGET_DATE "$target_date"
@@ -91,6 +93,7 @@ jobs:
           write_config incremental_history COTACOES_INCREMENTAL_HISTORY "$incremental_history"
           write_config workers COTACOES_WORKERS "$workers"
           write_config request_delay_seconds COTACOES_REQUEST_DELAY_SECONDS "$request_delay_seconds"
+          write_config complement_prohort COTACOES_COMPLEMENT_PROHORT "$complement_prohort"
           write_config send_report_email COTACOES_SEND_REPORT_EMAIL "$send_report_email"
 
       - name: Conferir variaveis do scraper
@@ -99,7 +102,7 @@ jobs:
           set -euo pipefail
 
           echo "Configuracao resolvida para esta execucao:"
-          for name in COTACOES_QUOTES_BACK COTACOES_WORKERS COTACOES_REQUEST_DELAY_SECONDS COTACOES_INCREMENTAL_HISTORY COTACOES_SEND_REPORT_EMAIL; do
+          for name in COTACOES_QUOTES_BACK COTACOES_WORKERS COTACOES_REQUEST_DELAY_SECONDS COTACOES_INCREMENTAL_HISTORY COTACOES_COMPLEMENT_PROHORT COTACOES_SEND_REPORT_EMAIL; do
             echo "$name=${!name}"
           done
 
@@ -112,6 +115,7 @@ jobs:
           incremental-history: ${{ steps.scraper-vars.outputs.incremental_history }}
           workers: ${{ steps.scraper-vars.outputs.workers }}
           request-delay-seconds: ${{ steps.scraper-vars.outputs.request_delay_seconds }}
+          complement-prohort: ${{ steps.scraper-vars.outputs.complement_prohort }}
 
       - name: Contexto da execucao
         if: steps.janela.outputs.should_run == 'true'
