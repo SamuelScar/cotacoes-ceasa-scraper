@@ -39,6 +39,11 @@ HEADER_KEYS = {
     "anteriorvar",
     "pagina",
 }
+HEADER_FRAGMENT_KEYS = (
+    ("pesomedio", "procedencia", "unitario"),
+    ("produto", "unidade", "embalagem"),
+    ("mercado", "min", "max"),
+)
 SITUATION_KEYS = {"estavel", "firme", "fraco", "ausente", "alta", "baixa", "normal"}
 COMMON_CLASSIFICATION_STARTS = {
     "comum",
@@ -427,4 +432,10 @@ class CeasaPrParser:
     def _is_header_line(self, line: str) -> bool:
         line_key = _normalize_key(line)
 
-        return any(line_key.startswith(prefix) for prefix in HEADER_KEYS)
+        if any(line_key.startswith(prefix) for prefix in HEADER_KEYS):
+            return True
+
+        return any(
+            all(fragment in line_key for fragment in fragments)
+            for fragments in HEADER_FRAGMENT_KEYS
+        )

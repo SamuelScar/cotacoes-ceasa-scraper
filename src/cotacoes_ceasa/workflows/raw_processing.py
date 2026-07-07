@@ -140,7 +140,11 @@ def process_raw_and_report(
                 stats.parser_seconds += perf_counter() - parser_started_at
                 parsed_cotacoes = [
                     replace(
-                        cotacao,
+                        fill_missing_quote_date(
+                            cotacao,
+                            source_slug,
+                            metadata.target_date,
+                        ),
                         arquivo_raw=file_path.as_posix(),
                         hash_raw=raw_hash,
                         baixado_em=metadata.downloaded_at,
@@ -187,6 +191,20 @@ def process_raw_and_report(
     )
 
     return cotacoes
+
+
+def fill_missing_quote_date(
+    cotacao: Cotacao,
+    source_slug: str,
+    target_date: date | None,
+) -> Cotacao:
+    if source_slug != "ceasa-pr":
+        return cotacao
+
+    if cotacao.data_cotacao is not None or target_date is None:
+        return cotacao
+
+    return replace(cotacao, data_cotacao=target_date)
 
 
 def read_raw_file(file_path: Path) -> bytes | str:

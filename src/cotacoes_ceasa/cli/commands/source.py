@@ -82,10 +82,11 @@ def run_source(
         output.section("Persistencia")
         output.info(f"Salvando cotacoes em {args.database_path}.")
         persistence_started_at = perf_counter()
-        inserted_count = save_cotacoes(
+        inserted_count, rejected_count = save_valid_cotacoes(
             args=args,
             cotacoes=cotacoes,
             source_config=source_config,
+            output=output,
         )
         persistence_seconds = perf_counter() - persistence_started_at
         output.success(f"{inserted_count} registro(s) novo(s) salvo(s).")
@@ -95,6 +96,7 @@ def run_source(
             (
                 ("Cotacoes processadas", len(cotacoes)),
                 ("Registros novos", inserted_count),
+                ("Cotacoes rejeitadas", rejected_count),
                 ("Tempo persistencia SQLite (s)", f"{persistence_seconds:.2f}"),
                 ("Banco", args.database_path),
             ),
@@ -114,10 +116,11 @@ def run_source(
         output.section("Persistencia")
         output.info(f"Salvando cotacoes em {args.database_path}.")
         persistence_started_at = perf_counter()
-        inserted_count = save_cotacoes(
+        inserted_count, rejected_count = save_valid_cotacoes(
             args=args,
             cotacoes=cotacoes,
             source_config=source_config,
+            output=output,
         )
         persistence_seconds = perf_counter() - persistence_started_at
         output.success(f"{inserted_count} registro(s) novo(s) salvo(s).")
@@ -127,6 +130,7 @@ def run_source(
             (
                 ("Cotacoes extraidas", len(cotacoes)),
                 ("Registros novos", inserted_count),
+                ("Cotacoes rejeitadas", rejected_count),
                 ("Tempo persistencia SQLite (s)", f"{persistence_seconds:.2f}"),
                 ("Banco", args.database_path),
             ),
@@ -230,6 +234,73 @@ def build_collector(args, config: AppConfig, source_config: SourceConfig):
             else None
         ),
         quotes_back=args.quotes_back,
+    )
+
+
+def save_valid_cotacoes(
+    args,
+    cotacoes: list[Cotacao],
+    source_config: SourceConfig,
+    output: TerminalOutput,
+) -> tuple[int, int]:
+    valid_cotacoes, rejection_counts = split_valid_cotacoes(cotacoes)
+    rejected_count = sum(rejection_counts.values())
+
+    if rejected_count:
+        output.warning(
+            f"{args.source} | {rejected_count} cotacao(oes) rejeitada(s) "
+            f"antes da persistencia: {format_rejection_counts(rejection_counts)}."
+        )
+
+    if not valid_cotacoes:
+        return 0, rejected_count
+
+    inserted_count = save_cotacoes(
+        args=args,
+        cotacoes=valid_cotacoes,
+        source_config=source_config,
+    )
+
+    return inserted_count, rejected_count
+
+
+def split_valid_cotacoes(
+    cotacoes: list[Cotacao],
+) -> tuple[list[Cotacao], dict[str, int]]:
+    valid_cotacoes: list[Cotacao] = []
+    rejection_counts: dict[str, int] = {}
+
+    for cotacao in cotacoes:
+        reason = reject_cotacao_reason(cotacao)
+
+        if reason is None:
+            valid_cotacoes.append(cotacao)
+            continue
+
+        rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+
+    return valid_cotacoes, rejection_counts
+
+
+def reject_cotacao_reason(cotacao: Cotacao) -> str | None:
+    if cotacao.data_cotacao is None:
+        return "data ausente"
+
+    prices = (cotacao.preco_minimo, cotacao.preco_comum, cotacao.preco_maximo)
+
+    if all(price is None for price in prices):
+        return "preco ausente"
+
+    if any(price is not None and price < 0 for price in prices):
+        return "preco negativo"
+
+    return None
+
+
+def format_rejection_counts(rejection_counts: dict[str, int]) -> str:
+    return ", ".join(
+        f"{count} {reason}"
+        for reason, count in sorted(rejection_counts.items())
     )
 
 
