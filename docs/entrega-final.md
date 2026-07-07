@@ -13,7 +13,7 @@ apresentacao ou envio final.
 | Pipeline de download e persistencia | Feita | `tudo` com mais de um worker passou a processar cada fonte assim que seu download termina. |
 | Progresso de execucao com Rich | Feita | Comandos longos passaram a exibir progresso por fonte, categoria e arquivo. |
 | Dependencias centralizadas | Feita | O projeto passou a usar `pyproject.toml` como fonte unica de dependencias. |
-| Script de pacote de dados | Feita | `scripts/cotacoes.py` passou a compactar e descompactar `ceasa-data-latest.tar.gz` com `tar` e `pigz`. |
+| Script de pacote de dados | Feita | `scripts/cotacoes.py` passou a compactar e descompactar pacotes `.tar.xz` com `tar` e `xz`. |
 | Backup externo do pacote | Feita | O workflow salva o pacote completo no OneDrive e publica no GitHub apenas o pacote enxuto. |
 | Otimizacoes de processamento | Feita | Raws ja persistidos podem ser ignorados, textos de PDFs passaram a ser cacheados e relatorios ganharam metricas de desempenho. |
 | Robustez da CEASA-PR | Feita | A persistencia passou a rejeitar cotacoes invalidas sem derrubar o lote, preencher data ausente pelo raw quando seguro e recuperar PDFs malformados com fallback global. |
@@ -34,7 +34,7 @@ apenas o pacote de dados mais recente fora do Git comum.
   pasta `data/`.
 - Criado o workflow `.github/workflows/scraper-release.yml` para restaurar o
   pacote atual, executar `docker compose run --rm tudo`, compactar `data/` e
-  publicar `ceasa-data-latest.tar.gz` como asset da release fixa `latest-data`.
+  publicar o pacote de dados como asset da release fixa `latest-data`.
 - Separadas actions locais para preparar configuracao, restaurar pacote,
   publicar asset e enviar relatorio por e-mail.
 - Evitado versionar milhares de arquivos brutos diretamente no Git comum.
@@ -160,9 +160,9 @@ formato de pacote publicado na release fixa.
   `compactar` e `descompactar`.
 - Mantido o lock em `.cotacoes-data.lock` para impedir duas operacoes
   simultaneas no pacote.
-- Automatizada a compactacao em `ceasa-data-latest.tar.gz.tmp`, validacao e
+- Automatizada a compactacao em arquivo temporario, validacao e
   substituicao segura do pacote final.
-- Automatizada a restauracao de `ceasa-data-latest.tar.gz` para `data/`.
+- Automatizada a restauracao do pacote de dados para `data/`.
 - Mantido o uso de `pigz` com `tar -I pigz` dentro do container.
 - Adicionado `--incluir-sqlite` para permitir pacote completo no OneDrive,
   mantendo o pacote padrao sem SQLite para reduzir tamanho na release.
@@ -372,3 +372,4 @@ recentes do crawler, principalmente CEASA-PR, CEASA-PE e CEAGESP-SP.
   valor solicitado, salvo configuracao propria.
 - O workflow agora respeita `COTACOES_COMPLEMENT_PROHORT` definido no Environment
   `Crawler` e repassa o valor para o `.env` gerado no runner.
+- O workflow deixou de aceitar fallback legado na restauracao e passa a encerrar antes do scraper quando nenhum dado anterior e restaurado.

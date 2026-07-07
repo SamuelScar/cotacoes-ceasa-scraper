@@ -7,7 +7,7 @@
 
 O container usa Python 3.12 e instala as dependencias declaradas em
 `pyproject.toml`.
-Ele tambem instala `xz` e `pigz`, usados pelo script de pacote executado dentro do container para compactar e descompactar os artefatos de dados. Os novos pacotes usam `.xz`; `.gz` fica suportado para restaurar artefatos legados.
+Ele tambem instala `xz` e `pigz`, usados pelo script de pacote executado dentro do container para compactar e descompactar os artefatos de dados em `.xz`.
 Os horarios dos relatorios usam o fuso `America/Sao_Paulo`.
 
 ## Preparacao
@@ -24,7 +24,7 @@ em `data/` permanecem na maquina.
 
 O crawler atual roda no GitHub Actions pelo workflow
 `.github/workflows/scraper-release.yml`. Ele cria um `.env` temporario no runner,
-restaura o pacote completo pelo OneDrive quando configurado, usa o banco da release `latest-data` como fallback, executa o servico `tudo` e tenta salvar os dados gerados antes de encerrar a rodada.
+restaura o pacote completo pelo OneDrive quando configurado, usa o banco da release `latest-data` como fallback e so executa o servico `tudo` quando algum dado anterior foi restaurado.
 
 O GitHub Release publica somente `cotacoes.sqlite.xz`, pronto para consumo. O pacote do OneDrive preserva o backup completo, com raws, cache, relatorios e SQLite.
 

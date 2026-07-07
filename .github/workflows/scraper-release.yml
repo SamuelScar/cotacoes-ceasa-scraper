@@ -161,13 +161,6 @@ jobs:
           release_asset_name="$DATA_ASSET_NAME"
           onedrive_asset_name="$DATA_ONEDRIVE_ASSET_NAME"
 
-          if [[ "$onedrive_asset_name" == *.tar.gz ]]; then
-            migrated_name="${onedrive_asset_name%.tar.gz}.tar.xz"
-            echo "DATA_ONEDRIVE_ASSET_NAME legado detectado: $onedrive_asset_name."
-            echo "Usando $migrated_name para compactacao e novos backups."
-            onedrive_asset_name="$migrated_name"
-          fi
-
           if [[ "$release_asset_name" == *.gz ]]; then
             echo "DATA_ASSET_NAME nao pode mais usar .gz: $release_asset_name."
             echo "Use um nome .xz, como cotacoes.sqlite.xz."

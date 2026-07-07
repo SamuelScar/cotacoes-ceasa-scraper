@@ -195,9 +195,9 @@ somente a operacao de pacote:
 2. em `compactar`, compacta `data/` em `.tar.xz.tmp` com `tar` e `xz -T0 -9`;
 3. valida o pacote temporario;
 4. substitui o `.tar.xz` final somente depois da validacao;
-5. em `descompactar`, restaura a pasta `data/` a partir do `.tar.xz` ou `.tar.gz` informado;
+5. em `descompactar`, restaura a pasta `data/` a partir do `.tar.xz` informado;
 6. em `compactar-banco`, cria um snapshot consistente de `data/cotacoes.sqlite` e compacta em `.sqlite.xz`;
-7. em `descompactar-banco`, restaura somente `data/cotacoes.sqlite` a partir de `.xz` ou `.gz` legado.
+7. em `descompactar-banco`, restaura somente `data/cotacoes.sqlite` a partir de `.xz`.
 
 Por padrao, o pacote completo pode excluir o SQLite. Com `--incluir-sqlite`, o
 pacote tambem carrega o banco local; esse e o formato usado no backup do
@@ -238,9 +238,9 @@ Fluxo executado pelo workflow:
 5. tentar baixar e descompactar o pacote completo do OneDrive, quando
    configurado;
 6. se o OneDrive falhar, tentar baixar e restaurar `cotacoes.sqlite.xz` da
-   release fixa; se ainda nao existir, tentar o pacote legado `ceasa-data-latest.tar.gz`;
+   release fixa; se nenhum dado anterior for restaurado, encerrar antes do scraper;
 7. executar `docker compose run --rm tudo`;
-8. mesmo se o scraper terminar com erro, tentar compactar e salvar os dados
+8. mesmo se o scraper terminar com erro depois da restauracao, tentar compactar e salvar os dados
    gerados;
 9. compactar o pacote completo com SQLite em `.tar.xz` e salvar no OneDrive em `latest/` e
    `history/`, quando configurado;
@@ -276,12 +276,9 @@ Se uma variavel nao existir, o padrao acima e usado para nao perder a execucao.
 Quando `DATA_ONEDRIVE_BACKUP_ENABLED=true`, configure tambem o secret
 `RCLONE_CONFIG` no environment `Crawler`. O backup do OneDrive salva uma copia
 historica em `history/` e atualiza uma copia fixa em `latest/` com o mesmo nome
-de `DATA_ONEDRIVE_ASSET_NAME`. Se essa variavel ainda estiver configurada com
-`.tar.gz`, o workflow troca o sufixo para `.tar.xz` antes de compactar e salvar
-novos backups. Se o backup do OneDrive nao puder ser restaurado, o workflow
-tenta baixar o banco da release. Na primeira rodada apos a troca para `.xz`, ele
-tambem tenta restaurar pacotes `.tar.gz` legados quando o `.tar.xz` novo ainda
-nao existir.
+de `DATA_ONEDRIVE_ASSET_NAME`. Se o backup do OneDrive nao puder ser restaurado,
+o workflow tenta baixar o banco da release. Se nenhuma restauracao funcionar, a
+execucao para antes de rodar o scraper.
 
 O workflow nao limpa nem altera os pacotes ja existentes em `history/` no
 OneDrive. Cada execucao bem-sucedida cria um novo arquivo historico com

@@ -112,30 +112,22 @@ runs:
             export RCLONE_CONFIG="${rclone_config_dir}/rclone.conf"
 
             backup_dir="${backup_dir%/}"
-            backup_candidates="$backup_asset_name"
-            if [[ "$backup_asset_name" == *.tar.xz ]]; then
-              backup_candidates="$backup_candidates ${backup_asset_name%.tar.xz}.tar.gz"
-            fi
+            latest_path="${backup_dir}/latest/${backup_asset_name}"
+            echo "Tentando restaurar ${rclone_remote}:${latest_path}."
 
-            for candidate in $backup_candidates; do
-              latest_path="${backup_dir}/latest/${candidate}"
-              echo "Tentando restaurar ${rclone_remote}:${latest_path}."
-
-              if rclone copyto "${rclone_remote}:${latest_path}" "$candidate" --progress; then
-                if docker compose run --rm --entrypoint python app \
-                  scripts/cotacoes.py descompactar --incluir-sqlite --arquivo "$candidate"; then
-                  restored=true
-                  restored_source="onedrive"
-                  restored_asset="$candidate"
-                  break
-                else
-                  echo "Falha ao descompactar pacote completo $candidate. A release sera tentada como fallback."
-                  rm -f "$candidate"
-                fi
+            if rclone copyto "${rclone_remote}:${latest_path}" "$backup_asset_name" --progress; then
+              if docker compose run --rm --entrypoint python app \
+                scripts/cotacoes.py descompactar --incluir-sqlite --arquivo "$backup_asset_name"; then
+                restored=true
+                restored_source="onedrive"
+                restored_asset="$backup_asset_name"
               else
-                echo "Backup $candidate nao encontrado ou indisponivel."
+                echo "Falha ao descompactar pacote completo $backup_asset_name. A release sera tentada como fallback."
+                rm -f "$backup_asset_name"
               fi
-            done
+            else
+              echo "Backup $backup_asset_name nao encontrado ou indisponivel."
+            fi
 
             if [ "$restored" != "true" ]; then
               echo "Nenhum backup OneDrive foi restaurado. A release sera tentada como fallback."
@@ -153,29 +145,17 @@ runs:
               restored_source="github-release-database"
               restored_asset="${{ inputs.asset-name }}"
             else
-              echo "Falha ao restaurar banco da release. A coleta seguira sem banco restaurado."
+              echo "Falha ao restaurar banco da release."
               rm -f "${{ inputs.asset-name }}"
             fi
           else
-            echo "Banco ${{ inputs.asset-name }} ainda nao existe. Tentando pacote legado ceasa-data-latest.tar.gz."
-            if gh release download "${{ inputs.release-tag }}" --pattern "ceasa-data-latest.tar.gz" --clobber; then
-              if docker compose run --rm --entrypoint python app \
-                scripts/cotacoes.py descompactar --arquivo ceasa-data-latest.tar.gz; then
-                restored=true
-                restored_source="github-release-legacy-package"
-                restored_asset="ceasa-data-latest.tar.gz"
-              else
-                echo "Falha ao descompactar pacote legado da release. A coleta seguira sem data/ restaurado."
-                rm -f ceasa-data-latest.tar.gz
-              fi
-            else
-              echo "Nenhum asset compativel encontrado na release. A coleta comecara sem dados restaurados."
-            fi
+            echo "Banco ${{ inputs.asset-name }} nao encontrado na release."
           fi
-        else
-          if [ "$restored" = "false" ]; then
-            echo "Release ${{ inputs.release-tag }} ainda nao existe. Ela sera criada no final."
-          fi
+        fi
+
+        if [ "$restored" != "true" ]; then
+          echo "::error::Nenhum dado anterior foi restaurado. O scraper nao sera executado para evitar publicar uma base incompleta."
+          exit 1
         fi
 
         mkdir -p data
