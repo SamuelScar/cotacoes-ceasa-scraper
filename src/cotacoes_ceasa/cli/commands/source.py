@@ -33,6 +33,13 @@ def run_source(
 ) -> list[Path] | None:
     """Executa a operacao solicitada para uma fonte."""
     source_config = config.sources[args.source]
+    requested_quotes_back = args.quotes_back
+    args = copy(args)
+    args.quotes_back = resolve_effective_quotes_back(
+        source_config,
+        args.quotes_back,
+    )
+    limited_history = source_config.limited_history
     operation = resolve_source_operation(args)
     output.header(
         operation,
@@ -40,6 +47,7 @@ def run_source(
             args,
             source_config,
             config.incremental_history,
+            requested_quotes_back,
         ),
     )
     collector = build_collector(
@@ -112,6 +120,7 @@ def run_source(
             source_slug=args.source,
             incremental_history=config.incremental_history,
             output=output,
+            limited_history=limited_history,
         )
         output.section("Persistencia")
         output.info(f"Salvando cotacoes em {args.database_path}.")
@@ -146,6 +155,7 @@ def run_source(
             source_slug=args.source,
             incremental_history=config.incremental_history,
             output=output,
+            limited_history=limited_history,
         )
         complete_source_operation(
             output,
@@ -162,6 +172,7 @@ def run_source(
         source_slug=args.source,
         incremental_history=config.incremental_history,
         output=output,
+        limited_history=limited_history,
     )
     complete_source_operation(
         output,
@@ -218,6 +229,21 @@ def complete_source_operation(
         return
 
     output.report_summary(rows)
+
+
+def resolve_effective_quotes_back(
+    source_config: SourceConfig,
+    quotes_back: int | None,
+) -> int | None:
+    max_quotes_back = source_config.max_quotes_back
+
+    if max_quotes_back is None or quotes_back == 0:
+        return quotes_back
+
+    if quotes_back is None:
+        return max_quotes_back
+
+    return min(quotes_back, max_quotes_back)
 
 
 def build_collector(args, config: AppConfig, source_config: SourceConfig):
@@ -338,25 +364,51 @@ def build_source_execution_details(
     args,
     source_config: SourceConfig,
     incremental_history: bool,
+    requested_quotes_back: int | None = None,
 ) -> tuple[tuple[str, object], ...]:
     details: list[tuple[str, object]] = [
         ("Fonte", f"{source_config.name} ({args.source})"),
     ]
 
     if not args.list_categories and not args.process_raw:
-        details.extend(
-            [
-                ("Data limite", args.target_date or "ultima disponivel"),
-                ("Cotacoes anteriores", format_quotes_back(args.quotes_back)),
-                (
-                    "Historico incremental",
-                    format_incremental_history(
-                        incremental_history,
-                        args.target_date,
-                        args.quotes_back,
+        details.append(("Data limite", args.target_date or "ultima disponivel"))
+
+        if requested_quotes_back != args.quotes_back:
+            details.extend(
+                [
+                    (
+                        "Cotacoes anteriores solicitadas",
+                        format_quotes_back(requested_quotes_back),
                     ),
+                    (
+                        "Cotacoes anteriores efetivas",
+                        format_quotes_back(args.quotes_back),
+                    ),
+                ]
+            )
+        else:
+            details.append(
+                ("Cotacoes anteriores", format_quotes_back(args.quotes_back))
+            )
+
+        if source_config.limited_history:
+            details.append(("Historico limitado pela fonte", "sim"))
+            max_quotes_back = source_config.max_quotes_back
+
+            if max_quotes_back is not None:
+                details.append(
+                    ("Limite de cotacoes anteriores da fonte", max_quotes_back)
+                )
+
+        details.append(
+            (
+                "Historico incremental",
+                format_incremental_history(
+                    incremental_history,
+                    args.target_date,
+                    args.quotes_back,
                 ),
-            ]
+            )
         )
 
     if not args.list_categories:

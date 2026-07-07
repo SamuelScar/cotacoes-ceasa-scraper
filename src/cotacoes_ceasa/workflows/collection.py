@@ -29,6 +29,7 @@ def collect_and_report(
     source_slug: str,
     incremental_history: bool = False,
     output: TerminalOutput | None = None,
+    limited_history: bool = False,
 ) -> list[Cotacao]:
     """Coleta cotacoes e imprime um resumo por categoria."""
     output = output or TerminalOutput()
@@ -46,6 +47,7 @@ def collect_and_report(
         source_slug,
         incremental_history,
         output,
+        limited_history=limited_history,
     )
     cotacoes: list[Cotacao] = []
 
@@ -107,6 +109,7 @@ def download_and_report(
     source_slug: str,
     incremental_history: bool = False,
     output: TerminalOutput | None = None,
+    limited_history: bool = False,
 ) -> list[Path]:
     """Baixa arquivos brutos para a janela de datas configurada."""
     output = output or TerminalOutput()
@@ -129,6 +132,7 @@ def download_and_report(
             incremental_history,
             output,
             downloaded_files,
+            limited_history=limited_history,
         )
         saved_files = list(downloaded_files.values())
 
@@ -190,6 +194,7 @@ def resolve_quotation_dates(
     allow_empty_history: bool = False,
     downloaded_files: dict[tuple[str, date | None], Path] | None = None,
     output: TerminalOutput | None = None,
+    limited_history: bool = False,
 ) -> list[date | None]:
     """Descobre datas de cotacao disponiveis voltando a partir da data limite."""
     if quotes_back is not None and quotes_back < 0:
@@ -298,6 +303,16 @@ def resolve_quotation_dates(
             else candidate_date - timedelta(days=1)
         )
 
+    if limited_history and found_dates:
+        if output is not None:
+            output.info(
+                f"{probe_category_slug} | historico limitado pela fonte: "
+                f"{len(found_dates)} de {expected_count} data(s) encontradas "
+                f"apos {max_attempts} tentativa(s)."
+            )
+
+        return found_dates
+
     raise RuntimeError(
         f"Nao foi possivel encontrar {expected_count} datas de cotacao "
         f"apos {max_attempts} tentativas."
@@ -352,6 +367,7 @@ def resolve_category_target_dates(
     incremental_history: bool,
     output: TerminalOutput | None = None,
     downloaded_files: dict[tuple[str, date | None], Path] | None = None,
+    limited_history: bool = False,
 ) -> dict[str, list[date | None]]:
     """Resolve as datas que devem ser consultadas para cada categoria."""
     if getattr(collector, "category_specific_dates", False):
@@ -381,6 +397,7 @@ def resolve_category_target_dates(
                 allow_empty_history=allow_empty_history,
                 downloaded_files=downloaded_files,
                 output=output,
+                limited_history=limited_history,
             )
 
         return target_dates_by_category
@@ -402,6 +419,7 @@ def resolve_category_target_dates(
         allow_empty_history=allow_empty_history,
         downloaded_files=downloaded_files,
         output=output,
+        limited_history=limited_history,
     )
 
     if collector.supports_target_dates:

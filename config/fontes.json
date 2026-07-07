@@ -67,7 +67,9 @@
     "state": "Sao Paulo",
     "uf": "SP",
     "city": "Sao Paulo",
-    "base_url": "https://ceagesp.gov.br/cotacoes/"
+    "base_url": "https://ceagesp.gov.br/cotacoes/",
+    "limited_history": true,
+    "max_quotes_back": 10
   },
   "ceasa-es": {
     "name": "CEASA-ES",

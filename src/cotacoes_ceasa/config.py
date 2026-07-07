@@ -41,6 +41,8 @@ class SourceConfig:
     uf: str
     city: str
     base_url: str
+    limited_history: bool = False
+    max_quotes_back: int | None = None
 
 
 def load_config(env_file: Path = ENV_FILE) -> AppConfig:
@@ -93,9 +95,23 @@ def load_sources(sources_file: Path) -> dict[str, SourceConfig]:
             uf=source["uf"],
             city=source["city"],
             base_url=source["base_url"],
+            limited_history=bool(source.get("limited_history", False)),
+            max_quotes_back=_get_optional_source_int(
+                source,
+                "max_quotes_back",
+            ),
         )
         for slug, source in data.items()
     }
+
+
+def _get_optional_source_int(source: dict, name: str) -> int | None:
+    value = source.get(name)
+
+    if value is None:
+        return None
+
+    return int(value)
 
 
 def load_prohort_url(prohort_file: Path) -> str:

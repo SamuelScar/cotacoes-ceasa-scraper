@@ -18,6 +18,7 @@ apresentacao ou envio final.
 | Otimizacoes de processamento | Feita | Raws ja persistidos podem ser ignorados, textos de PDFs passaram a ser cacheados e relatorios ganharam metricas de desempenho. |
 | Robustez da CEASA-PR | Feita | A persistencia passou a rejeitar cotacoes invalidas sem derrubar o lote, preencher data ausente pelo raw quando seguro e recuperar PDFs malformados com fallback global. |
 | Tratamento de raws sem cotacao | Feita | A CEASA-PE passou a diferenciar paginas sem cotacao de falhas reais e o relatorio passou a separar raws com e sem cotacao. |
+| Historico limitado por fonte | Feita | A CEAGESP-SP passou a ter limite proprio de historico e o relatorio informa quando o `quotes_back` efetivo foi reduzido. |
 
 ## 1. Crawler por workflow e release fixa
 
@@ -297,7 +298,7 @@ terminaram o download, sem abrir escrita concorrente no SQLite.
 ### Objetivo
 
 Corrigir os pontos de maior perda ou ruido identificados nos relatorios mais
-recentes do crawler, principalmente CEASA-PR e CEASA-PE.
+recentes do crawler, principalmente CEASA-PR, CEASA-PE e CEAGESP-SP.
 
 ### O que foi feito
 
@@ -319,6 +320,12 @@ recentes do crawler, principalmente CEASA-PR e CEASA-PE.
 - Adicionada a dependencia `poppler-utils` na imagem Docker para disponibilizar
   `pdftotext` dentro do container.
 - Adicionada a metrica `Fallback PDF pdftotext` ao relatorio de processamento.
+- Marcada a CEAGESP-SP como fonte de historico limitado em `config/fontes.json`, com `max_quotes_back=10`.
+- Adicionado calculo de `quotes_back` efetivo por fonte, preservando o valor
+  solicitado no relatorio quando houver reducao.
+- Ajustada a resolucao historica para aceitar as datas encontradas em fontes
+  limitadas, sem transformar historico curto em falha quando ha ao menos uma
+  data valida.
 
 ### Validacoes observadas
 
@@ -330,14 +337,20 @@ recentes do crawler, principalmente CEASA-PR e CEASA-PE.
   correspondiam a apenas `5` PDFs unicos repetidos em coletas diferentes.
 - Esses PDFs foram confirmados como malformados pelo `qpdf`, mas com texto
   recuperavel por `pdftotext`.
+- A CEAGESP-SP ainda precisa ser validada em uma execucao Docker, mas a regra
+  agora limita a busca efetiva a `10` cotacoes anteriores e registra a reducao
+  no relatorio.
 
 ### Arquivos relacionados
 
 - `Dockerfile`
+- `config/fontes.json`
+- `src/cotacoes_ceasa/config.py`
 - `src/cotacoes_ceasa/parsers/pdf.py`
 - `src/cotacoes_ceasa/parsers/ceasa_pe.py`
 - `src/cotacoes_ceasa/parsers/ceasa_pr.py`
 - `src/cotacoes_ceasa/workflows/raw_processing.py`
+- `src/cotacoes_ceasa/workflows/collection.py`
 - `src/cotacoes_ceasa/cli/commands/source.py`
 
 ### Observacoes
@@ -348,3 +361,5 @@ recentes do crawler, principalmente CEASA-PR e CEASA-PE.
   reconstruida para instalar `poppler-utils`.
 - Ainda falta rodar uma execucao completa de todas as fontes apos essas
   alteracoes para medir o impacto consolidado no relatorio final.
+- Para CEAGESP-SP, `quotes_back=100` passa a ser limitado para `10` internamente;
+  outras fontes continuam usando o valor solicitado, salvo configuracao propria.
