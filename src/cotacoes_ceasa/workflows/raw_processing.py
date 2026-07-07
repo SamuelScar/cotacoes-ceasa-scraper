@@ -35,6 +35,8 @@ class RawFileMetadata:
 class RawProcessingStats:
     selected_files: int = 0
     processed_files: int = 0
+    quoted_files: int = 0
+    empty_files: int = 0
     skipped_files: int = 0
     failed_files: int = 0
     parsed_quotes: int = 0
@@ -159,11 +161,17 @@ def process_raw_and_report(
 
             cotacoes.extend(parsed_cotacoes)
             stats.processed_files += 1
+            if parsed_cotacoes:
+                stats.quoted_files += 1
+            else:
+                stats.empty_files += 1
             stats.parsed_quotes += len(parsed_cotacoes)
-            output.detail_success(
-                f"{file_path.name} | {len(parsed_cotacoes)} cotacoes.",
-                report=raw_detail_report,
+            raw_message = (
+                f"{file_path.name} | {len(parsed_cotacoes)} cotacoes."
+                if parsed_cotacoes
+                else f"{file_path.name} | sem cotacao."
             )
+            output.detail_success(raw_message, report=raw_detail_report)
             progress_task.advance(current=file_path.name)
 
         progress_task.finish()
@@ -174,6 +182,8 @@ def process_raw_and_report(
         (
             ("Raws selecionados", stats.selected_files),
             ("Raws processados", stats.processed_files),
+            ("Raws com cotacao", stats.quoted_files),
+            ("Raws sem cotacao", stats.empty_files),
             ("Raws ignorados", stats.skipped_files),
             ("Raws com falha", stats.failed_files),
             ("Cotacoes extraidas dos raws", stats.parsed_quotes),

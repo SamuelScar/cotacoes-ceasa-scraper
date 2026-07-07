@@ -50,7 +50,7 @@ class CeasaPeParser:
         table = soup.find("table")
 
         if table is None:
-            if soup.select_one(".sem-registro") is not None:
+            if self._is_empty_quotation_page(soup):
                 return []
 
             raise ValueError("Tabela de cotacoes da CEASA-PE nao encontrada.")
@@ -83,6 +83,20 @@ class CeasaPeParser:
             )
 
         return cotacoes
+
+    def _is_empty_quotation_page(self, soup: BeautifulSoup) -> bool:
+        if soup.select_one(".sem-registro") is not None:
+            return True
+
+        canonical = soup.find("link", rel="canonical")
+        canonical_href = canonical.get("href") if canonical else ""
+        canonical_path = urlparse(canonical_href).path.rstrip("/")
+        title_element = soup.select_one("h2.title")
+        title = clean_text(
+            title_element.get_text(" ", strip=True) if title_element else None
+        )
+
+        return canonical_path == "/404" and title == "ERRO 404"
 
     def _extract_row_date(self, row) -> str | None:
         button = row.select_one(".btn-grafico")
