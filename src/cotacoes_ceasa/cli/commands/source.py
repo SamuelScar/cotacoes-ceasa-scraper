@@ -35,6 +35,11 @@ def run_source(
     source_config = config.sources[args.source]
     requested_quotes_back = args.quotes_back
     args = copy(args)
+    database_path = (
+        Path(args.database_path)
+        if getattr(args, "database_path", None)
+        else None
+    )
     args.quotes_back = resolve_effective_quotes_back(
         source_config,
         args.quotes_back,
@@ -121,6 +126,7 @@ def run_source(
             incremental_history=config.incremental_history,
             output=output,
             limited_history=limited_history,
+            database_path=database_path,
         )
         output.section("Persistencia")
         output.info(f"Salvando cotacoes em {args.database_path}.")
@@ -156,6 +162,7 @@ def run_source(
             incremental_history=config.incremental_history,
             output=output,
             limited_history=limited_history,
+            database_path=database_path,
         )
         complete_source_operation(
             output,
@@ -173,6 +180,7 @@ def run_source(
         incremental_history=config.incremental_history,
         output=output,
         limited_history=limited_history,
+        database_path=database_path,
     )
     complete_source_operation(
         output,

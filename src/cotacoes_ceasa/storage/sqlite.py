@@ -1,7 +1,7 @@
 import hashlib
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
@@ -94,6 +94,41 @@ class SQLiteStorage:
                 )
 
         return processed_raws
+
+    def find_oldest_cotacao_date(
+        self,
+        source_slug: str,
+        category_slug: str | None = None,
+    ) -> date | None:
+        """Retorna a menor data de cotacao registrada para a fonte e categoria."""
+        if not self.database_path.exists():
+            return None
+
+        query = """
+            SELECT MIN(c.data_cotacao)
+            FROM cotacoes c
+            JOIN coletas col ON c.coleta_id = col.id
+            JOIN ceasas cs ON col.ceasa_id = cs.id
+        """
+        params = [source_slug]
+
+        if category_slug is not None:
+            query += """
+                JOIN categorias cat ON c.categoria_id = cat.id
+                WHERE cs.slug = ? AND cat.slug = ?
+            """
+            params.append(category_slug)
+        else:
+            query += " WHERE cs.slug = ?"
+
+        with sqlite3.connect(self.database_path) as connection:
+            try:
+                row = connection.execute(query, params).fetchone()
+                if row and row[0]:
+                    return date.fromisoformat(row[0])
+            except sqlite3.OperationalError:
+                return None
+        return None
 
     def _create_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(

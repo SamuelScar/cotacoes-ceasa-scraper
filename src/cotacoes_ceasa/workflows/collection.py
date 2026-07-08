@@ -30,6 +30,7 @@ def collect_and_report(
     incremental_history: bool = False,
     output: TerminalOutput | None = None,
     limited_history: bool = False,
+    database_path: Path | None = None,
 ) -> list[Cotacao]:
     """Coleta cotacoes e imprime um resumo por categoria."""
     output = output or TerminalOutput()
@@ -39,15 +40,16 @@ def collect_and_report(
     output.success(f"{len(categories)} categoria(s) descoberta(s).")
     output.info("Resolvendo datas de cotacao.")
     target_dates_by_category = resolve_category_target_dates(
-        collector,
-        categories,
-        target_date,
-        quotes_back,
-        raw_dir,
-        source_slug,
-        incremental_history,
-        output,
+        collector=collector,
+        categories=categories,
+        target_date=target_date,
+        quotes_back=quotes_back,
+        raw_dir=raw_dir,
+        source_slug=source_slug,
+        incremental_history=incremental_history,
+        output=output,
         limited_history=limited_history,
+        database_path=database_path,
     )
     cotacoes: list[Cotacao] = []
 
@@ -110,6 +112,7 @@ def download_and_report(
     incremental_history: bool = False,
     output: TerminalOutput | None = None,
     limited_history: bool = False,
+    database_path: Path | None = None,
 ) -> list[Path]:
     """Baixa arquivos brutos para a janela de datas configurada."""
     output = output or TerminalOutput()
@@ -123,16 +126,17 @@ def download_and_report(
         output.success(f"{len(categories)} categoria(s) descoberta(s).")
         output.info("Resolvendo datas de cotacao.")
         target_dates_by_category = resolve_category_target_dates(
-            collector,
-            categories,
-            target_date,
-            quotes_back,
-            raw_dir,
-            source_slug,
-            incremental_history,
-            output,
-            downloaded_files,
+            collector=collector,
+            categories=categories,
+            target_date=target_date,
+            quotes_back=quotes_back,
+            raw_dir=raw_dir,
+            source_slug=source_slug,
+            incremental_history=incremental_history,
+            output=output,
+            downloaded_files=downloaded_files,
             limited_history=limited_history,
+            database_path=database_path,
         )
         saved_files = list(downloaded_files.values())
 
@@ -368,6 +372,7 @@ def resolve_category_target_dates(
     output: TerminalOutput | None = None,
     downloaded_files: dict[tuple[str, date | None], Path] | None = None,
     limited_history: bool = False,
+    database_path: Path | None = None,
 ) -> dict[str, list[date | None]]:
     """Resolve as datas que devem ser consultadas para cada categoria."""
     if getattr(collector, "category_specific_dates", False):
@@ -388,6 +393,7 @@ def resolve_category_target_dates(
                 quotes_back=quotes_back,
                 incremental_history=incremental_history,
                 output=output,
+                database_path=database_path,
             )
             target_dates_by_category[category.slug] = resolve_quotation_dates(
                 collector=collector,
@@ -410,6 +416,7 @@ def resolve_category_target_dates(
         quotes_back=quotes_back,
         incremental_history=incremental_history,
         output=output,
+        database_path=database_path,
     )
     target_dates = resolve_quotation_dates(
         collector=collector,
@@ -438,10 +445,24 @@ def resolve_incremental_target_date(
     quotes_back: int | None,
     incremental_history: bool,
     output: TerminalOutput | None,
+    database_path: Path | None = None,
 ) -> tuple[date | None, bool]:
-    """Define a data inicial anterior ao raw historico mais antigo."""
+    """Define a data inicial anterior ao raw historico ou cotacao mais antiga do banco."""
     if target_date is not None or quotes_back == 0 or not incremental_history:
         return target_date, False
+
+    oldest_db_date = None
+    if database_path is not None and database_path.exists():
+        try:
+            from cotacoes_ceasa.storage.sqlite import SQLiteStorage
+            storage = SQLiteStorage(database_path)
+            oldest_db_date = storage.find_oldest_cotacao_date(source_slug, category_slug)
+        except Exception as error:
+            if output is not None:
+                scope = category_slug or source_slug
+                output.warning(
+                    f"{scope} | nao foi possivel consultar historico no banco: {error}"
+                )
 
     oldest_raw_date = find_oldest_raw_target_date(
         raw_dir,
@@ -449,24 +470,31 @@ def resolve_incremental_target_date(
         category_slug,
     )
 
-    if oldest_raw_date is None:
+    if oldest_db_date and oldest_raw_date:
+        oldest_date = min(oldest_db_date, oldest_raw_date)
+    else:
+        oldest_date = oldest_db_date or oldest_raw_date
+
+    if oldest_date is None:
         if output is not None:
             scope = category_slug or source_slug
             output.info(
-                f"{scope} | nenhum raw historico encontrado; "
+                f"{scope} | nenhum historico encontrado no banco ou em raw; "
                 "iniciando pela cotacao mais recente."
             )
 
         return None, False
 
-    incremental_target_date = oldest_raw_date - timedelta(days=1)
+    incremental_target_date = oldest_date - timedelta(days=1)
 
     if output is not None:
         scope = category_slug or source_slug
+        db_info = f" (banco: {oldest_db_date.isoformat()})" if oldest_db_date else ""
+        raw_info = f" (raw: {oldest_raw_date.isoformat()})" if oldest_raw_date else ""
         output.info(
             f"{scope} | historico incremental iniciando em "
-            f"{incremental_target_date.isoformat()} "
-            f"(raw mais antigo: {oldest_raw_date.isoformat()})."
+            f"{incremental_target_date.isoformat()}"
+            f"{db_info}{raw_info}."
         )
 
     return incremental_target_date, True
