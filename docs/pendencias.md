@@ -12,6 +12,8 @@
 | [Avaliar otimizacao dos PDFs brutos](#avaliar-otimizacao-dos-pdfs-brutos) | Testar melhor a reducao de tamanho com qpdf antes de usar no backup oficial. |
 | [Aprimorar sincronizacao incremental com Supabase](#aprimorar-sincronizacao-incremental-com-supabase) | Atualizar no Supabase registros antigos que foram corrigidos no banco local. |
 | [Migrar documentacao extensa para GitHub Wiki](#migrar-documentacao-extensa-para-github-wiki) | Reorganizar guias longos na Wiki quando o repositorio puder ficar publico. |
+| [Duplicacao de registros e inchaco do SQLite](#duplicacao-de-registros-e-inchaco-do-sqlite) | Resolver bug que insere cotações duplicadas e causa inchaço do banco devido a chaves dinâmicas. |
+| [Busca de historico incremental baseada no banco de dados](#busca-de-historico-incremental-baseada-no-banco-de-dados) | Ajustar quotes_back para buscar datas a partir da menor data registrada no banco de dados. |
 
 ## Enviar relatorio automatico uma vez ao dia
 
@@ -246,3 +248,28 @@ Cuidados:
   mudar junto com o codigo;
 - evitar que a Wiki vire a unica fonte de informacoes necessarias para executar
   o projeto localmente.
+
+## Duplicacao de registros e inchaco do SQLite
+
+O banco de dados SQLite cresce indevidamente (~1.03 GB) devido a falhas na constraint de unicidade (`ON CONFLICT (chave_unica) DO NOTHING`).
+
+### Detalhes técnicos:
+1. A `chave_unica` de `cotacoes` baseia-se na `coleta_key`.
+2. A `coleta_key` usa a coluna `arquivo_raw` (que inclui a data/hora do download no nome do arquivo físico).
+3. Downloads repetidos do mesmo arquivo histórico criam novas chaves únicas, inserindo cópias idênticas.
+
+### Ações futuras:
+- Desvincular a `chave_unica` de dados físicos/timestamps de download (usar dados lógicos da cotação: data_cotacao, produto, categoria, preços, etc.).
+- Limpar os registros duplicados existentes no banco SQLite.
+
+## Busca de historico incremental baseada no banco de dados
+
+Atualmente, ao definir `--quotes-back` ou `COTACOES_QUOTES_BACK`, o sistema não consulta o banco de dados para determinar a partir de qual data coletar as cotações anteriores.
+
+### Detalhes técnicos:
+1. Sem `--incremental-history` ou `COTACOES_INCREMENTAL_HISTORY=True`, a busca retroativa inicia sempre a partir de `date.today()`, rebaixando o histórico recente desnecessariamente.
+2. Mesmo com histórico incremental ativo, o código consulta apenas a pasta local `data/raw/` via `find_oldest_raw_target_date` para obter a menor data, em vez de consultar a tabela `cotacoes` no banco de dados SQLite.
+
+### Ações futuras:
+- Implementar verificação automática da menor data registrada no banco SQLite para a fonte/categoria desejada.
+- Utilizar essa menor data como ponto de partida retroativo (subtraindo 1 dia) para a coleta do `--quotes-back`, estendendo o histórico de forma incremental e automática.
