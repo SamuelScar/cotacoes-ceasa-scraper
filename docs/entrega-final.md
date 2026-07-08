@@ -19,6 +19,12 @@ apresentacao ou envio final.
 | Robustez da CEASA-PR | Feita | A persistencia passou a rejeitar cotacoes invalidas sem derrubar o lote, preencher data ausente pelo raw quando seguro e recuperar PDFs malformados com fallback global. |
 | Tratamento de raws sem cotacao | Feita | A CEASA-PE passou a diferenciar paginas sem cotacao de falhas reais e o relatorio passou a separar raws com e sem cotacao. |
 | Historico limitado por fonte | Feita | CEAGESP-SP e CEASA-BA passaram a ter limite proprio de historico e o relatorio informa quando o `quotes_back` efetivo foi reduzido. |
+| Historico incremental pelo banco | Feita | O modo incremental passou a consultar a menor data registrada no SQLite, usando raws como complemento. |
+| Relatorio por email opcional | Parcial | O workflow ja envia por SMTP quando configurado; falta escolher um provedor gratuito/confiavel. |
+| Documentacao na Wiki | Feita | O README passou a apontar para a Wiki, mantendo o repositorio com documentacao operacional essencial. |
+| Supabase pausado | Decidido | A sincronizacao remota fica fora do escopo atual porque o tamanho do banco ultrapassa a capacidade esperada. |
+| Otimizacao de PDFs com qpdf | Abandonada temporariamente | Os testes reduziram tamanho em ate 70%, mas a validacao estrutural e o risco para os parsers impediram adocao no workflow. |
+| Fontes instaveis investigadas | Feita | Os relatorios apontaram mais instabilidade, timeouts e PDFs ausentes do que bloqueio HTTP explicito. |
 
 ## 1. Crawler por workflow e release fixa
 
@@ -373,3 +379,100 @@ recentes do crawler, principalmente CEASA-PR, CEASA-PE e CEAGESP-SP.
 - O workflow agora respeita `COTACOES_COMPLEMENT_PROHORT` definido no Environment
   `Crawler` e repassa o valor para o `.env` gerado no runner.
 - O workflow deixou de aceitar fallback legado na restauracao e passa a encerrar antes do scraper quando nenhum dado anterior e restaurado.
+
+## 10. Historico incremental baseado no banco
+
+### Objetivo
+
+Evitar que a coleta retroativa dependa apenas da pasta `data/raw/` para decidir
+a partir de qual data continuar o historico.
+
+### O que foi feito
+
+- Adicionada consulta da menor `data_cotacao` registrada no SQLite por fonte e
+  categoria.
+- Ajustada a resolucao do historico incremental para considerar tanto o banco
+  quanto os raws locais, usando a menor data encontrada como referencia.
+- Mantido o comportamento de iniciar pela cotacao mais recente quando nao ha
+  historico no banco nem em raw.
+- Registrada na saida a origem usada para a continuacao incremental, separando
+  data encontrada no banco e data encontrada nos raws.
+
+### Arquivos relacionados
+
+- `src/cotacoes_ceasa/storage/sqlite.py`
+- `src/cotacoes_ceasa/workflows/collection.py`
+- `docs/pendencias.md`
+
+### Observacoes
+
+- Com `quotes_back=0`, o modo incremental continua inativo para preservar a
+  coleta da publicacao atual.
+- Quando banco e raw existem, a continuacao usa a menor data entre os dois para
+  evitar buracos no historico.
+
+## 11. Decisoes finais e itens adiados
+
+### Relatorio por email
+
+O workflow ja possui envio opcional de relatorio por e-mail via SMTP, usando a
+action `.github/actions/send-report-email` e os secrets `SMTP_HOST`, `SMTP_PORT`,
+`SMTP_USER`, `SMTP_PASSWORD`, `REPORT_EMAIL_FROM` e `REPORT_EMAIL_TO`.
+
+A pendencia restante e operacional: nao houve tempo para pesquisar e escolher um
+servidor SMTP gratuito e confiavel. Por isso, o envio fica implementado, mas
+condicionado a configuracao futura dos secrets.
+
+### Supabase
+
+A sincronizacao com Supabase fica fora do escopo por enquanto. O banco SQLite
+cresceu a ponto de tornar a manutencao no Supabase pouco adequada para a
+capacidade esperada do plano avaliado. A publicacao principal passa a ser o banco
+compactado na release e o backup completo no OneDrive.
+
+Se essa frente voltar, sera necessario reavaliar infraestrutura, custo e a
+estrategia de atualizacao de registros antigos ja sincronizados.
+
+### Otimizacao de PDFs com qpdf
+
+A otimizacao dos PDFs brutos com `qpdf` foi testada e chegou a reduzir o tamanho
+de alguns arquivos em cerca de 70%. Mesmo assim, ela foi abandonada
+temporariamente porque nao foi possivel validar com seguranca a qualidade
+estrutural dos PDFs resultantes nem garantir que isso nao afetaria a extracao de
+texto e os parsers.
+
+No lugar dessa otimizacao destrutiva, o projeto passou a usar cache de texto
+extraido dos PDFs em `data/cache/pdf-text/`, reduzindo o custo de releituras sem
+alterar os raws originais.
+
+### Fontes com timeout e instabilidade
+
+As fontes com timeouts foram investigadas nos relatorios recentes. Nao apareceu
+sinal consistente de bloqueio HTTP explicito (`403`, `429`, `Retry-After` ou
+`Forbidden`). Os problemas ficaram mais ligados a instabilidade pontual,
+timeouts, PDFs ausentes e janelas historicas limitadas.
+
+Por isso, a decisao atual e monitorar as proximas rodadas e so investir em
+retries/backoff ou coleta separada se os relatorios mostrarem perda recorrente e
+relevante.
+
+### Criterios de qualidade
+
+Foram adicionadas melhorias para sustentar uma futura politica de qualidade: o
+pipeline registra status de download por fonte, persistencia concluida/falha,
+download parcial, raws com e sem cotacao, cotacoes rejeitadas e metricas de
+salvamento dos artefatos. Ainda falta transformar esses sinais em uma regra
+formal de aceite ou rejeicao da rodada.
+
+### Pipeline futuro por raw
+
+O pipeline atual ja sobrepoe downloads de fontes e persistencia sequencial quando
+`COTACOES_WORKERS` e maior que `1`. O pipeline produtor-consumidor por raw fica
+para depois, porque aumenta a complexidade e so deve ser retomado se as metricas
+mostrarem que o processamento de raws virou gargalo real.
+
+### Documentacao
+
+A documentacao longa foi migrada para a Wiki do repositorio. O README passou a
+funcionar como porta de entrada com links para comandos, ambiente, fluxo,
+pacotes, fontes, modelo de dados, Supabase, pendencias e decisoes tecnicas.
