@@ -40,7 +40,7 @@ HEADER_KEYS = {
     "pagina",
 }
 HEADER_FRAGMENT_KEYS = (
-    ("pesomedio", "procedencia", "unitario"),
+    ("pesomedio", "proced", "unit"),
     ("produto", "unidade", "embalagem"),
     ("mercado", "min", "max"),
 )
@@ -128,9 +128,10 @@ class CeasaPrParser:
         content: bytes | str,
         category_slug: str,
         url_origem: str,
+        target_date: date | None = None,
     ) -> list[Cotacao]:
         text = extract_pdf_text(content) if isinstance(content, bytes) else content
-        data_cotacao = self._extract_quote_date(text)
+        data_cotacao = self._extract_quote_date(text) or target_date
         cotacoes: list[Cotacao] = []
         current_product: str | None = None
 

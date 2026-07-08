@@ -80,7 +80,12 @@ class CeasaPrCollector:
             pdf_url = self._build_year_url(target_date)
             pdf_content = raw_file.read_bytes()
 
-        return self.parser.parse_category(pdf_content, category_slug, pdf_url)
+        return self.parser.parse_category(
+            pdf_content,
+            category_slug,
+            pdf_url,
+            target_date=target_date,
+        )
 
     def discover_categories(self) -> tuple[Category, ...]:
         target_date = self._resolve_target_date(self.target_date)

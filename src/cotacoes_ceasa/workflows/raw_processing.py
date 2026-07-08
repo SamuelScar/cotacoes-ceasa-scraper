@@ -134,11 +134,19 @@ def process_raw_and_report(
                     continue
 
                 parser_started_at = perf_counter()
-                parsed_cotacoes = parser.parse_category(
-                    raw_content,
-                    metadata.category_slug,
-                    url_origem,
-                )
+                if source_slug == "ceasa-pr":
+                    parsed_cotacoes = parser.parse_category(
+                        raw_content,
+                        metadata.category_slug,
+                        url_origem,
+                        target_date=metadata.target_date,
+                    )
+                else:
+                    parsed_cotacoes = parser.parse_category(
+                        raw_content,
+                        metadata.category_slug,
+                        url_origem,
+                    )
                 stats.parser_seconds += perf_counter() - parser_started_at
                 parsed_cotacoes = [
                     replace(
