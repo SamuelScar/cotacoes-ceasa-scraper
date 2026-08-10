@@ -4,49 +4,70 @@
     "state": "Pernambuco",
     "uf": "PE",
     "city": "Recife",
-    "base_url": "https://www.ceasape.org.br/cotacao"
+    "base_url": "https://www.ceasape.org.br/cotacao",
+    "max_staleness_days": 7,
+    "backfill_enabled": true,
+    "publication_policy": "required"
   },
   "ceasa-mg": {
     "name": "CEASA-MG",
     "state": "Minas Gerais",
     "uf": "MG",
     "city": "Varias cidades",
-    "base_url": "https://minas1.ceasa.mg.gov.br/ceasainternet/cst_precosmaiscomumMG/cst_precosmaiscomumMG.php"
+    "base_url": "https://minas1.ceasa.mg.gov.br/ceasainternet/cst_precosmaiscomumMG/cst_precosmaiscomumMG.php",
+    "max_staleness_days": 7,
+    "backfill_enabled": false,
+    "publication_policy": "required"
   },
   "ceasa-pr": {
     "name": "CEASA-PR",
     "state": "Parana",
     "uf": "PR",
     "city": "Varias cidades",
-    "base_url": "https://www.ceasa.pr.gov.br/Pagina/Cotacao-Diaria-de-Precos"
+    "base_url": "https://www.ceasa.pr.gov.br/Pagina/Cotacao-Diaria-de-Precos",
+    "max_staleness_days": 7,
+    "backfill_enabled": false,
+    "publication_policy": "required"
   },
   "ceasa-campinas": {
     "name": "CEASA Campinas",
     "state": "Sao Paulo",
     "uf": "SP",
     "city": "Campinas",
-    "base_url": "https://www.ceasacampinas.com.br/cotacoes-anteriores"
+    "base_url": "https://www.ceasacampinas.com.br/cotacoes-anteriores",
+    "max_staleness_days": 7,
+    "backfill_enabled": false,
+    "publication_policy": "optional"
   },
   "ceasa-go": {
     "name": "CEASA-GO",
     "state": "Goias",
     "uf": "GO",
     "city": "Goiania",
-    "base_url": "https://goias.gov.br/ceasa/cotacoes-diarias/"
+    "base_url": "https://goias.gov.br/ceasa/cotacoes-diarias/",
+    "max_staleness_days": 7,
+    "backfill_enabled": false,
+    "publication_policy": "required"
   },
   "ceasa-ce": {
     "name": "CEASA-CE",
     "state": "Ceara",
     "uf": "CE",
     "city": "Varias cidades",
-    "base_url": "https://files.ceasa-ce.com.br/unsima/boletim_diario/boletim.php"
+    "base_url": "https://files.ceasa-ce.com.br/unsima/boletim_diario/boletim.php",
+    "max_staleness_days": 7,
+    "backfill_enabled": false,
+    "publication_policy": "required"
   },
   "ceasa-rj": {
     "name": "CEASA-RJ",
     "state": "Rio de Janeiro",
     "uf": "RJ",
     "city": "Rio de Janeiro",
-    "base_url": "https://www.rj.gov.br/ceasa/Cota%C3%A7%C3%A3o"
+    "base_url": "https://www.rj.gov.br/ceasa/Cota%C3%A7%C3%A3o",
+    "max_staleness_days": 7,
+    "backfill_enabled": false,
+    "publication_policy": "required"
   },
   "ceasa-ba": {
     "name": "CEASA-BA",
@@ -54,6 +75,9 @@
     "uf": "BA",
     "city": "Salvador",
     "base_url": "https://www.ba.gov.br/sde/boletim-informativo-ceasa",
+    "max_staleness_days": 7,
+    "backfill_enabled": false,
+    "publication_policy": "optional",
     "limited_history": true,
     "max_quotes_back": 1
   },
@@ -62,7 +86,10 @@
     "state": "Distrito Federal",
     "uf": "DF",
     "city": "Brasilia",
-    "base_url": "https://www.portal.ceasadf.com.br/informacao-mercado"
+    "base_url": "https://www.portal.ceasadf.com.br/informacao-mercado",
+    "max_staleness_days": 7,
+    "backfill_enabled": false,
+    "publication_policy": "required"
   },
   "ceagesp-sp": {
     "name": "CEAGESP-SP",
@@ -70,6 +97,9 @@
     "uf": "SP",
     "city": "Sao Paulo",
     "base_url": "https://ceagesp.gov.br/cotacoes/",
+    "max_staleness_days": 7,
+    "backfill_enabled": false,
+    "publication_policy": "required",
     "limited_history": true,
     "max_quotes_back": 10
   },
@@ -78,6 +108,9 @@
     "state": "Espirito Santo",
     "uf": "ES",
     "city": "Varias cidades",
-    "base_url": "http://200.198.51.71/detec/filtro_boletim_es/filtro_boletim_es.php"
+    "base_url": "http://200.198.51.71/detec/filtro_boletim_es/filtro_boletim_es.php",
+    "max_staleness_days": 7,
+    "backfill_enabled": false,
+    "publication_policy": "required"
   }
 }

@@ -378,10 +378,62 @@ class ProhortComplementer:
         target_id: int,
         price: Decimal,
     ) -> int:
+        target = connection.execute(
+            """
+            SELECT
+                chave_identidade,
+                preco_minimo,
+                preco_maximo,
+                situacao_mercado
+            FROM cotacoes
+            WHERE id = ?
+              AND preco_comum IS NULL
+            """,
+            (target_id,),
+        ).fetchone()
+
+        if target is None:
+            return 0
+
+        identity_key, minimum_price, maximum_price, market_status = target
+        common_price = str(price)
+        duplicate = connection.execute(
+            """
+            SELECT 1
+            FROM cotacoes
+            WHERE id != ?
+              AND chave_identidade = ?
+              AND preco_minimo IS ?
+              AND preco_comum IS ?
+              AND preco_maximo IS ?
+              AND situacao_mercado IS ?
+            LIMIT 1
+            """,
+            (
+                target_id,
+                identity_key,
+                minimum_price,
+                common_price,
+                maximum_price,
+                market_status,
+            ),
+        ).fetchone()
+
+        if duplicate is not None:
+            return 0
+
+        content_key = SQLiteStorage(self.database_path).build_content_key(
+            identity_key=str(identity_key),
+            preco_minimo=minimum_price,
+            preco_comum=common_price,
+            preco_maximo=maximum_price,
+            situacao_mercado=market_status,
+        )
         cursor = connection.execute(
             """
             UPDATE cotacoes
             SET
+                chave_unica = ?,
                 preco_comum = ?,
                 fonte_complemento = ?,
                 url_complemento = ?,
@@ -390,7 +442,8 @@ class ProhortComplementer:
               AND preco_comum IS NULL
             """,
             (
-                str(price),
+                content_key,
+                common_price,
                 "prohort",
                 self.prohort_url,
                 datetime.now().isoformat(timespec="seconds"),

@@ -7,6 +7,7 @@ from typing import Iterable
 from rich.console import Console
 
 from cotacoes_ceasa.cli.report import ExecutionReport
+from cotacoes_ceasa.workflows.health import RunHealthAssessment
 
 
 LINE_WIDTH = 72
@@ -82,6 +83,42 @@ class TerminalOutput:
     def set_execution_status(self, status: str) -> None:
         if self._execution_report is not None:
             self._execution_report.set_final_status(status)
+
+    def record_health_assessment(
+        self,
+        assessment: RunHealthAssessment,
+        json_path: Path,
+        json_error: str | None = None,
+    ) -> None:
+        if self._execution_report is not None:
+            self._execution_report.record_health_assessment(
+                assessment,
+                json_path,
+                json_error,
+            )
+
+        status_label = {
+            "healthy": "saudavel",
+            "partial": "parcial",
+            "inadequate": "inadequada",
+        }.get(assessment.status, assessment.status)
+        self.section("Saude da rodada (modo observacao)")
+        self._print_rows(
+            (
+                ("Modo de coleta", assessment.collection_mode),
+                ("Status observado", status_label),
+                ("Fontes configuradas", len(assessment.sources)),
+                ("Downloads concluidos", assessment.download_completed),
+                ("Downloads parciais", assessment.download_partial),
+                ("Downloads com falha", assessment.download_failed),
+                ("Fontes sem frescor", assessment.stale_sources),
+                ("Fontes sem dados", assessment.sources_without_data),
+                (
+                    "JSON estruturado",
+                    "indisponivel" if json_error else json_path,
+                ),
+            )
+        )
 
     def report_saved(self, file_path: Path) -> None:
         label = self._color(f"[{'OK':<5}]", GREEN + BOLD)

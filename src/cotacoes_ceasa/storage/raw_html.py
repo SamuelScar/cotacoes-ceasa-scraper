@@ -1,5 +1,7 @@
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
+from hashlib import sha256
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -33,6 +35,14 @@ class RawHtmlStorage:
         """Salva conteudo textual bruto com a extensao informada."""
         directory = self.base_dir / source
         directory.mkdir(parents=True, exist_ok=True)
+        reusable_file = self._find_identical_latest(
+            source,
+            category,
+            extension,
+            content,
+        )
+        if reusable_file is not None:
+            return reusable_file
 
         now = datetime.now()
         self._archive_current_day_files(directory, category, now.date(), extension)
@@ -53,6 +63,14 @@ class RawHtmlStorage:
         """Salva conteudo binario bruto com a extensao informada."""
         directory = self.base_dir / source
         directory.mkdir(parents=True, exist_ok=True)
+        reusable_file = self._find_identical_latest(
+            source,
+            category,
+            extension,
+            content,
+        )
+        if reusable_file is not None:
+            return reusable_file
 
         now = datetime.now()
         self._archive_current_day_files(directory, category, now.date(), extension)
@@ -79,11 +97,7 @@ class RawHtmlStorage:
         if not directory.exists():
             return None
 
-        raw_files = sorted(
-            file_path
-            for file_path in directory.glob(f"{category}_*.{extension}")
-            if file_path.is_file()
-        )
+        raw_files = self._list_active_files(directory, category, extension)
 
         if not raw_files:
             return None
@@ -140,9 +154,50 @@ class RawHtmlStorage:
         day_prefix = current_date.strftime("%Y%m%d")
         old_directory = directory / "old"
 
-        for file_path in directory.glob(f"{category}_{day_prefix}_*.{extension}"):
+        for file_path in self._list_active_files(
+            directory,
+            category,
+            extension,
+            day_prefix,
+        ):
             old_directory.mkdir(parents=True, exist_ok=True)
             file_path.rename(self._build_old_path(old_directory, file_path.name))
+
+    def _find_identical_latest(
+        self,
+        source: str,
+        category: str,
+        extension: str,
+        content: bytes | str,
+    ) -> Path | None:
+        latest_file = self.find_latest_file(source, category, extension)
+
+        if latest_file is None:
+            return None
+
+        return (
+            latest_file
+            if build_raw_hash(latest_file.read_bytes()) == build_raw_hash(content)
+            else None
+        )
+
+    def _list_active_files(
+        self,
+        directory: Path,
+        category: str,
+        extension: str,
+        day_prefix: str | None = None,
+    ) -> list[Path]:
+        day_pattern = re.escape(day_prefix) if day_prefix else r"\d{8}"
+        file_pattern = re.compile(
+            rf"^{re.escape(category)}_{day_pattern}_\d{{6}}\.{re.escape(extension)}$"
+        )
+
+        return sorted(
+            file_path
+            for file_path in directory.glob(f"*.{extension}")
+            if file_path.is_file() and file_pattern.fullmatch(file_path.name)
+        )
 
     def _build_old_path(self, old_directory: Path, file_name: str) -> Path:
         old_path = old_directory / file_name
@@ -161,7 +216,6 @@ class RawHtmlStorage:
                 return candidate_path
 
             counter += 1
-
     def _build_archive_path(self, old_directory: Path) -> Path:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         archive_path = old_directory / f"htmls_{timestamp}.zip"
@@ -178,3 +232,9 @@ class RawHtmlStorage:
                 return candidate_path
 
             counter += 1
+
+
+def build_raw_hash(content: bytes | str) -> str:
+    raw_bytes = content if isinstance(content, bytes) else content.encode("utf-8")
+
+    return sha256(raw_bytes).hexdigest()

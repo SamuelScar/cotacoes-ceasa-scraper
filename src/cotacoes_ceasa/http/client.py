@@ -68,25 +68,49 @@ class HttpClient:
 
         self._opener = build_opener(HTTPCookieProcessor(self._cookie_jar))
 
-    def get_text(self, url: str, encoding: str = "utf-8") -> str:
+    def get_text(
+        self,
+        url: str,
+        encoding: str = "utf-8",
+        *,
+        force_refresh: bool = False,
+    ) -> str:
         """Baixa uma URL e retorna o corpo da resposta como texto."""
-        body = self.get_bytes(url)
+        body = self.get_bytes(url, force_refresh=force_refresh)
 
         return body.decode(encoding, errors="replace")
 
-    def get_bytes(self, url: str) -> bytes:
+    def get_bytes(self, url: str, *, force_refresh: bool = False) -> bytes:
         """Baixa uma URL e retorna o corpo da resposta como bytes."""
-        return self._request(url)
+        return self._request(url, force_refresh=force_refresh)
 
-    def post_form(self, url: str, data: dict[str, str | list[str]]) -> str:
+    def post_form(
+        self,
+        url: str,
+        data: dict[str, str | list[str]],
+        *,
+        force_refresh: bool = False,
+    ) -> str:
         """Envia um formulario e retorna o corpo da resposta como texto."""
         body = urlencode(data, doseq=True).encode("utf-8")
 
-        return self._request(url, body).decode("utf-8", errors="replace")
+        return self._request(
+            url,
+            body,
+            force_refresh=force_refresh,
+        ).decode("utf-8", errors="replace")
 
-    def _request(self, url: str, data: bytes | None = None) -> bytes:
+    def _request(
+        self,
+        url: str,
+        data: bytes | None = None,
+        *,
+        force_refresh: bool = False,
+    ) -> bytes:
         cache_key = (url, data)
-        cached_response = self._get_cached_response(cache_key)
+        cached_response = (
+            None if force_refresh else self._get_cached_response(cache_key)
+        )
 
         if cached_response is not None:
             return cached_response

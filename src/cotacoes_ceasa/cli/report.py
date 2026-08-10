@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
+from cotacoes_ceasa.workflows.health import RunHealthAssessment
+
 
 REPORT_TIMEZONE = ZoneInfo("America/Sao_Paulo")
 
@@ -41,6 +43,9 @@ class ExecutionReport:
     events: list[ReportEvent] = field(default_factory=list)
     summaries: list[ReportSummary] = field(default_factory=list)
     configuration: tuple[tuple[str, str], ...] = ()
+    health_assessment: RunHealthAssessment | None = None
+    health_json_path: str | None = None
+    health_json_error: str | None = None
     message_counts: dict[str, int] = field(
         default_factory=lambda: {
             "INFO": 0,
@@ -85,6 +90,16 @@ class ExecutionReport:
 
     def set_final_status(self, status: str) -> None:
         self.final_status = status
+
+    def record_health_assessment(
+        self,
+        assessment: RunHealthAssessment,
+        json_path: Path,
+        json_error: str | None = None,
+    ) -> None:
+        self.health_assessment = assessment
+        self.health_json_path = json_path.as_posix()
+        self.health_json_error = json_error
 
     def record_message(self, level: str, message: str, counted: bool) -> None:
         if counted:
@@ -173,6 +188,7 @@ class ExecutionReport:
         ]
         self._append_consolidated_results(lines)
         self._append_main_alerts(lines)
+        self._append_health_assessment(lines)
         self._append_configuration(lines)
         self._append_summaries(lines)
         self._append_messages(lines, "Avisos", "AVISO")
@@ -215,6 +231,120 @@ class ExecutionReport:
                 totals[label] = totals.get(label, 0) + numeric_value
 
         return list(totals.items())
+
+    def _append_health_assessment(self, lines: list[str]) -> None:
+        assessment = self.health_assessment
+
+        if assessment is None:
+            return
+
+        status = {
+            "healthy": "Saudavel",
+            "partial": "Parcial",
+            "inadequate": "Inadequada",
+        }.get(assessment.status, assessment.status)
+        lines.extend(
+            [
+                "## Saude da rodada",
+                "",
+                (
+                    "Esta avaliacao esta em **modo observacao** e nao altera o "
+                    "codigo de saida, o backup ou a publicacao."
+                ),
+                "",
+                f"- Modo de coleta: `{assessment.collection_mode}`",
+                f"- Status observado: **{status}**",
+                f"- SQLite: `{assessment.database_status}`",
+                f"- Fontes configuradas: **{len(assessment.sources)}**",
+                f"- Downloads concluidos: **{assessment.download_completed}**",
+                f"- Downloads parciais: **{assessment.download_partial}**",
+                f"- Downloads com falha: **{assessment.download_failed}**",
+                f"- Fontes persistidas: **{assessment.persistence_completed}**",
+                "- Fontes com persistencia falha: "
+                f"**{assessment.persistence_failed}**",
+                f"- Fontes sem frescor: **{assessment.stale_sources}**",
+                f"- Fontes sem dados: **{assessment.sources_without_data}**",
+            ]
+        )
+
+        if self.health_json_error:
+            lines.append(
+                "- JSON estruturado: **indisponivel** "
+                f"({self.health_json_error})"
+            )
+        elif self.health_json_path:
+            lines.append(f"- JSON estruturado: `{self.health_json_path}`")
+
+        lines.extend(["", "### Motivos observados", ""])
+
+        if assessment.reasons:
+            for reason in assessment.reasons:
+                lines.append(f"- `{reason.code}`: {reason.message}")
+        else:
+            lines.append("Nenhuma degradacao objetiva foi observada.")
+
+        logical_delta = assessment.logical_delta
+        lines.extend(["", "### Delta logico da rodada", ""])
+
+        if logical_delta.measurement_status in {"available", "database_regressed"}:
+            lines.extend(
+                [
+                    f"- Estado da medicao: `{logical_delta.measurement_status}`",
+                    "- Observacoes inseridas: "
+                    f"**{logical_delta.observations_inserted}**",
+                    f"- Conteudos logicos novos: **{logical_delta.logical_new}**",
+                    "- Observacoes logicas repetidas: "
+                    f"**{logical_delta.repeated_observations}**",
+                ]
+            )
+        else:
+            lines.append(
+                "Medicao indisponivel: "
+                f"`{logical_delta.measurement_status}`"
+                + (f" ({logical_delta.error})" if logical_delta.error else "")
+            )
+
+        lines.extend(
+            [
+                "",
+                "### Frescor e resultado por fonte",
+                "",
+                "| Fonte | Download | Persistencia | Raws | Ultima cotacao | "
+                "Idade (dias) | Limite (dias) | Frescor |",
+                "| --- | --- | --- | ---: | --- | ---: | ---: | --- |",
+            ]
+        )
+
+        for source in assessment.sources:
+            latest_date = (
+                source.latest_quote_date.isoformat()
+                if source.latest_quote_date is not None
+                else "sem dados"
+            )
+            age_days = source.age_days if source.age_days is not None else "-"
+            max_staleness = (
+                source.max_staleness_days
+                if source.max_staleness_days is not None
+                else "-"
+            )
+            lines.append(
+                f"| {_escape_table(source.source_name)} "
+                f"| {_format_health_status(source.download_status)} "
+                f"| {_format_health_status(source.persistence_status)} "
+                f"| {source.raw_files} | {latest_date} | {age_days} "
+                f"| {max_staleness} "
+                f"| {_format_health_status(source.freshness_status)} |"
+            )
+
+        lines.extend(
+            [
+                "",
+                "Limites desta versao: download concluido nao garante cobertura de "
+                "todas as categorias; persistencia concluida nao garante que todo raw "
+                "foi aceito; o delta logico pressupoe um unico escritor SQLite.",
+                "",
+            ]
+        )
 
     def _append_main_alerts(self, lines: list[str]) -> None:
         alerts = [
@@ -352,6 +482,22 @@ def _prepare_rows(
 
 def _escape_table(value: str) -> str:
     return value.replace("|", r"\|").replace("\n", "<br>")
+
+
+def _format_health_status(status: str) -> str:
+    return {
+        "completed": "concluido",
+        "partial": "parcial",
+        "failed": "falhou",
+        "skipped": "ignorada",
+        "not_run": "nao executada",
+        "current": "atual",
+        "stale": "sem frescor",
+        "no_data": "sem dados",
+        "future": "data futura",
+        "not_configured": "limite nao configurado",
+        "unavailable": "indisponivel",
+    }.get(status, status)
 
 
 def _summarize_alert_reason(detail: str) -> str:

@@ -12,6 +12,12 @@ from cotacoes_ceasa.cli.commands.source import (
     run_source,
     run_source_download_and_process,
 )
+from cotacoes_ceasa.cli.collection_mode import (
+    COLLECTION_MODE_BACKFILL,
+    COLLECTION_MODE_LEGACY,
+    format_collection_mode,
+    prepare_collection_mode,
+)
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.cli.parser import (
     build_parser,
@@ -19,10 +25,30 @@ from cotacoes_ceasa.cli.parser import (
     format_quotes_back,
 )
 from cotacoes_ceasa.config import AppConfig, load_config
+from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 from cotacoes_ceasa.workflows.collection import PartialDownloadError
+from cotacoes_ceasa.workflows.backfill import (
+    BackfillBaseline,
+    capture_backfill_baselines,
+    finalize_backfill_state,
+    format_backfill_state,
+)
+from cotacoes_ceasa.workflows.health import (
+    BatchRunResult,
+    HealthBaseline,
+    build_unavailable_run_health,
+    capture_health_baseline,
+    evaluate_run_health,
+    write_health_assessment,
+)
+from cotacoes_ceasa.workflows.publication_gate import (
+    evaluate_publication_gate,
+    write_publication_gate_result,
+)
 
 
 REPORT_DIR = Path("data/relatorios")
+HEALTH_REPORT_PATH = REPORT_DIR / "saude_ultima.json"
 
 
 def main() -> None:
@@ -64,6 +90,7 @@ def run(output: TerminalOutput) -> None:
     """Seleciona e executa o fluxo solicitado pela CLI."""
     config = load_config()
     args = build_parser(config).parse_args()
+    config = prepare_collection_mode(args, config)
 
     output.configure_execution_report(
         report_name=resolve_report_name(args),
@@ -73,6 +100,14 @@ def run(output: TerminalOutput) -> None:
 
     if args.base_url and args.source is None:
         raise ValueError("--base-url exige --source.")
+
+    if args.reset_backfill_state:
+        run_backfill_state_reset(args, output)
+        return
+
+    if args.validate_publication:
+        run_publication_gate_command(args, config, output)
+        return
 
     if args.archive_raw_old:
         run_archive_command(args, output)
@@ -90,17 +125,334 @@ def run(output: TerminalOutput) -> None:
         run_supabase_sync_command(args, config, output, mode="full")
         return
 
-    if args.source is None:
-        run_all_sources(args, config, output)
-        run_automatic_prohort(args, config, output)
+    if report_deferred_backfill(args, config, output):
         return
 
-    if args.download_and_process:
-        run_source_download_and_process(args, config, output)
+    if args.source is None:
+        health_baseline = (
+            capture_health_baseline(
+                Path(args.database_path),
+                tuple(config.sources),
+            )
+            if args.download_and_process
+            else None
+        )
+        batch_result = None
+        run_error = None
+        run_interrupted = False
+        backfill_baselines = capture_run_backfill_baselines(args, config)
+
+        try:
+            batch_result = run_all_sources(args, config, output)
+            run_automatic_prohort(args, config, output)
+        except KeyboardInterrupt as error:
+            run_error = f"{type(error).__name__}: {error}"
+            run_interrupted = True
+            raise
+        except (Exception, SystemExit) as error:
+            run_error = f"{type(error).__name__}: {error}"
+            raise
+        finally:
+            record_batch_backfill_states(
+                args,
+                output,
+                batch_result,
+                backfill_baselines,
+                run_error,
+            )
+            record_run_health(
+                args,
+                config,
+                output,
+                batch_result,
+                health_baseline,
+                run_error,
+                run_interrupted,
+            )
+        return
+
+    backfill_baselines = capture_run_backfill_baselines(args, config)
+
+    try:
+        if args.download_and_process:
+            run_source_download_and_process(args, config, output)
+        else:
+            run_source(args, config, output)
+    except (Exception, SystemExit) as error:
+        record_source_backfill_state(
+            args,
+            output,
+            backfill_baselines,
+            download_status="failed",
+            persistence_status="failed",
+            error=f"{type(error).__name__}: {error}",
+        )
+        raise
     else:
-        run_source(args, config, output)
+        record_source_backfill_state(
+            args,
+            output,
+            backfill_baselines,
+            download_status="completed",
+            persistence_status="completed",
+        )
 
     run_automatic_prohort(args, config, output)
+
+
+def run_backfill_state_reset(args, output: TerminalOutput) -> None:
+    if args.source is None:
+        raise ValueError("--reset-backfill-state exige --source.")
+
+    invalid_operation = any(
+        (
+            args.save,
+            args.process_raw,
+            args.download_and_process,
+            args.download_only,
+            args.archive_raw_old,
+            args.complement_prohort,
+            args.sync_supabase,
+            args.replace_supabase,
+            args.list_categories,
+            args.base_url,
+            args.validate_publication,
+        )
+    )
+    if invalid_operation:
+        raise ValueError(
+            "--reset-backfill-state nao pode ser combinado com outra operacao."
+        )
+
+    output.header(
+        "Reabrir estado do backfill",
+        (
+            ("Fonte", args.source),
+            ("Banco", args.database_path),
+        ),
+    )
+    removed_count = SQLiteStorage(
+        Path(args.database_path)
+    ).reset_backfill_state(args.source)
+    output.success(f"{removed_count} estado(s) removido(s).")
+    output.summary(
+        (
+            ("Fonte reaberta", args.source),
+            ("Estados removidos", removed_count),
+        )
+    )
+
+
+def run_publication_gate_command(
+    args,
+    config: AppConfig,
+    output: TerminalOutput,
+) -> None:
+    invalid_operation = any(
+        (
+            args.source,
+            args.save,
+            args.process_raw,
+            args.download_and_process,
+            args.download_only,
+            args.archive_raw_old,
+            args.complement_prohort,
+            args.sync_supabase,
+            args.replace_supabase,
+            args.list_categories,
+            args.base_url,
+            args.reset_backfill_state,
+        )
+    )
+    if invalid_operation:
+        raise ValueError(
+            "--validate-publication nao pode ser combinado com outra operacao."
+        )
+
+    health_report_path = Path(args.health_report_path)
+    gate_report_path = Path(args.publication_gate_report_path)
+    output.header(
+        "Validar gate de publicacao",
+        (
+            ("Banco", args.database_path),
+            ("Saude da rodada", health_report_path),
+            ("Resultado estruturado", gate_report_path),
+        ),
+    )
+    result = evaluate_publication_gate(
+        database_path=Path(args.database_path),
+        health_report_path=health_report_path,
+        source_configs=config.sources,
+    )
+    write_publication_gate_result(result, gate_report_path)
+
+    for reason in result.reasons:
+        message = f"{reason.code} | {reason.message}"
+        if reason.blocking:
+            output.error(message)
+        else:
+            output.warning(message)
+
+    output.summary(
+        (
+            ("Decisao", result.status),
+            ("Motivos bloqueantes", result.blocking_reasons),
+            ("Avisos", result.warnings),
+            ("PRAGMA quick_check", ", ".join(result.quick_check) or "indisponivel"),
+            ("Violacoes de chave estrangeira", result.foreign_key_violations),
+            ("Cotacoes", result.total_quotes),
+            ("JSON do gate", gate_report_path),
+        ),
+        report_title="Gate de publicacao",
+    )
+
+    if result.status == "rejected":
+        raise SystemExit(2)
+
+
+def report_deferred_backfill(
+    args,
+    config: AppConfig,
+    output: TerminalOutput,
+) -> bool:
+    if args.effective_collection_mode != COLLECTION_MODE_BACKFILL:
+        return False
+
+    deferred_sources = args.backfill_deferred_sources
+    if not deferred_sources:
+        return False
+
+    storage = SQLiteStorage(Path(args.database_path))
+    rows: list[tuple[str, object]] = []
+
+    for source_slug in deferred_sources:
+        state = storage.find_backfill_state(source_slug)
+        state_description = (
+            format_backfill_state(state) if state is not None else "adiado"
+        )
+        output.info(f"{source_slug} | backfill {state_description}.")
+        rows.append((source_slug, state_description))
+
+    should_stop = args.source is not None or not config.sources
+    if not should_stop:
+        output.report_summary(tuple(rows), report_title="Backfills adiados")
+        return False
+
+    output.header(
+        "Backfill sem fontes liberadas",
+        (("Fontes adiadas", ", ".join(deferred_sources)),),
+    )
+    output.summary(tuple(rows), report_title="Backfills adiados")
+    return True
+
+
+def capture_run_backfill_baselines(
+    args,
+    config: AppConfig,
+) -> dict[str, BackfillBaseline]:
+    if (
+        args.effective_collection_mode != COLLECTION_MODE_BACKFILL
+        or not args.download_and_process
+    ):
+        return {}
+
+    source_slugs = (args.source,) if args.source is not None else config.sources
+
+    return capture_backfill_baselines(
+        Path(args.database_path),
+        source_slugs,
+    )
+
+
+def record_batch_backfill_states(
+    args,
+    output: TerminalOutput,
+    batch_result: BatchRunResult | None,
+    baselines: dict[str, BackfillBaseline],
+    run_error: str | None,
+) -> None:
+    if not baselines:
+        return
+
+    observations = {
+        source.source_slug: source
+        for source in (batch_result.sources if batch_result is not None else ())
+    }
+
+    for source_slug, baseline in baselines.items():
+        observation = observations.get(source_slug)
+        record_source_backfill_state(
+            args,
+            output,
+            {source_slug: baseline},
+            download_status=(
+                observation.download_status if observation is not None else "failed"
+            ),
+            persistence_status=(
+                observation.persistence_status
+                if observation is not None
+                else "failed"
+            ),
+            error=(
+                _source_observation_error(observation)
+                if observation is not None
+                else run_error
+            ),
+        )
+
+
+def record_source_backfill_state(
+    args,
+    output: TerminalOutput,
+    baselines: dict[str, BackfillBaseline],
+    download_status: str,
+    persistence_status: str,
+    error: str | None = None,
+) -> None:
+    if not baselines:
+        return
+
+    for baseline in baselines.values():
+        try:
+            state = finalize_backfill_state(
+                database_path=Path(args.database_path),
+                baseline=baseline,
+                download_status=download_status,
+                persistence_status=persistence_status,
+                error=error,
+            )
+        except Exception as state_error:
+            output.warning(
+                f"{baseline.source_slug} | falha ao persistir estado do backfill: "
+                f"{type(state_error).__name__}: {state_error}"
+            )
+            continue
+
+        output.report_summary(
+            (
+                ("Fonte", baseline.source_slug),
+                ("Estado", format_backfill_state(state)),
+                (
+                    "Cursor",
+                    state.cursor_date.isoformat() if state.cursor_date else "ausente",
+                ),
+                ("Rodadas sem progresso", state.consecutive_no_progress),
+            ),
+            report_title=f"Estado do backfill {baseline.source_slug}",
+        )
+        output.info(
+            f"{baseline.source_slug} | estado do backfill: "
+            f"{format_backfill_state(state)}."
+        )
+
+
+def _source_observation_error(source) -> str | None:
+    if source.error_type is None and source.error_message is None:
+        return None
+
+    return ": ".join(
+        part for part in (source.error_type, source.error_message) if part
+    )
 
 
 def run_automatic_prohort(args, config: AppConfig, output: TerminalOutput) -> None:
@@ -111,6 +463,82 @@ def run_automatic_prohort(args, config: AppConfig, output: TerminalOutput) -> No
         return
 
     run_prohort_command(args, config, output)
+
+
+def record_run_health(
+    args,
+    config: AppConfig,
+    output: TerminalOutput,
+    batch_result: BatchRunResult | None,
+    baseline: HealthBaseline | None,
+    run_error: str | None,
+    run_interrupted: bool,
+) -> None:
+    if baseline is None:
+        return
+
+    effective_batch_result = batch_result or BatchRunResult(sources=())
+
+    if run_interrupted:
+        assessment = build_unavailable_run_health(
+            batch_result=effective_batch_result,
+            source_configs=config.sources,
+            database_path=Path(args.database_path),
+            error="assessment_skipped_after_interruption",
+            run_error=run_error,
+            collection_mode=args.effective_collection_mode,
+        )
+    else:
+        try:
+            assessment = evaluate_run_health(
+                batch_result=effective_batch_result,
+                source_configs=config.sources,
+                database_path=Path(args.database_path),
+                baseline=baseline,
+                run_error=run_error,
+                collection_mode=args.effective_collection_mode,
+            )
+        except Exception as error:
+            assessment_error = f"{type(error).__name__}: {error}"
+            output.progress(
+                "Avaliacao observacional de saude indisponivel: "
+                f"{assessment_error}",
+            )
+            assessment = build_unavailable_run_health(
+                batch_result=effective_batch_result,
+                source_configs=config.sources,
+                database_path=Path(args.database_path),
+                error=assessment_error,
+                run_error=run_error,
+                collection_mode=args.effective_collection_mode,
+            )
+
+    json_error = None
+
+    try:
+        write_health_assessment(assessment, HEALTH_REPORT_PATH)
+    except OSError as error:
+        json_error = f"{type(error).__name__}: {error}"
+
+        try:
+            HEALTH_REPORT_PATH.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as invalidation_error:
+            json_error += (
+                "; falha ao invalidar arquivo anterior: "
+                f"{type(invalidation_error).__name__}: {invalidation_error}"
+            )
+
+        output.progress(
+            f"Nao foi possivel salvar {HEALTH_REPORT_PATH}: {json_error}",
+        )
+
+    output.record_health_assessment(
+        assessment,
+        HEALTH_REPORT_PATH,
+        json_error=json_error,
+    )
 
 
 def build_report_configuration(
@@ -125,6 +553,31 @@ def build_report_configuration(
             ".env, arquivos de configuracao e argumentos CLI",
         ),
     ]
+
+    if args.reset_backfill_state:
+        rows.extend(
+            [
+                ("Escopo solicitado", args.source or "fonte ausente"),
+                ("COTACOES_DATABASE_PATH", args.database_path),
+                ("Acesso HTTP", "nao"),
+                ("Persistencia SQLite", "sim"),
+            ]
+        )
+        return tuple(rows)
+
+    if args.validate_publication:
+        rows.extend(
+            [
+                ("Escopo solicitado", "gate de publicacao"),
+                ("COTACOES_DATABASE_PATH", args.database_path),
+                ("Relatorio de saude", args.health_report_path),
+                ("Resultado do gate", args.publication_gate_report_path),
+                ("Acesso HTTP", "nao"),
+                ("Leitura SQLite", "sim"),
+                ("Persistencia SQLite", "nao"),
+            ]
+        )
+        return tuple(rows)
 
     if args.archive_raw_old:
         rows.extend(
@@ -242,10 +695,22 @@ def build_report_configuration(
         )
 
         if not args.list_categories:
+            rows.append(
+                (
+                    "Modo de coleta efetivo",
+                    format_collection_mode(args.effective_collection_mode),
+                )
+            )
             rows.extend(
                 [
-                    ("COTACOES_TARGET_DATE", args.target_date or "ultima disponivel"),
-                    ("COTACOES_QUOTES_BACK", format_quotes_back(args.quotes_back)),
+                    (
+                        "COTACOES_TARGET_DATE",
+                        args.requested_target_date or "ultima disponivel",
+                    ),
+                    (
+                        "COTACOES_QUOTES_BACK",
+                        format_quotes_back(args.requested_quotes_back),
+                    ),
                     (
                         "COTACOES_INCREMENTAL_HISTORY",
                         config.incremental_history,
@@ -253,13 +718,43 @@ def build_report_configuration(
                     (
                         "Historico incremental efetivo",
                         format_incremental_history(
-                            config.incremental_history,
+                            args.incremental_history,
                             args.target_date,
                             args.quotes_back,
                         ),
-                ),
-            ]
-        )
+                    ),
+                ]
+            )
+
+            if args.effective_collection_mode != COLLECTION_MODE_LEGACY:
+                rows.extend(
+                    [
+                        (
+                            "Data limite efetiva",
+                            args.target_date or "ultima disponivel",
+                        ),
+                        (
+                            "Cotacoes anteriores efetivas",
+                            format_quotes_back(args.quotes_back),
+                        ),
+                    ]
+                )
+
+            if args.backfill_excluded_sources:
+                rows.append(
+                    (
+                        "Fontes excluidas do backfill",
+                        ", ".join(args.backfill_excluded_sources),
+                    )
+                )
+
+            if args.backfill_deferred_sources:
+                rows.append(
+                    (
+                        "Fontes adiadas pelo estado do backfill",
+                        ", ".join(args.backfill_deferred_sources),
+                    )
+                )
 
         if all_sources and (args.download_only or args.download_and_process):
             effective_workers = min(args.workers, len(config.sources))
@@ -291,6 +786,12 @@ def build_report_configuration(
 
 
 def resolve_report_flow(args) -> str:
+    if args.reset_backfill_state:
+        return "Reabrir estado do backfill"
+
+    if args.validate_publication:
+        return "Validar gate de publicacao"
+
     if args.archive_raw_old:
         return "Compactar arquivos antigos"
 
@@ -322,6 +823,12 @@ def resolve_report_flow(args) -> str:
 
 
 def resolve_report_name(args) -> str:
+    if args.reset_backfill_state:
+        return "reset_backfill"
+
+    if args.validate_publication:
+        return "gate_publicacao"
+
     if args.archive_raw_old:
         return "compactacao"
 

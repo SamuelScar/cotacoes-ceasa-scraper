@@ -3,6 +3,7 @@ from datetime import date
 from pathlib import Path
 
 from cotacoes_ceasa.http.client import HttpClient
+from cotacoes_ceasa.core.errors import QuotationNotFoundError
 from cotacoes_ceasa.core.models import Category, Cotacao
 from cotacoes_ceasa.parsers.ceasa_go import CeasaGoParser, CeasaGoQuoteLink
 from cotacoes_ceasa.storage.raw_html import RawHtmlStorage
@@ -120,7 +121,7 @@ class CeasaGoCollector:
             if candidates:
                 return max(candidates, key=lambda quote_link: quote_link.quote_date)
 
-        raise ValueError(
+        raise QuotationNotFoundError(
             "PDF da CEASA-GO nao encontrado ate "
             f"{target_date.isoformat()}."
         )

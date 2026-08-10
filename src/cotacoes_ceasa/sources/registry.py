@@ -33,6 +33,11 @@ from cotacoes_ceasa.parsers.ceasa_pe import CeasaPeParser
 from cotacoes_ceasa.parsers.ceasa_pr import CeasaPrParser
 from cotacoes_ceasa.parsers.ceasa_rj import CeasaRjParser
 from cotacoes_ceasa.parsers.ceagesp_sp import CeagespSpParser
+from cotacoes_ceasa.sources.history import (
+    history_requested,
+    resolve_unsupported_history_error,
+    source_supports_history as supports_source_history,
+)
 from cotacoes_ceasa.storage.raw_html import RawHtmlStorage
 
 
@@ -44,16 +49,11 @@ class SourceDefinition:
     parser_type: type
     headers: dict[str, str] | None = None
     receives_target_date: bool = False
-    unsupported_history_error: str | None = None
 
 
 SOURCE_DEFINITIONS = {
     "ceasa-pe": SourceDefinition(CeasaPeCollector, CeasaPeParser),
-    "ceasa-mg": SourceDefinition(
-        CeasaMgCollector,
-        CeasaMgParser,
-        unsupported_history_error="CEASA-MG nao suporta cotacoes anteriores.",
-    ),
+    "ceasa-mg": SourceDefinition(CeasaMgCollector, CeasaMgParser),
     "ceasa-pr": SourceDefinition(
         CeasaPrCollector,
         CeasaPrParser,
@@ -74,7 +74,6 @@ SOURCE_DEFINITIONS = {
         CeasaCeCollector,
         CeasaCeParser,
         headers=CEASA_CE_HEADERS,
-        unsupported_history_error="CEASA-CE nao suporta cotacoes anteriores.",
     ),
     "ceasa-rj": SourceDefinition(
         CeasaRjCollector,
@@ -90,7 +89,6 @@ SOURCE_DEFINITIONS = {
         CeasaDfCollector,
         CeasaDfParser,
         headers=CEASA_DF_HEADERS,
-        unsupported_history_error="CEASA-DF nao suporta cotacoes anteriores.",
     ),
     "ceagesp-sp": SourceDefinition(
         CeagespSpCollector,
@@ -117,9 +115,10 @@ def build_registered_collector(
 ) -> SourceCollector:
     """Constroi o coletor registrado para a fonte informada."""
     definition = _get_source_definition(source_slug)
+    unsupported_history_error = resolve_unsupported_history_error(source_slug)
 
-    if history_requested(quotes_back) and definition.unsupported_history_error:
-        raise ValueError(definition.unsupported_history_error)
+    if history_requested(quotes_back) and unsupported_history_error:
+        raise ValueError(unsupported_history_error)
 
     http_client_options: dict[str, Any] = {
         "timeout_seconds": http_timeout_seconds,
@@ -149,12 +148,9 @@ def build_source_parser(source_slug: str) -> SourceParser:
 
 
 def source_supports_history(source_slug: str) -> bool:
-    """Informa se a fonte aceita coleta de cotacoes anteriores."""
-    return _get_source_definition(source_slug).unsupported_history_error is None
-
-
-def history_requested(quotes_back: int | None) -> bool:
-    return quotes_back is None or quotes_back > 0
+    """Informa se a fonte registrada aceita cotacoes anteriores."""
+    _get_source_definition(source_slug)
+    return supports_source_history(source_slug)
 
 
 def _get_source_definition(source_slug: str) -> SourceDefinition:

@@ -7,6 +7,13 @@ from pathlib import Path
 ENV_FILE = Path(".env")
 SOURCES_FILE = Path("config/fontes.json")
 PROHORT_FILE = Path("config/prohort.json")
+PUBLICATION_POLICIES = {
+    "required",
+    "optional",
+    "disabled",
+    "backfill_only",
+    "unsupported",
+}
 
 
 @dataclass(frozen=True)
@@ -43,6 +50,9 @@ class SourceConfig:
     base_url: str
     limited_history: bool = False
     max_quotes_back: int | None = None
+    max_staleness_days: int | None = None
+    backfill_enabled: bool = False
+    publication_policy: str = "optional"
 
 
 def load_config(env_file: Path = ENV_FILE) -> AppConfig:
@@ -100,6 +110,12 @@ def load_sources(sources_file: Path) -> dict[str, SourceConfig]:
                 source,
                 "max_quotes_back",
             ),
+            max_staleness_days=_get_optional_source_non_negative_int(
+                source,
+                "max_staleness_days",
+            ),
+            backfill_enabled=bool(source.get("backfill_enabled", False)),
+            publication_policy=_get_publication_policy(source),
         )
         for slug, source in data.items()
     }
@@ -112,6 +128,27 @@ def _get_optional_source_int(source: dict, name: str) -> int | None:
         return None
 
     return int(value)
+
+
+def _get_optional_source_non_negative_int(source: dict, name: str) -> int | None:
+    value = _get_optional_source_int(source, name)
+
+    if value is not None and value < 0:
+        raise ValueError(f"{name} deve ser maior ou igual a zero.")
+
+    return value
+
+
+def _get_publication_policy(source: dict) -> str:
+    policy = str(source.get("publication_policy", "optional")).strip().lower()
+
+    if policy not in PUBLICATION_POLICIES:
+        allowed_values = ", ".join(sorted(PUBLICATION_POLICIES))
+        raise ValueError(
+            f"publication_policy invalida: {policy}. Use: {allowed_values}."
+        )
+
+    return policy
 
 
 def load_prohort_url(prohort_file: Path) -> str:

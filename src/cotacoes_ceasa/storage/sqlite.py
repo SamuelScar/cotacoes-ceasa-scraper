@@ -5,10 +5,46 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 from cotacoes_ceasa.core.models import Cotacao
 from cotacoes_ceasa.normalizers.text import slugify
 from cotacoes_ceasa.normalizers.unit import NormalizedUnit, normalize_unit
+
+
+BACKFILL_STATE_TIMEZONE = ZoneInfo("America/Sao_Paulo")
+SQLITE_SCHEMA_VERSION = 2
+
+
+@dataclass(frozen=True)
+class LogicalCotacaoDelta:
+    previous_max_id: int
+    current_max_id: int
+    observations_inserted: int
+    logical_new: int
+    repeated_observations: int
+
+
+@dataclass(frozen=True)
+class BackfillState:
+    source_slug: str
+    category_slug: str | None
+    status: str
+    cursor_date: date | None
+    consecutive_no_progress: int
+    next_check_date: date | None
+    last_error: str | None
+    updated_at: datetime
+
+    def is_deferred(self, reference_date: date) -> bool:
+        if self.status == "exhausted":
+            return True
+
+        return (
+            self.status == "paused_for_recheck"
+            and self.next_check_date is not None
+            and self.next_check_date > reference_date
+        )
 
 
 @dataclass(frozen=True)
@@ -130,6 +166,259 @@ class SQLiteStorage:
                 return None
         return None
 
+    def find_backfill_state(
+        self,
+        source_slug: str,
+        category_slug: str | None = None,
+    ) -> BackfillState | None:
+        """Consulta o estado do cursor sem criar ou alterar o banco."""
+        if not self.database_path.exists():
+            return None
+
+        with sqlite3.connect(self.database_path) as connection:
+            try:
+                row = connection.execute(
+                    """
+                    SELECT
+                        source_slug,
+                        category_slug,
+                        status,
+                        cursor_date,
+                        consecutive_no_progress,
+                        next_check_date,
+                        last_error,
+                        updated_at
+                    FROM backfill_states
+                    WHERE source_slug = ? AND category_slug = ?
+                    """,
+                    (source_slug, category_slug or ""),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                return None
+
+        if row is None:
+            return None
+
+        return BackfillState(
+            source_slug=str(row[0]),
+            category_slug=str(row[1]) or None,
+            status=str(row[2]),
+            cursor_date=date.fromisoformat(row[3]) if row[3] else None,
+            consecutive_no_progress=int(row[4]),
+            next_check_date=date.fromisoformat(row[5]) if row[5] else None,
+            last_error=str(row[6]) if row[6] else None,
+            updated_at=datetime.fromisoformat(str(row[7])),
+        )
+
+    def save_backfill_state(
+        self,
+        source_slug: str,
+        status: str,
+        cursor_date: date | None,
+        consecutive_no_progress: int = 0,
+        next_check_date: date | None = None,
+        last_error: str | None = None,
+        category_slug: str | None = None,
+    ) -> BackfillState:
+        """Persiste o estado operacional do backfill de forma aditiva."""
+        updated_at = datetime.now(BACKFILL_STATE_TIMEZONE)
+        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            self._create_schema(connection)
+            connection.execute(
+                """
+                INSERT INTO backfill_states (
+                    source_slug,
+                    category_slug,
+                    status,
+                    cursor_date,
+                    consecutive_no_progress,
+                    next_check_date,
+                    last_error,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (source_slug, category_slug) DO UPDATE SET
+                    status = excluded.status,
+                    cursor_date = excluded.cursor_date,
+                    consecutive_no_progress = excluded.consecutive_no_progress,
+                    next_check_date = excluded.next_check_date,
+                    last_error = excluded.last_error,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    source_slug,
+                    category_slug or "",
+                    status,
+                    cursor_date.isoformat() if cursor_date else None,
+                    consecutive_no_progress,
+                    next_check_date.isoformat() if next_check_date else None,
+                    last_error,
+                    updated_at.isoformat(timespec="seconds"),
+                ),
+            )
+
+        state = self.find_backfill_state(source_slug, category_slug)
+        if state is None:
+            raise RuntimeError("Estado do backfill nao foi persistido.")
+
+        return state
+
+    def reset_backfill_state(self, source_slug: str) -> int:
+        """Remove todos os estados de backfill da fonte informada."""
+        if not self.database_path.exists():
+            return 0
+
+        with sqlite3.connect(self.database_path) as connection:
+            try:
+                cursor = connection.execute(
+                    "DELETE FROM backfill_states WHERE source_slug = ?",
+                    (source_slug,),
+                )
+            except sqlite3.OperationalError:
+                return 0
+
+        return max(0, cursor.rowcount)
+
+    def find_latest_cotacao_id(self) -> int:
+        """Retorna o maior id atual sem criar ou alterar o banco."""
+        with self._connect_read_only() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM cotacoes"
+            ).fetchone()
+
+        return int(row[0]) if row else 0
+
+    def count_cotacoes(self) -> int:
+        """Retorna a quantidade total de cotacoes sem alterar o banco."""
+        with self._connect_read_only() as connection:
+            row = connection.execute("SELECT COUNT(*) FROM cotacoes").fetchone()
+
+        return int(row[0]) if row else 0
+
+    def find_latest_cotacao_dates(
+        self,
+        source_slugs: Iterable[str],
+    ) -> dict[str, date | None]:
+        """Retorna a maior data persistida de cada fonte em uma unica consulta."""
+        requested_slugs = tuple(dict.fromkeys(source_slugs))
+        latest_dates = {source_slug: None for source_slug in requested_slugs}
+
+        if not requested_slugs:
+            return latest_dates
+
+        placeholders = ", ".join("?" for _ in requested_slugs)
+        query = f"""
+            SELECT cs.slug, MAX(c.data_cotacao)
+            FROM cotacoes c
+            JOIN coletas col ON c.coleta_id = col.id
+            JOIN ceasas cs ON col.ceasa_id = cs.id
+            WHERE cs.slug IN ({placeholders})
+            GROUP BY cs.slug
+        """
+
+        with self._connect_read_only() as connection:
+            rows = connection.execute(query, requested_slugs).fetchall()
+
+        for source_slug, latest_date in rows:
+            latest_dates[str(source_slug)] = (
+                date.fromisoformat(str(latest_date)) if latest_date else None
+            )
+
+        return latest_dates
+
+    def summarize_logical_cotacao_delta(
+        self,
+        previous_max_id: int,
+    ) -> LogicalCotacaoDelta:
+        """Classifica as observacoes inseridas depois do inicio da rodada."""
+        with self._connect_read_only() as connection:
+            current_row = connection.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM cotacoes"
+            ).fetchone()
+            current_max_id = int(current_row[0]) if current_row else 0
+            row = connection.execute(
+                """
+                WITH new_rows AS (
+                    SELECT
+                        id,
+                        chave_identidade,
+                        preco_minimo,
+                        preco_comum,
+                        preco_maximo,
+                        situacao_mercado
+                    FROM cotacoes
+                    WHERE id > ?
+                ),
+                new_groups AS (
+                    SELECT
+                        chave_identidade,
+                        preco_minimo,
+                        preco_comum,
+                        preco_maximo,
+                        situacao_mercado,
+                        COUNT(*) AS observation_count
+                    FROM new_rows
+                    GROUP BY
+                        chave_identidade,
+                        preco_minimo,
+                        preco_comum,
+                        preco_maximo,
+                        situacao_mercado
+                ),
+                classified_groups AS (
+                    SELECT
+                        observation_count,
+                        CASE
+                            WHEN EXISTS (
+                                SELECT 1
+                                FROM cotacoes previous
+                                WHERE previous.id <= ?
+                                    AND previous.chave_identidade =
+                                        new_groups.chave_identidade
+                                    AND previous.preco_minimo IS
+                                        new_groups.preco_minimo
+                                    AND previous.preco_comum IS
+                                        new_groups.preco_comum
+                                    AND previous.preco_maximo IS
+                                        new_groups.preco_maximo
+                                    AND previous.situacao_mercado IS
+                                        new_groups.situacao_mercado
+                            )
+                            THEN 0
+                            ELSE 1
+                        END AS is_logical_new
+                    FROM new_groups
+                )
+                SELECT
+                    COALESCE(SUM(observation_count), 0),
+                    COALESCE(SUM(is_logical_new), 0),
+                    COALESCE(SUM(observation_count - is_logical_new), 0)
+                FROM classified_groups
+                """,
+                (previous_max_id, previous_max_id),
+            ).fetchone()
+
+        observations_inserted, logical_new, repeated_observations = row or (
+            0,
+            0,
+            0,
+        )
+
+        return LogicalCotacaoDelta(
+            previous_max_id=previous_max_id,
+            current_max_id=current_max_id,
+            observations_inserted=int(observations_inserted),
+            logical_new=int(logical_new),
+            repeated_observations=int(repeated_observations),
+        )
+
+    def _connect_read_only(self) -> sqlite3.Connection:
+        database_uri = f"{self.database_path.resolve().as_uri()}?mode=ro"
+        return sqlite3.connect(database_uri, uri=True)
+
     def _create_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
             """
@@ -232,6 +521,18 @@ class SQLiteStorage:
                 FOREIGN KEY (apresentacao_unidade_id) REFERENCES apresentacoes_unidade (id)
             );
 
+            CREATE TABLE IF NOT EXISTS backfill_states (
+                source_slug TEXT NOT NULL,
+                category_slug TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                cursor_date TEXT,
+                consecutive_no_progress INTEGER NOT NULL DEFAULT 0,
+                next_check_date TEXT,
+                last_error TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (source_slug, category_slug)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_coletas_ceasa
                 ON coletas (ceasa_id);
             CREATE INDEX IF NOT EXISTS idx_cotacoes_identidade
@@ -248,6 +549,9 @@ class SQLiteStorage:
                 ON produto_aliases (produto_id);
             """
         )
+        current_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if current_version < SQLITE_SCHEMA_VERSION:
+            connection.execute(f"PRAGMA user_version = {SQLITE_SCHEMA_VERSION}")
 
     def insert_cotacoes(
         self,
@@ -286,7 +590,7 @@ class SQLiteStorage:
                     processado_em,
                 )
                 coletas_cache[coleta_key] = coleta
-            coleta_id, coleta_key = coleta
+            coleta_id, _ = coleta
 
             market_name = cotacao.entreposto or self._default_market(default_market)
             market_slug = slugify(market_name) if market_name is not None else None
@@ -363,7 +667,16 @@ class SQLiteStorage:
                 presentation_key=presentation_key,
                 cotacao=cotacao,
             )
-            unique_key = self._build_unique_key(identity_key, coleta_key, cotacao)
+            unique_key = self.build_content_key(
+                identity_key=identity_key,
+                preco_minimo=cotacao.preco_minimo,
+                preco_comum=cotacao.preco_comum,
+                preco_maximo=cotacao.preco_maximo,
+                situacao_mercado=cotacao.situacao_mercado,
+            )
+            preco_minimo = self._decimal_to_db(cotacao.preco_minimo)
+            preco_comum = self._decimal_to_db(cotacao.preco_comum)
+            preco_maximo = self._decimal_to_db(cotacao.preco_maximo)
             rows.append(
                 (
                     unique_key,
@@ -374,9 +687,9 @@ class SQLiteStorage:
                     produto_alias_id,
                     presentation_id,
                     cotacao.data_cotacao.isoformat(),
-                    self._decimal_to_db(cotacao.preco_minimo),
-                    self._decimal_to_db(cotacao.preco_comum),
-                    self._decimal_to_db(cotacao.preco_maximo),
+                    preco_minimo,
+                    preco_comum,
+                    preco_maximo,
                     cotacao.procedencia,
                     cotacao.classificacao,
                     cotacao.situacao_mercado,
@@ -387,6 +700,11 @@ class SQLiteStorage:
                         if cotacao.data_complemento is not None
                         else None
                     ),
+                    identity_key,
+                    preco_minimo,
+                    preco_comum,
+                    preco_maximo,
+                    cotacao.situacao_mercado,
                 )
             )
 
@@ -412,7 +730,16 @@ class SQLiteStorage:
                 url_complemento,
                 data_complemento
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM cotacoes existing
+                WHERE existing.chave_identidade = ?
+                  AND existing.preco_minimo IS ?
+                  AND existing.preco_comum IS ?
+                  AND existing.preco_maximo IS ?
+                  AND existing.situacao_mercado IS ?
+            )
             ON CONFLICT (chave_unica) DO NOTHING
             """,
             rows,
@@ -740,20 +1067,22 @@ class SQLiteStorage:
             )
         )
 
-    def _build_unique_key(
+    def build_content_key(
         self,
         identity_key: str,
-        collection_key: str,
-        cotacao: Cotacao,
+        preco_minimo: Decimal | int | float | str | None,
+        preco_comum: Decimal | int | float | str | None,
+        preco_maximo: Decimal | int | float | str | None,
+        situacao_mercado: str | None,
     ) -> str:
+        """Gera a chave logica da cotacao sem incluir a coleta de origem."""
         return self._hash_values(
             (
                 identity_key,
-                collection_key,
-                self._decimal_to_db(cotacao.preco_minimo),
-                self._decimal_to_db(cotacao.preco_comum),
-                self._decimal_to_db(cotacao.preco_maximo),
-                cotacao.situacao_mercado,
+                self._decimal_to_key(preco_minimo),
+                self._decimal_to_key(preco_comum),
+                self._decimal_to_key(preco_maximo),
+                situacao_mercado,
             )
         )
 
@@ -764,6 +1093,17 @@ class SQLiteStorage:
 
     def _decimal_to_db(self, value: Decimal | None) -> str | None:
         return str(value) if value is not None else None
+
+    def _decimal_to_key(
+        self,
+        value: Decimal | int | float | str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+
+        normalized = Decimal(str(value)).normalize()
+
+        return "0" if normalized == 0 else format(normalized, "f")
 
     def _format_datetime(self, value: datetime | None) -> str | None:
         return value.isoformat(timespec="seconds") if value is not None else None

@@ -1,6 +1,7 @@
 import argparse
 from datetime import date, datetime
 
+from cotacoes_ceasa.cli.collection_mode import COLLECTION_MODES
 from cotacoes_ceasa.config import AppConfig
 
 
@@ -92,6 +93,32 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         help="Arquivo SQLite onde as cotacoes serao salvas.",
     )
     parser.add_argument(
+        "--reset-backfill-state",
+        action="store_true",
+        help=(
+            "Reabre o backfill da fonte informada em --source removendo seu "
+            "estado persistido."
+        ),
+    )
+    parser.add_argument(
+        "--validate-publication",
+        action="store_true",
+        help=(
+            "Valida estrutura, regressao e politicas por fonte antes de "
+            "publicar o SQLite."
+        ),
+    )
+    parser.add_argument(
+        "--health-report-path",
+        default="data/relatorios/saude_ultima.json",
+        help="JSON de saude usado pelo gate de publicacao.",
+    )
+    parser.add_argument(
+        "--publication-gate-report-path",
+        default="data/relatorios/gate_publicacao_ultima.json",
+        help="JSON estruturado gravado pelo gate de publicacao.",
+    )
+    parser.add_argument(
         "--base-url",
         default=None,
         help="Sobrescreve a URL base da fonte informada em --source.",
@@ -114,6 +141,15 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
         help=(
             "Data limite da coleta em DD/MM/YYYY ou YYYY-MM-DD. "
             "Quando omitida, busca a ultima cotacao disponivel."
+        ),
+    )
+    parser.add_argument(
+        "--collection-mode",
+        choices=COLLECTION_MODES,
+        default=None,
+        help=(
+            "Seleciona coleta atual (current) ou historico incremental "
+            "controlado (backfill). Omitir preserva o comportamento existente."
         ),
     )
     parser.add_argument(

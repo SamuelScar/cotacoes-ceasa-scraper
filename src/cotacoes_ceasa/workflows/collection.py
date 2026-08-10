@@ -4,6 +4,7 @@ from pathlib import Path
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.cli.progress import ProgressReporter
 from cotacoes_ceasa.core.contracts import SourceCollector
+from cotacoes_ceasa.core.errors import QuotationNotFoundError
 from cotacoes_ceasa.core.models import Category, Cotacao
 from cotacoes_ceasa.http.client import HttpRequestError, HttpSourceBlockedError
 from cotacoes_ceasa.workflows.raw_processing import find_oldest_raw_target_date
@@ -31,6 +32,7 @@ def collect_and_report(
     output: TerminalOutput | None = None,
     limited_history: bool = False,
     database_path: Path | None = None,
+    strict_history_errors: bool = False,
 ) -> list[Cotacao]:
     """Coleta cotacoes e imprime um resumo por categoria."""
     output = output or TerminalOutput()
@@ -50,6 +52,7 @@ def collect_and_report(
         output=output,
         limited_history=limited_history,
         database_path=database_path,
+        strict_history_errors=strict_history_errors,
     )
     cotacoes: list[Cotacao] = []
 
@@ -87,6 +90,9 @@ def collect_and_report(
                 except (HttpRequestError, HttpSourceBlockedError):
                     raise
                 except Exception as error:
+                    if strict_history_errors:
+                        raise
+
                     output.warning(
                         f"{category.slug} | {format_target_date(target_date)} | {error}"
                     )
@@ -113,6 +119,7 @@ def download_and_report(
     output: TerminalOutput | None = None,
     limited_history: bool = False,
     database_path: Path | None = None,
+    strict_history_errors: bool = False,
 ) -> list[Path]:
     """Baixa arquivos brutos para a janela de datas configurada."""
     output = output or TerminalOutput()
@@ -137,6 +144,7 @@ def download_and_report(
             downloaded_files=downloaded_files,
             limited_history=limited_history,
             database_path=database_path,
+            strict_history_errors=strict_history_errors,
         )
         saved_files = list(downloaded_files.values())
 
@@ -168,6 +176,9 @@ def download_and_report(
                     except (HttpRequestError, HttpSourceBlockedError):
                         raise
                     except Exception as error:
+                        if strict_history_errors:
+                            raise
+
                         output.warning(
                             f"{category.slug} | "
                             f"{format_target_date(target_date)} | {error}"
@@ -175,7 +186,7 @@ def download_and_report(
                         continue
 
                     saved_files.append(file_path)
-                    output.success(f"{category.slug} | salvo em {file_path}")
+                    output.success(f"{category.slug} | disponivel em {file_path}")
 
                 progress_task.advance(current=category.slug)
 
@@ -187,7 +198,7 @@ def download_and_report(
 
         raise PartialDownloadError(error, partial_files) from error
 
-    return saved_files
+    return list(dict.fromkeys(saved_files))
 
 
 def resolve_quotation_dates(
@@ -199,6 +210,7 @@ def resolve_quotation_dates(
     downloaded_files: dict[tuple[str, date | None], Path] | None = None,
     output: TerminalOutput | None = None,
     limited_history: bool = False,
+    strict_history_errors: bool = False,
 ) -> list[date | None]:
     """Descobre datas de cotacao disponiveis voltando a partir da data limite."""
     if quotes_back is not None and quotes_back < 0:
@@ -217,6 +229,7 @@ def resolve_quotation_dates(
     candidate_date = target_date
     attempt_count = 0
     empty_attempts = 0
+    rejected_future_dates: set[date] = set()
     max_attempts = (
         max(expected_count * 4, 30) if expected_count is not None else None
     )
@@ -232,7 +245,25 @@ def resolve_quotation_dates(
             )
         except (HttpRequestError, HttpSourceBlockedError):
             raise
+        except QuotationNotFoundError:
+            empty_attempts += 1
+
+            if _infinite_history_exhausted(
+                expected_count,
+                found_dates,
+                empty_attempts,
+                output,
+                probe_category_slug,
+                allow_empty_history,
+            ):
+                return found_dates
+
+            candidate_date -= timedelta(days=1)
+            continue
         except Exception:
+            if strict_history_errors:
+                raise
+
             empty_attempts += 1
 
             if _infinite_history_exhausted(
@@ -248,11 +279,27 @@ def resolve_quotation_dates(
             candidate_date -= timedelta(days=1)
             continue
 
-        quotation_dates = {
+        parsed_dates = {
             cotacao.data_cotacao
             for cotacao in cotacoes
             if cotacao.data_cotacao is not None
         }
+        future_dates = {
+            quotation_date
+            for quotation_date in parsed_dates
+            if quotation_date > candidate_date
+        }
+        new_future_dates = future_dates - rejected_future_dates
+
+        if new_future_dates and output is not None:
+            output.warning(
+                f"{probe_category_slug} | data(s) posterior(es) ao candidato "
+                f"{candidate_date.isoformat()} ignorada(s): "
+                f"{format_target_dates(sorted(new_future_dates, reverse=True))}."
+            )
+
+        rejected_future_dates.update(future_dates)
+        quotation_dates = parsed_dates - future_dates
 
         new_dates: list[date] = []
 
@@ -286,6 +333,9 @@ def resolve_quotation_dates(
                 except (HttpRequestError, HttpSourceBlockedError):
                     raise
                 except Exception:
+                    if strict_history_errors:
+                        raise
+
                     continue
 
         if expected_count is not None and len(found_dates) >= expected_count:
@@ -307,7 +357,7 @@ def resolve_quotation_dates(
             else candidate_date - timedelta(days=1)
         )
 
-    if limited_history and found_dates:
+    if (limited_history or allow_empty_history) and found_dates:
         if output is not None:
             output.info(
                 f"{probe_category_slug} | historico limitado pela fonte: "
@@ -316,6 +366,15 @@ def resolve_quotation_dates(
             )
 
         return found_dates
+
+    if allow_empty_history:
+        if output is not None:
+            output.info(
+                f"{probe_category_slug} | nenhum dado historico adicional "
+                f"encontrado apos {max_attempts} tentativa(s)."
+            )
+
+        return []
 
     raise RuntimeError(
         f"Nao foi possivel encontrar {expected_count} datas de cotacao "
@@ -373,6 +432,7 @@ def resolve_category_target_dates(
     downloaded_files: dict[tuple[str, date | None], Path] | None = None,
     limited_history: bool = False,
     database_path: Path | None = None,
+    strict_history_errors: bool = False,
 ) -> dict[str, list[date | None]]:
     """Resolve as datas que devem ser consultadas para cada categoria."""
     if getattr(collector, "category_specific_dates", False):
@@ -404,6 +464,7 @@ def resolve_category_target_dates(
                 downloaded_files=downloaded_files,
                 output=output,
                 limited_history=limited_history,
+                strict_history_errors=strict_history_errors,
             )
 
         return target_dates_by_category
@@ -427,6 +488,7 @@ def resolve_category_target_dates(
         downloaded_files=downloaded_files,
         output=output,
         limited_history=limited_history,
+        strict_history_errors=strict_history_errors,
     )
 
     if collector.supports_target_dates:

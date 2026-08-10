@@ -2,6 +2,10 @@ from copy import copy
 from pathlib import Path
 from time import perf_counter
 
+from cotacoes_ceasa.cli.collection_mode import (
+    COLLECTION_MODE_BACKFILL,
+    format_collection_mode,
+)
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.cli.parser import (
     format_incremental_history,
@@ -33,8 +37,21 @@ def run_source(
 ) -> list[Path] | None:
     """Executa a operacao solicitada para uma fonte."""
     source_config = config.sources[args.source]
-    requested_quotes_back = args.quotes_back
+    requested_quotes_back = getattr(
+        args,
+        "requested_quotes_back",
+        args.quotes_back,
+    )
     args = copy(args)
+    incremental_history = getattr(
+        args,
+        "incremental_history",
+        config.incremental_history,
+    )
+    strict_history_errors = (
+        getattr(args, "effective_collection_mode", None)
+        == COLLECTION_MODE_BACKFILL
+    )
     database_path = (
         Path(args.database_path)
         if getattr(args, "database_path", None)
@@ -51,7 +68,7 @@ def run_source(
         build_source_execution_details(
             args,
             source_config,
-            config.incremental_history,
+            incremental_history,
             requested_quotes_back,
         ),
     )
@@ -101,6 +118,10 @@ def run_source(
             source_config=source_config,
             output=output,
         )
+        duplicate_count = max(
+            0,
+            len(cotacoes) - rejected_count - inserted_count,
+        )
         persistence_seconds = perf_counter() - persistence_started_at
         output.success(f"{inserted_count} registro(s) novo(s) salvo(s).")
         complete_source_operation(
@@ -109,6 +130,7 @@ def run_source(
             (
                 ("Cotacoes processadas", len(cotacoes)),
                 ("Registros novos", inserted_count),
+                ("Repeticoes ignoradas", duplicate_count),
                 ("Cotacoes rejeitadas", rejected_count),
                 ("Tempo persistencia SQLite (s)", f"{persistence_seconds:.2f}"),
                 ("Banco", args.database_path),
@@ -123,10 +145,11 @@ def run_source(
             quotes_back=args.quotes_back,
             raw_dir=Path(args.raw_dir),
             source_slug=args.source,
-            incremental_history=config.incremental_history,
+            incremental_history=incremental_history,
             output=output,
             limited_history=limited_history,
             database_path=database_path,
+            strict_history_errors=strict_history_errors,
         )
         output.section("Persistencia")
         output.info(f"Salvando cotacoes em {args.database_path}.")
@@ -137,6 +160,10 @@ def run_source(
             source_config=source_config,
             output=output,
         )
+        duplicate_count = max(
+            0,
+            len(cotacoes) - rejected_count - inserted_count,
+        )
         persistence_seconds = perf_counter() - persistence_started_at
         output.success(f"{inserted_count} registro(s) novo(s) salvo(s).")
         complete_source_operation(
@@ -145,6 +172,7 @@ def run_source(
             (
                 ("Cotacoes extraidas", len(cotacoes)),
                 ("Registros novos", inserted_count),
+                ("Repeticoes ignoradas", duplicate_count),
                 ("Cotacoes rejeitadas", rejected_count),
                 ("Tempo persistencia SQLite (s)", f"{persistence_seconds:.2f}"),
                 ("Banco", args.database_path),
@@ -159,15 +187,16 @@ def run_source(
             quotes_back=args.quotes_back,
             raw_dir=Path(args.raw_dir),
             source_slug=args.source,
-            incremental_history=config.incremental_history,
+            incremental_history=incremental_history,
             output=output,
             limited_history=limited_history,
             database_path=database_path,
+            strict_history_errors=strict_history_errors,
         )
         complete_source_operation(
             output,
             show_summary,
-            (("Arquivos salvos", len(saved_files)),),
+            (("Arquivos obtidos", len(saved_files)),),
         )
         return saved_files
 
@@ -177,10 +206,11 @@ def run_source(
         quotes_back=args.quotes_back,
         raw_dir=Path(args.raw_dir),
         source_slug=args.source,
-        incremental_history=config.incremental_history,
+        incremental_history=incremental_history,
         output=output,
         limited_history=limited_history,
         database_path=database_path,
+        strict_history_errors=strict_history_errors,
     )
     complete_source_operation(
         output,
@@ -379,7 +409,37 @@ def build_source_execution_details(
     ]
 
     if not args.list_categories and not args.process_raw:
-        details.append(("Data limite", args.target_date or "ultima disponivel"))
+        details.append(
+            (
+                "Modo de coleta",
+                format_collection_mode(
+                    getattr(args, "effective_collection_mode", "legacy")
+                ),
+            )
+        )
+        requested_target_date = getattr(
+            args,
+            "requested_target_date",
+            args.target_date,
+        )
+
+        if requested_target_date != args.target_date:
+            details.extend(
+                [
+                    (
+                        "Data limite solicitada",
+                        requested_target_date or "ultima disponivel",
+                    ),
+                    (
+                        "Data limite efetiva",
+                        args.target_date or "ultima disponivel",
+                    ),
+                ]
+            )
+        else:
+            details.append(
+                ("Data limite", args.target_date or "ultima disponivel")
+            )
 
         if requested_quotes_back != args.quotes_back:
             details.extend(

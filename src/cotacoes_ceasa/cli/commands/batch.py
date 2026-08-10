@@ -4,13 +4,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 
+from cotacoes_ceasa.cli.collection_mode import format_collection_mode
 from cotacoes_ceasa.cli.commands.source import resolve_source_operation, run_source
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.cli.parser import format_incremental_history, format_quotes_back
 from cotacoes_ceasa.cli.progress import ProgressReporter
 from cotacoes_ceasa.config import AppConfig
-from cotacoes_ceasa.sources.registry import history_requested, source_supports_history
+from cotacoes_ceasa.sources.history import history_requested, source_supports_history
 from cotacoes_ceasa.workflows.collection import PartialDownloadError
+from cotacoes_ceasa.workflows.health import BatchRunResult, SourceRunObservation
 
 
 @dataclass(frozen=True)
@@ -113,6 +115,64 @@ class SourceRunResult:
     error_message: str | None = None
     download_started_at: float | None = None
     download_finished_at: float | None = None
+
+
+@dataclass
+class _SourceRunObservationState:
+    source_slug: str
+    download_status: str = "not_run"
+    persistence_status: str = "not_run"
+    raw_files: int = 0
+    error_type: str | None = None
+    error_message: str | None = None
+
+
+class _BatchRunObserver:
+    def __init__(self, source_slugs) -> None:
+        self._sources = {
+            source_slug: _SourceRunObservationState(source_slug)
+            for source_slug in source_slugs
+        }
+
+    def record_download(self, result: SourceRunResult) -> None:
+        source = self._sources[result.source_slug]
+        source.download_status = result.status
+        source.raw_files = len(result.files)
+        source.error_type = result.error_type
+        source.error_message = result.error_message
+
+    def record_download_status(
+        self,
+        source_slug: str,
+        status: str,
+        files: list[Path] | tuple[Path, ...] = (),
+        error: Exception | None = None,
+    ) -> None:
+        source = self._sources[source_slug]
+        source.download_status = status
+        source.raw_files = len(files)
+
+        if error is not None:
+            source.error_type = type(error).__name__
+            source.error_message = str(error)
+
+    def record_persistence(self, source_slug: str, status: str) -> None:
+        self._sources[source_slug].persistence_status = status
+
+    def build(self) -> BatchRunResult:
+        return BatchRunResult(
+            sources=tuple(
+                SourceRunObservation(
+                    source_slug=source.source_slug,
+                    download_status=source.download_status,
+                    persistence_status=source.persistence_status,
+                    raw_files=source.raw_files,
+                    error_type=source.error_type,
+                    error_message=source.error_message,
+                )
+                for source in self._sources.values()
+            )
+        )
 
 
 @dataclass
@@ -275,12 +335,23 @@ def _format_rate(value: float) -> str:
     return f"{value:.2f}"
 
 
-def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
+def run_all_sources(
+    args,
+    config: AppConfig,
+    output: TerminalOutput,
+) -> BatchRunResult | None:
     """Executa a operacao solicitada para todas as fontes configuradas."""
     if args.download_and_process:
+        observation = _BatchRunObserver(config.sources)
+
         if _should_run_download_and_process_pipeline(args, config):
-            _run_download_and_process_pipeline(args, config, output)
-            return
+            _run_download_and_process_pipeline(
+                args,
+                config,
+                output,
+                observation,
+            )
+            return observation.build()
 
         download_args = _build_download_phase_args(args)
         downloaded_files = run_all_sources_phase(
@@ -288,6 +359,7 @@ def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
             config,
             output,
             "Download",
+            observation=observation,
         )
 
         process_args = _build_process_phase_args(args)
@@ -297,10 +369,12 @@ def run_all_sources(args, config: AppConfig, output: TerminalOutput) -> None:
             output,
             "Persistencia",
             raw_files_by_source=downloaded_files,
+            observation=observation,
         )
-        return
+        return observation.build()
 
     run_all_sources_phase(args, config, output, resolve_source_operation(args))
+    return None
 
 
 def _build_download_phase_args(args):
@@ -331,6 +405,7 @@ def _run_download_and_process_pipeline(
     args,
     config: AppConfig,
     output: TerminalOutput,
+    observation: _BatchRunObserver,
 ) -> None:
     download_args = _build_download_phase_args(args)
     process_args = _build_process_phase_args(args)
@@ -372,6 +447,7 @@ def _run_download_and_process_pipeline(
                     output,
                     stats,
                     metrics,
+                    observation,
                 )
         except KeyboardInterrupt:
             for future in futures:
@@ -400,13 +476,23 @@ def _build_pipeline_details(
     effective_workers: int,
 ) -> tuple[tuple[str, object], ...]:
     return (
+        (
+            "Modo de coleta",
+            format_collection_mode(
+                getattr(args, "effective_collection_mode", "legacy")
+            ),
+        ),
         ("Fontes configuradas", len(config.sources)),
         ("Data limite", args.target_date or "ultima disponivel"),
         ("Cotacoes anteriores", format_quotes_back(args.quotes_back)),
         (
             "Historico incremental",
             format_incremental_history(
-                config.incremental_history,
+                getattr(
+                    args,
+                    "incremental_history",
+                    config.incremental_history,
+                ),
                 args.target_date,
                 args.quotes_back,
             ),
@@ -525,9 +611,11 @@ def _consume_pipeline_result(
     output: TerminalOutput,
     stats: PipelineStats,
     metrics: PipelineMetrics,
+    observation: _BatchRunObserver,
 ) -> None:
     _replay_buffered_events(output, result.events)
     _record_pipeline_download_status(stats, result)
+    observation.record_download(result)
     handling_started_at = perf_counter()
 
     if result.status == "failed":
@@ -538,6 +626,7 @@ def _consume_pipeline_result(
             )
 
         stats.persistence_skipped += 1
+        observation.record_persistence(result.source_slug, "skipped")
         output.warning(
             f"{result.source_slug} | persistencia ignorada porque o download falhou."
         )
@@ -555,6 +644,7 @@ def _consume_pipeline_result(
 
     if result.status == "partial" and not raw_files:
         stats.persistence_skipped += 1
+        observation.record_persistence(result.source_slug, "skipped")
         output.warning(
             f"{result.source_slug} | persistencia ignorada porque nao ha raw parcial."
         )
@@ -588,9 +678,11 @@ def _consume_pipeline_result(
     ):
         stats.persistence_completed += 1
         persistence_status = "concluida"
+        observation.record_persistence(result.source_slug, "completed")
     else:
         stats.persistence_failed += 1
         persistence_status = "falhou"
+        observation.record_persistence(result.source_slug, "failed")
 
     metrics.record_source(
         result,
@@ -645,6 +737,7 @@ def run_all_sources_phase(
     output: TerminalOutput,
     phase_name: str,
     raw_files_by_source: dict[str, list[Path]] | None = None,
+    observation: _BatchRunObserver | None = None,
 ) -> dict[str, list[Path]]:
     """Executa uma fase para todas as fontes sem interromper o lote."""
     output.header(
@@ -655,6 +748,7 @@ def run_all_sources_phase(
         ),
     )
     completed_count = 0
+    partial_count = 0
     failed_count = 0
     skipped_count = 0
     downloaded_files: dict[str, list[Path]] = {}
@@ -662,13 +756,21 @@ def run_all_sources_phase(
     if _should_run_parallel_download(args, config, raw_files_by_source):
         (
             completed_count,
+            partial_count,
             failed_count,
             skipped_count,
             downloaded_files,
-        ) = _run_parallel_download_phase(args, config, output, phase_name)
+        ) = _run_parallel_download_phase(
+            args,
+            config,
+            output,
+            phase_name,
+            observation,
+        )
     else:
         (
             completed_count,
+            partial_count,
             failed_count,
             skipped_count,
             downloaded_files,
@@ -678,11 +780,13 @@ def run_all_sources_phase(
             output,
             phase_name,
             raw_files_by_source,
+            observation,
         )
 
     output.summary(
         (
             ("Fontes concluidas", completed_count),
+            ("Fontes parciais", partial_count),
             ("Fontes com falha", failed_count),
             ("Fontes ignoradas", skipped_count),
         ),
@@ -696,13 +800,24 @@ def _build_phase_details(
     config: AppConfig,
 ) -> tuple[tuple[str, object], ...]:
     details: list[tuple[str, object]] = [
+        (
+            "Modo de coleta",
+            format_collection_mode(
+                getattr(args, "effective_collection_mode", "legacy")
+            ),
+        ),
         ("Fontes configuradas", len(config.sources)),
         ("Data limite", args.target_date or "ultima disponivel"),
         ("Cotacoes anteriores", format_quotes_back(args.quotes_back)),
         (
             "Historico incremental",
             format_incremental_history(
-                config.incremental_history and not args.process_raw,
+                getattr(
+                    args,
+                    "incremental_history",
+                    config.incremental_history,
+                )
+                and not args.process_raw,
                 args.target_date,
                 args.quotes_back,
             ),
@@ -750,8 +865,10 @@ def _run_sequential_sources_phase(
     output: TerminalOutput,
     phase_name: str,
     raw_files_by_source: dict[str, list[Path]] | None,
-) -> tuple[int, int, int, dict[str, list[Path]]]:
+    observation: _BatchRunObserver | None,
+) -> tuple[int, int, int, int, dict[str, list[Path]]]:
     completed_count = 0
+    partial_count = 0
     failed_count = 0
     skipped_count = 0
     downloaded_files: dict[str, list[Path]] = {}
@@ -771,6 +888,8 @@ def _run_sequential_sources_phase(
                 and source_slug not in raw_files_by_source
             ):
                 skipped_count += 1
+                if observation is not None:
+                    observation.record_persistence(source_slug, "skipped")
                 output.warning(
                     f"{source_slug} | persistencia ignorada porque o download falhou."
                 )
@@ -792,7 +911,16 @@ def _run_sequential_sources_phase(
                     ),
                 )
             except PartialDownloadError as error:
-                failed_count += 1
+                if args.download_only:
+                    partial_count += 1
+                else:
+                    failed_count += 1
+                _record_partial_phase_observation(
+                    observation,
+                    args,
+                    source_slug,
+                    error,
+                )
                 output.warning(
                     f"{source_slug} | {type(error.original_error).__name__}: "
                     f"{error.original_error}"
@@ -804,9 +932,21 @@ def _run_sequential_sources_phase(
                 )
             except Exception as error:
                 failed_count += 1
+                _record_failed_phase_observation(
+                    observation,
+                    args,
+                    source_slug,
+                    error,
+                )
                 output.warning(f"{source_slug} | {type(error).__name__}: {error}")
             else:
                 completed_count += 1
+                _record_completed_phase_observation(
+                    observation,
+                    args,
+                    source_slug,
+                    source_files,
+                )
                 if source_files is not None:
                     downloaded_files[source_slug] = source_files
             finally:
@@ -814,7 +954,71 @@ def _run_sequential_sources_phase(
 
         progress_task.finish()
 
-    return completed_count, failed_count, skipped_count, downloaded_files
+    return (
+        completed_count,
+        partial_count,
+        failed_count,
+        skipped_count,
+        downloaded_files,
+    )
+
+
+def _record_completed_phase_observation(
+    observation: _BatchRunObserver | None,
+    args,
+    source_slug: str,
+    source_files: list[Path] | None,
+) -> None:
+    if observation is None:
+        return
+
+    if args.download_only:
+        observation.record_download_status(
+            source_slug,
+            "completed",
+            source_files or [],
+        )
+    elif args.process_raw:
+        observation.record_persistence(source_slug, "completed")
+
+
+def _record_partial_phase_observation(
+    observation: _BatchRunObserver | None,
+    args,
+    source_slug: str,
+    error: PartialDownloadError,
+) -> None:
+    if observation is None:
+        return
+
+    if args.download_only:
+        observation.record_download_status(
+            source_slug,
+            "partial",
+            error.saved_files,
+            error.original_error,
+        )
+    elif args.process_raw:
+        observation.record_persistence(source_slug, "failed")
+
+
+def _record_failed_phase_observation(
+    observation: _BatchRunObserver | None,
+    args,
+    source_slug: str,
+    error: Exception,
+) -> None:
+    if observation is None:
+        return
+
+    if args.download_only:
+        observation.record_download_status(
+            source_slug,
+            "failed",
+            error=error,
+        )
+    elif args.process_raw:
+        observation.record_persistence(source_slug, "failed")
 
 
 def _run_parallel_download_phase(
@@ -822,8 +1026,10 @@ def _run_parallel_download_phase(
     config: AppConfig,
     output: TerminalOutput,
     phase_name: str,
-) -> tuple[int, int, int, dict[str, list[Path]]]:
+    observation: _BatchRunObserver | None,
+) -> tuple[int, int, int, int, dict[str, list[Path]]]:
     completed_count = 0
+    partial_count = 0
     failed_count = 0
     downloaded_files: dict[str, list[Path]] = {}
     effective_workers = min(args.workers, len(config.sources))
@@ -857,12 +1063,14 @@ def _run_parallel_download_phase(
                     progress_task.update(current=source_slug)
                     result = _resolve_source_future(future, source_slug)
                     _replay_buffered_events(output, result.events)
+                    if observation is not None:
+                        observation.record_download(result)
 
                     if result.status == "completed":
                         completed_count += 1
                         downloaded_files[result.source_slug] = list(result.files)
                     elif result.status == "partial":
-                        failed_count += 1
+                        partial_count += 1
                         downloaded_files[result.source_slug] = list(result.files)
                     else:
                         failed_count += 1
@@ -880,7 +1088,7 @@ def _run_parallel_download_phase(
 
         progress_task.finish()
 
-    return completed_count, failed_count, 0, downloaded_files
+    return completed_count, partial_count, failed_count, 0, downloaded_files
 
 
 def _run_source_download_worker(

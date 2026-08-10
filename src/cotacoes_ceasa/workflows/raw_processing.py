@@ -1,7 +1,6 @@
 import re
 from dataclasses import dataclass, replace
 from datetime import date, datetime
-from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
 from urllib.parse import urlencode
@@ -15,6 +14,7 @@ from cotacoes_ceasa.parsers.pdf import (
     get_pdf_text_cache_stats,
     reset_pdf_text_cache_stats,
 )
+from cotacoes_ceasa.storage.raw_html import build_raw_hash
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 
 
@@ -298,12 +298,6 @@ def parse_raw_document_metadata(file_path: Path) -> RawFileMetadata:
     target_date = datetime.strptime(date_match.group("target_date"), "%Y-%m-%d").date()
 
     return RawFileMetadata(category_slug, target_date, downloaded_at)
-
-
-def build_raw_hash(content: bytes | str) -> str:
-    raw_bytes = content if isinstance(content, bytes) else content.encode("utf-8")
-
-    return sha256(raw_bytes).hexdigest()
 
 
 def build_category_url(
