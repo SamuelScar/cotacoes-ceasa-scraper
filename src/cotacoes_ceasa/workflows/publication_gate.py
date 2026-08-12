@@ -171,6 +171,20 @@ def evaluate_publication_gate(
     )
 
 
+def evaluate_checkpoint_gate(
+    database_path: Path,
+    health_report_path: Path,
+    evaluated_at: datetime | None = None,
+) -> PublicationGateResult:
+    """Valida somente a integridade e a ausência de regressões do checkpoint."""
+    return evaluate_publication_gate(
+        database_path=database_path,
+        health_report_path=health_report_path,
+        source_configs={},
+        evaluated_at=evaluated_at,
+    )
+
+
 def write_publication_gate_result(
     result: PublicationGateResult,
     destination: Path,
@@ -557,18 +571,19 @@ def _source_reasons(
     persistence_status = _optional_str(source.get("persistence_status"))
     latest_quote_date = _optional_str(source.get("latest_quote_date"))
     freshness_status = _optional_str(source.get("freshness_status"))
+    download_completed = download_status == "completed"
 
-    if download_status != "completed":
+    if not download_completed:
         source_reasons.append(
             PublicationGateReason(
                 "required_download_failed" if blocking else "optional_download_failed",
                 f"{source_slug} terminou o download como {download_status}.",
-                blocking,
+                False,
                 source_slug,
             )
         )
 
-    if persistence_status != "completed":
+    if persistence_status != "completed" and download_completed:
         source_reasons.append(
             PublicationGateReason(
                 (

@@ -114,6 +114,7 @@ def _validate_collection_operation(args: Namespace) -> None:
             args.list_categories,
             args.reset_backfill_state,
             args.validate_publication,
+            args.validate_checkpoint,
         )
     )
 

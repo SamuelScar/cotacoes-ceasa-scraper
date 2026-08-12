@@ -6,6 +6,7 @@ from pathlib import Path
 
 from cotacoes_ceasa.config import SourceConfig
 from cotacoes_ceasa.workflows.publication_gate import (
+    evaluate_checkpoint_gate,
     evaluate_publication_gate,
     write_publication_gate_result,
 )
@@ -34,11 +35,11 @@ class PublicationGateTest(unittest.TestCase):
 
         self.assertEqual("approved", result.status)
         self.assertEqual(0, result.blocking_reasons)
-        self.assertEqual(2, result.warnings)
+        self.assertEqual(1, result.warnings)
         self.assertEqual(("ok",), result.quick_check)
         self.assertEqual(0, result.foreign_key_violations)
 
-    def test_rejects_required_source_failure(self) -> None:
+    def test_warns_required_source_download_failure(self) -> None:
         payload = self._health_payload()
         payload["sources"][0]["download_status"] = "failed"
         payload["sources"][0]["persistence_status"] = "skipped"
@@ -46,9 +47,59 @@ class PublicationGateTest(unittest.TestCase):
 
         result = self._evaluate()
 
-        self.assertEqual("rejected", result.status)
+        self.assertEqual("approved", result.status)
+        self.assertEqual(0, result.blocking_reasons)
+        self.assertEqual(1, result.warnings)
         self.assertIn("required_download_failed", self._reason_codes(result))
+        self.assertNotIn("required_persistence_failed", self._reason_codes(result))
+
+    def test_rejects_required_persistence_failure_after_download(self) -> None:
+        payload = self._health_payload()
+        payload["sources"][0]["persistence_status"] = "failed"
+        self._write_health(payload)
+
+        result = self._evaluate()
+
+        self.assertEqual("rejected", result.status)
         self.assertIn("required_persistence_failed", self._reason_codes(result))
+
+    def test_warns_partial_download_with_completed_persistence(self) -> None:
+        payload = self._health_payload()
+        payload["sources"][0]["download_status"] = "partial"
+        self._write_health(payload)
+
+        result = self._evaluate()
+
+        self.assertEqual("approved", result.status)
+        self.assertEqual(1, result.warnings)
+        self.assertIn("required_download_failed", self._reason_codes(result))
+
+    def test_checkpoint_ignores_source_failure(self) -> None:
+        payload = self._health_payload()
+        payload["sources"][0]["download_status"] = "failed"
+        payload["sources"][0]["persistence_status"] = "skipped"
+        self._write_health(payload)
+
+        result = evaluate_checkpoint_gate(
+            database_path=self.database_path,
+            health_report_path=self.health_report_path,
+        )
+
+        self.assertEqual("approved", result.status)
+        self.assertEqual(0, result.blocking_reasons)
+
+    def test_checkpoint_rejects_structural_regression(self) -> None:
+        payload = self._health_payload()
+        payload["baseline"]["previous_total_quotes"] = 3
+        self._write_health(payload)
+
+        result = evaluate_checkpoint_gate(
+            database_path=self.database_path,
+            health_report_path=self.health_report_path,
+        )
+
+        self.assertEqual("rejected", result.status)
+        self.assertIn("database_total_regression", self._reason_codes(result))
 
     def test_rejects_total_count_regression(self) -> None:
         payload = self._health_payload()

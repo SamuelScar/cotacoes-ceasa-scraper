@@ -100,12 +100,21 @@ def build_parser(config: AppConfig) -> argparse.ArgumentParser:
             "estado persistido."
         ),
     )
-    parser.add_argument(
+    gate_validation = parser.add_mutually_exclusive_group()
+    gate_validation.add_argument(
         "--validate-publication",
         action="store_true",
         help=(
             "Valida estrutura, regressao e politicas por fonte antes de "
             "publicar o SQLite."
+        ),
+    )
+    gate_validation.add_argument(
+        "--validate-checkpoint",
+        action="store_true",
+        help=(
+            "Valida estrutura e regressao antes de salvar o checkpoint "
+            "interno."
         ),
     )
     parser.add_argument(

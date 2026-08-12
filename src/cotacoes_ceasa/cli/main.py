@@ -42,6 +42,7 @@ from cotacoes_ceasa.workflows.health import (
     write_health_assessment,
 )
 from cotacoes_ceasa.workflows.publication_gate import (
+    evaluate_checkpoint_gate,
     evaluate_publication_gate,
     write_publication_gate_result,
 )
@@ -105,7 +106,7 @@ def run(output: TerminalOutput) -> None:
         run_backfill_state_reset(args, output)
         return
 
-    if args.validate_publication:
+    if args.validate_publication or args.validate_checkpoint:
         run_publication_gate_command(args, config, output)
         return
 
@@ -217,6 +218,7 @@ def run_backfill_state_reset(args, output: TerminalOutput) -> None:
             args.list_categories,
             args.base_url,
             args.validate_publication,
+            args.validate_checkpoint,
         )
     )
     if invalid_operation:
@@ -248,6 +250,17 @@ def run_publication_gate_command(
     config: AppConfig,
     output: TerminalOutput,
 ) -> None:
+    checkpoint_validation = args.validate_checkpoint
+    validation_option = (
+        "--validate-checkpoint"
+        if checkpoint_validation
+        else "--validate-publication"
+    )
+    validation_name = (
+        "checkpoint interno"
+        if checkpoint_validation
+        else "gate de publicacao"
+    )
     invalid_operation = any(
         (
             args.source,
@@ -266,24 +279,30 @@ def run_publication_gate_command(
     )
     if invalid_operation:
         raise ValueError(
-            "--validate-publication nao pode ser combinado com outra operacao."
+            f"{validation_option} nao pode ser combinado com outra operacao."
         )
 
     health_report_path = Path(args.health_report_path)
     gate_report_path = Path(args.publication_gate_report_path)
     output.header(
-        "Validar gate de publicacao",
+        f"Validar {validation_name}",
         (
             ("Banco", args.database_path),
             ("Saude da rodada", health_report_path),
             ("Resultado estruturado", gate_report_path),
         ),
     )
-    result = evaluate_publication_gate(
-        database_path=Path(args.database_path),
-        health_report_path=health_report_path,
-        source_configs=config.sources,
-    )
+    if checkpoint_validation:
+        result = evaluate_checkpoint_gate(
+            database_path=Path(args.database_path),
+            health_report_path=health_report_path,
+        )
+    else:
+        result = evaluate_publication_gate(
+            database_path=Path(args.database_path),
+            health_report_path=health_report_path,
+            source_configs=config.sources,
+        )
     write_publication_gate_result(result, gate_report_path)
 
     for reason in result.reasons:
@@ -303,7 +322,7 @@ def run_publication_gate_command(
             ("Cotacoes", result.total_quotes),
             ("JSON do gate", gate_report_path),
         ),
-        report_title="Gate de publicacao",
+        report_title=validation_name.capitalize(),
     )
 
     if result.status == "rejected":
@@ -565,10 +584,15 @@ def build_report_configuration(
         )
         return tuple(rows)
 
-    if args.validate_publication:
+    if args.validate_publication or args.validate_checkpoint:
+        validation_scope = (
+            "checkpoint interno"
+            if args.validate_checkpoint
+            else "gate de publicacao"
+        )
         rows.extend(
             [
-                ("Escopo solicitado", "gate de publicacao"),
+                ("Escopo solicitado", validation_scope),
                 ("COTACOES_DATABASE_PATH", args.database_path),
                 ("Relatorio de saude", args.health_report_path),
                 ("Resultado do gate", args.publication_gate_report_path),
@@ -792,6 +816,9 @@ def resolve_report_flow(args) -> str:
     if args.validate_publication:
         return "Validar gate de publicacao"
 
+    if args.validate_checkpoint:
+        return "Validar checkpoint interno"
+
     if args.archive_raw_old:
         return "Compactar arquivos antigos"
 
@@ -828,6 +855,9 @@ def resolve_report_name(args) -> str:
 
     if args.validate_publication:
         return "gate_publicacao"
+
+    if args.validate_checkpoint:
+        return "gate_checkpoint"
 
     if args.archive_raw_old:
         return "compactacao"

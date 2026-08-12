@@ -4,15 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       bypass_publication_gate:
-        description: Publicar mesmo se o gate de saude reprovar
+        description: Publicar a Release mesmo se o gate por fonte reprovar
         required: false
         default: false
         type: boolean
   schedule:
-    - cron: "0 3 * * *"
-    - cron: "0 9 * * *"
-    - cron: "0 15 * * *"
-    - cron: "0 21 * * *"
+    - cron: "17 3 * * *"
+    - cron: "17 9 * * *"
+    - cron: "17 15 * * *"
+    - cron: "17 21 * * *"
 
 permissions:
   contents: write
@@ -262,9 +262,18 @@ jobs:
           echo "Relatorios recentes:"
           find data/relatorios -maxdepth 1 -type f -printf "%TY-%Tm-%Td %TH:%TM %p\n" 2>/dev/null | sort | tail -n 10 || true
 
+      - name: Validar checkpoint interno
+        id: gate_checkpoint
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+          docker compose run --rm app \
+            --validate-checkpoint \
+            --publication-gate-report-path data/relatorios/gate_checkpoint_ultima.json
+
       - name: Validar gate de publicacao
         id: gate_publicacao
-        if: steps.janela.outputs.should_run == 'true'
+        if: steps.janela.outputs.should_run == 'true' && steps.gate_checkpoint.outcome == 'success'
         env:
           BYPASS_PUBLICATION_GATE: ${{ github.event_name == 'workflow_dispatch' && inputs.bypass_publication_gate && 'true' || 'false' }}
         run: |
@@ -272,20 +281,31 @@ jobs:
 
           if docker compose run --rm app --validate-publication; then
             echo "Gate de publicacao aprovado."
+            echo "approved=true" >> "$GITHUB_OUTPUT"
+            echo "decision=approved" >> "$GITHUB_OUTPUT"
             echo "bypassed=false" >> "$GITHUB_OUTPUT"
             exit 0
           else
             gate_exit_code=$?
           fi
 
+          if [ "$gate_exit_code" -ne 2 ]; then
+            echo "O gate de publicacao falhou inesperadamente com codigo ${gate_exit_code}."
+            exit "$gate_exit_code"
+          fi
+
           if [ "$BYPASS_PUBLICATION_GATE" = "true" ]; then
             echo "::warning::Gate reprovado com codigo ${gate_exit_code}, mas a excecao manual foi confirmada no workflow_dispatch."
+            echo "approved=true" >> "$GITHUB_OUTPUT"
+            echo "decision=bypassed" >> "$GITHUB_OUTPUT"
             echo "bypassed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "Gate de publicacao reprovado com codigo ${gate_exit_code}. Os artefatos publicos anteriores serao preservados."
-          exit "$gate_exit_code"
+          echo "::warning::Gate de publicacao reprovado. A Release anterior sera preservada e o checkpoint interno podera ser salvo."
+          echo "approved=false" >> "$GITHUB_OUTPUT"
+          echo "decision=rejected" >> "$GITHUB_OUTPUT"
+          echo "bypassed=false" >> "$GITHUB_OUTPUT"
 
       - name: Registrar ambiente no relatorio
         if: always() && steps.janela.outputs.should_run == 'true'
@@ -367,7 +387,8 @@ jobs:
             echo "| Release tag | ${DATA_RELEASE_TAG} |"
             echo "| Banco GitHub | ${DATA_ASSET_NAME} |"
             echo "| Pacote completo OneDrive | ${DATA_ONEDRIVE_ASSET_NAME} |"
-            echo "| Gate de publicacao | ${{ steps.gate_publicacao.outcome }} |"
+            echo "| Gate do checkpoint | ${{ steps.gate_checkpoint.outcome }} |"
+            echo "| Gate de publicacao | ${{ steps.gate_publicacao.outputs.decision || 'nao executado' }} |"
             echo "| Excecao manual do gate | ${{ steps.gate_publicacao.outputs.bypassed || 'false' }} |"
             echo
             echo "## Ambiente do runner"
@@ -396,7 +417,7 @@ jobs:
 
       - name: Compactar pacote completo para OneDrive
         id: pacote_onedrive
-        if: steps.janela.outputs.should_run == 'true' && steps.gate_publicacao.outcome == 'success' && steps.onedrive_config.outputs.enabled == 'true'
+        if: ${{ !cancelled() && steps.janela.outputs.should_run == 'true' && steps.gate_checkpoint.outcome == 'success' && steps.onedrive_config.outputs.enabled == 'true' }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -422,7 +443,7 @@ jobs:
 
       - name: Salvar backup do pacote no OneDrive
         id: backup_onedrive
-        if: steps.janela.outputs.should_run == 'true' && steps.gate_publicacao.outcome == 'success' && steps.onedrive_config.outputs.enabled == 'true' && steps.pacote_onedrive.outcome == 'success'
+        if: ${{ !cancelled() && steps.janela.outputs.should_run == 'true' && steps.gate_checkpoint.outcome == 'success' && steps.onedrive_config.outputs.enabled == 'true' && steps.pacote_onedrive.outcome == 'success' }}
         continue-on-error: true
         uses: ./.github/actions/backup-release-data
         with:
@@ -434,7 +455,7 @@ jobs:
 
       - name: Compactar banco para GitHub
         id: banco_github
-        if: steps.janela.outputs.should_run == 'true' && steps.gate_publicacao.outcome == 'success'
+        if: steps.janela.outputs.should_run == 'true' && steps.gate_publicacao.outputs.approved == 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -460,7 +481,7 @@ jobs:
 
       - name: Publicar banco na release fixa
         id: publicar_github
-        if: steps.janela.outputs.should_run == 'true' && steps.gate_publicacao.outcome == 'success' && steps.banco_github.outcome == 'success'
+        if: steps.janela.outputs.should_run == 'true' && steps.gate_publicacao.outputs.approved == 'true' && steps.banco_github.outcome == 'success'
         continue-on-error: true
         uses: ./.github/actions/publish-release-data
         env:
@@ -471,11 +492,12 @@ jobs:
 
       - name: Validar salvamento da rodada
         id: validar_salvamento
-        if: steps.janela.outputs.should_run == 'true' && steps.gate_publicacao.outcome == 'success'
+        if: ${{ !cancelled() && steps.janela.outputs.should_run == 'true' && steps.gate_checkpoint.outcome == 'success' }}
         run: |
           set -euo pipefail
 
           scraper_outcome="${{ steps.executar_scraper.outcome }}"
+          publication_approved="${{ steps.gate_publicacao.outputs.approved || 'false' }}"
           onedrive_outcome="${{ steps.backup_onedrive.outcome }}"
           github_outcome="${{ steps.publicar_github.outcome }}"
           saved=false
@@ -500,7 +522,11 @@ jobs:
             exit 1
           fi
 
-          echo "Rodada processada e salva."
+          if [ "$publication_approved" = "true" ]; then
+            echo "Rodada processada, salva e liberada para publicacao."
+          else
+            echo "Checkpoint interno salvo. A Release anterior foi preservada pelo gate de publicacao."
+          fi
 
       - name: Registrar salvamento no relatorio
         if: always() && steps.janela.outputs.should_run == 'true'
@@ -574,7 +600,8 @@ jobs:
             echo "| Restaurar pacote atual | ${{ steps.restaurar_data.outcome }} |"
             echo "| Executar scraper | ${{ steps.executar_scraper.outcome }} |"
             echo "| Conferir data/ | ${{ steps.conferir_data.outcome }} |"
-            echo "| Gate de publicacao | ${{ steps.gate_publicacao.outcome }} |"
+            echo "| Gate do checkpoint | ${{ steps.gate_checkpoint.outcome }} |"
+            echo "| Gate de publicacao | ${{ steps.gate_publicacao.outputs.decision || 'nao executado' }} |"
             echo "| Excecao manual do gate | ${{ steps.gate_publicacao.outputs.bypassed || 'false' }} |"
             echo "| Compactar pacote completo OneDrive | ${{ steps.pacote_onedrive.outcome }} |"
             echo "| Salvar backup OneDrive | ${{ steps.backup_onedrive.outcome }} |"

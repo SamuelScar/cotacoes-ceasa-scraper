@@ -83,6 +83,7 @@ class CollectionModeTest(unittest.TestCase):
             list_categories=False,
             reset_backfill_state=False,
             validate_publication=False,
+            validate_checkpoint=False,
             database_path="data/test-cotacoes.sqlite",
         )
 
