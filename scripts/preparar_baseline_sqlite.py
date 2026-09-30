@@ -84,11 +84,46 @@ def print_summary(result: DuplicateAnalysis | CandidateBaselineResult) -> None:
     print(f"Observacoes: {analysis.observations}")
     print(f"Conteudos logicos: {analysis.logical_contents}")
     print(f"Repeticoes: {analysis.repeated_observations}")
+    print(f"Grupos duplicados: {analysis.duplicate_groups}")
+    print(f"Ocorrencias duplicadas: {analysis.duplicate_occurrences}")
     print(f"Cobertura fonte/data: {analysis.source_date_coverage_hash}")
 
     if isinstance(result, CandidateBaselineResult):
+        print(f"SQLite de origem preservado: {result.source_database_path}")
         print(f"Baseline candidata: {result.candidate_database_path}")
+        print(
+            "Origem inalterada: "
+            f"{'sim' if result.source_unchanged else 'nao'}"
+        )
+        print(
+            "Migracao da baseline: "
+            f"{'registrada' if result.migration_applied else 'ausente'}"
+        )
+        print(f"Checkpoint: {result.migration_checkpoint}")
         print(f"Observacoes removidas: {result.removed_observations}")
+        print(f"Observacoes resultantes: {result.after.observations}")
+        print(
+            "Proveniencias antes/depois: "
+            f"{result.provenance_rows_before}/"
+            f"{result.provenance_rows_after}"
+        )
+        print(
+            "Origens historicas distintas preservadas: "
+            f"{result.provenance_after.distinct_origin_references}"
+        )
+        print(
+            "Alvos canonicos: "
+            f"{result.provenance_after.canonical_targets}"
+        )
+        print(
+            "Hash da proveniencia: "
+            f"{result.provenance_after.content_sha256}"
+        )
+        print(f"Quick check: {', '.join(result.quick_check)}")
+        print(
+            "Violacoes de chave estrangeira: "
+            f"{result.foreign_key_violations}"
+        )
         print(f"Status: {'valida' if result.valid else 'invalida'}")
 
 

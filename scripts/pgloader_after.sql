@@ -68,6 +68,12 @@ SELECT 'cotacoes', COALESCE(MAX(id), 0), NOW() FROM cotacoes
 ON CONFLICT (table_name) DO UPDATE
 SET last_id = EXCLUDED.last_id, updated_at = EXCLUDED.updated_at;
 
+INSERT INTO cotacoes_sync_watermarks (table_name, last_id, updated_at)
+SELECT 'cotacao_proveniencias', COALESCE(MAX(id), 0), NOW()
+FROM cotacao_proveniencias
+ON CONFLICT (table_name) DO UPDATE
+SET last_id = EXCLUDED.last_id, updated_at = EXCLUDED.updated_at;
+
 INSERT INTO cotacoes_sync_runs (
     id,
     mode,

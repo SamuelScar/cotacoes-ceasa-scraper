@@ -1,0 +1,243 @@
+name: Auditar pacote de dados
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "47 6 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: latest-data-release
+  cancel-in-progress: false
+
+jobs:
+  auditar-dados:
+    name: Validar banco, raws e proveniencia
+    runs-on: ubuntu-latest
+    environment: Crawler
+    timeout-minutes: 180
+    env:
+      DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'latest-data' }}
+      DATA_ASSET_NAME: ${{ vars.DATA_ASSET_NAME || 'cotacoes.sqlite.xz' }}
+      DATA_ONEDRIVE_ASSET_NAME: ${{ vars.DATA_ONEDRIVE_ASSET_NAME || 'ceasa-data-full-latest.tar.xz' }}
+      DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
+      DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
+
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Criar configuracao do auditor
+        uses: ./.github/actions/prepare-scraper
+        with:
+          target-date: ""
+          quotes-back: "100"
+          incremental-history: "false"
+          workers: "1"
+          request-delay-seconds: "7.0"
+          complement-prohort: "false"
+
+      - name: Build da imagem Docker
+        run: docker compose build
+
+      - name: Restaurar pacote completo atual
+        id: restaurar_data
+        uses: ./.github/actions/restore-release-data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          release-tag: ${{ env.DATA_RELEASE_TAG }}
+          asset-name: ${{ env.DATA_ASSET_NAME }}
+          backup-asset-name: ${{ env.DATA_ONEDRIVE_ASSET_NAME }}
+          backup-enabled: "true"
+          rclone-config: ${{ secrets.RCLONE_CONFIG }}
+          rclone-remote: ${{ env.DATA_ONEDRIVE_REMOTE }}
+          backup-dir: ${{ env.DATA_ONEDRIVE_DIR }}
+
+      - name: Exigir restauracao completa do OneDrive
+        id: validar_origem
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.restaurar_data.outputs.restored_source }}" != "onedrive" ]; then
+            echo "::error::A auditoria integral exige o pacote completo do OneDrive com banco, raws e cache."
+            echo "Origem restaurada: ${{ steps.restaurar_data.outputs.restored_source }}"
+            exit 1
+          fi
+
+      - name: Preparar diretorio e contexto da auditoria
+        id: contexto
+        run: |
+          set -euo pipefail
+
+          timestamp="$(TZ=America/Sao_Paulo date +%Y%m%d_%H%M%S)"
+          audit_output="data/logs/auditoria/${timestamp}_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          mkdir -p data/logs/auditoria
+          sudo chown -R "$(id -u):$(id -g)" data/logs
+          echo "audit_output=${audit_output}" >> "$GITHUB_OUTPUT"
+
+          single_line() {
+            "$@" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//'
+          }
+
+          read_meminfo_kb() {
+            local field="$1"
+            awk -v field="$field" '$1 == field ":" { print $2 }' /proc/meminfo 2>/dev/null || true
+          }
+
+          format_kb() {
+            local value="$1"
+            if [ -z "$value" ]; then
+              echo "nao identificado"
+              return
+            fi
+            awk -v kb="$value" 'BEGIN { printf "%.1f GiB", kb / 1024 / 1024 }'
+          }
+
+          write_env() {
+            local name="$1"
+            local value="$2"
+            {
+              echo "${name}<<AUDIT_CONTEXT_EOF"
+              echo "$value"
+              echo "AUDIT_CONTEXT_EOF"
+            } >> "$GITHUB_ENV"
+          }
+
+          cpu_model="$(awk -F': ' '/model name/ { print $2; exit }' /proc/cpuinfo 2>/dev/null || true)"
+          cpu_model="${cpu_model:-nao identificado}"
+          cpu_count="$(nproc 2>/dev/null || true)"
+          cpu_count="${cpu_count:-nao identificado}"
+          mem_total="$(format_kb "$(read_meminfo_kb MemTotal)")"
+          mem_available="$(format_kb "$(read_meminfo_kb MemAvailable)")"
+          workspace_usage="$(du -sh "$GITHUB_WORKSPACE" 2>/dev/null | cut -f 1 || true)"
+          workspace_usage="${workspace_usage:-nao identificado}"
+          workspace_disk="$(df -h "$GITHUB_WORKSPACE" 2>/dev/null | awk 'NR == 2 { print $2 " total, " $4 " livre, " $5 " usado" }' || true)"
+          workspace_disk="${workspace_disk:-nao identificado}"
+
+          write_env COTACOES_AUDIT_RELEASE_TAG "$DATA_RELEASE_TAG"
+          write_env COTACOES_AUDIT_PACKAGE_NAME "$DATA_ONEDRIVE_ASSET_NAME"
+          write_env COTACOES_AUDIT_RESTORED_SOURCE "${{ steps.restaurar_data.outputs.restored_source }}"
+          write_env COTACOES_AUDIT_RESTORED_ASSET "${{ steps.restaurar_data.outputs.restored_asset }}"
+          write_env COTACOES_AUDIT_RESTORE_DURATION_SECONDS "${{ steps.restaurar_data.outputs.duration_seconds }}"
+          write_env COTACOES_AUDIT_RESTORED_DATA_SIZE "${{ steps.restaurar_data.outputs.data_size }}"
+          write_env COTACOES_AUDIT_HOSTNAME "$(hostname 2>/dev/null || echo nao identificado)"
+          write_env COTACOES_AUDIT_KERNEL "$(uname -a 2>/dev/null || echo nao identificado)"
+          write_env COTACOES_AUDIT_OS_RELEASE "$(single_line bash -c 'cat /etc/os-release')"
+          write_env COTACOES_AUDIT_CPU "$cpu_model"
+          write_env COTACOES_AUDIT_CPU_COUNT "$cpu_count"
+          write_env COTACOES_AUDIT_MEMORY_TOTAL "$mem_total"
+          write_env COTACOES_AUDIT_MEMORY_AVAILABLE "$mem_available"
+          write_env COTACOES_AUDIT_WORKSPACE_USAGE "$workspace_usage"
+          write_env COTACOES_AUDIT_WORKSPACE_DISK "$workspace_disk"
+          write_env COTACOES_AUDIT_DOCKER_VERSION "$(single_line docker --version)"
+          write_env COTACOES_AUDIT_COMPOSE_VERSION "$(single_line docker compose version)"
+
+      - name: Executar auditoria integral
+        id: executar_auditoria
+        continue-on-error: true
+        run: |
+          set -o pipefail
+
+          audit_output="${{ steps.contexto.outputs.audit_output }}"
+          console_log="${RUNNER_TEMP}/auditoria-console.log"
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_EVENT_NAME \
+            -e GITHUB_REF \
+            -e GITHUB_SHA \
+            -e GITHUB_WORKSPACE \
+            -e RUNNER_OS \
+            -e RUNNER_ARCH \
+            -e RUNNER_NAME \
+            -e RUNNER_TEMP \
+            -e COTACOES_AUDIT_RELEASE_TAG \
+            -e COTACOES_AUDIT_PACKAGE_NAME \
+            -e COTACOES_AUDIT_RESTORED_SOURCE \
+            -e COTACOES_AUDIT_RESTORED_ASSET \
+            -e COTACOES_AUDIT_RESTORE_DURATION_SECONDS \
+            -e COTACOES_AUDIT_RESTORED_DATA_SIZE \
+            -e COTACOES_AUDIT_HOSTNAME \
+            -e COTACOES_AUDIT_KERNEL \
+            -e COTACOES_AUDIT_OS_RELEASE \
+            -e COTACOES_AUDIT_CPU \
+            -e COTACOES_AUDIT_CPU_COUNT \
+            -e COTACOES_AUDIT_MEMORY_TOTAL \
+            -e COTACOES_AUDIT_MEMORY_AVAILABLE \
+            -e COTACOES_AUDIT_WORKSPACE_USAGE \
+            -e COTACOES_AUDIT_WORKSPACE_DISK \
+            -e COTACOES_AUDIT_DOCKER_VERSION \
+            -e COTACOES_AUDIT_COMPOSE_VERSION \
+            --entrypoint python \
+            app auditar_banco.py \
+            --database data/cotacoes.sqlite \
+            --output "$audit_output" \
+            --verify-raw \
+            --full-integrity-check \
+            --fail-on-error-findings \
+            2>&1 | tee "$console_log"
+          audit_status="${PIPESTATUS[0]}"
+
+          if [ ! -d "$audit_output" ]; then
+            mkdir -p "$audit_output"
+          fi
+          mv "$console_log" "$audit_output/console.log"
+          echo "audit_status=${audit_status}" >> "$GITHUB_OUTPUT"
+          exit "$audit_status"
+
+      - name: Publicar resumo da auditoria
+        if: always() && steps.contexto.outcome == 'success'
+        run: |
+          audit_output="${{ steps.contexto.outputs.audit_output }}"
+          {
+            echo "# Auditoria semanal dos dados"
+            echo
+            echo "- Resultado da etapa: \`${{ steps.executar_auditoria.outcome }}\`"
+            echo "- Logs: \`${audit_output}\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f "$audit_output/resumo.md" ]; then
+            cat "$audit_output/resumo.md" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f "$audit_output/resumo_incompleto.md" ]; then
+            cat "$audit_output/resumo_incompleto.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "A auditoria nao gerou um resumo estruturado." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Preservar logs e relatorios da auditoria
+        if: always() && steps.contexto.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: auditoria-dados-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.contexto.outputs.audit_output }}/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Consolidar resultado do workflow
+        if: always()
+        run: |
+          if [ "${{ steps.restaurar_data.outcome }}" != "success" ]; then
+            echo "::error::A restauracao dos dados falhou."
+            exit 1
+          fi
+
+          if [ "${{ steps.validar_origem.outcome }}" != "success" ]; then
+            echo "::error::O pacote completo do OneDrive nao foi restaurado."
+            exit 1
+          fi
+
+          if [ "${{ steps.executar_auditoria.outcome }}" != "success" ]; then
+            echo "::error::A auditoria terminou com falha ou achados classificados como erro."
+            exit 1
+          fi
+
+          echo "Auditoria concluida sem achados classificados como erro."

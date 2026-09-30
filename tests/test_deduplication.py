@@ -14,6 +14,7 @@ from cotacoes_ceasa.workflows.deduplication import (
     create_candidate_baseline,
     write_duplicate_report,
 )
+from cotacoes_ceasa.workflows.provenance import create_provenance_candidate
 
 
 class CandidateBaselineTest(unittest.TestCase):
@@ -25,6 +26,15 @@ class CandidateBaselineTest(unittest.TestCase):
         self.candidate_path = temporary_path / "candidata.sqlite"
         self.storage = SQLiteStorage(self.database_path)
         self._create_legacy_duplicate()
+        provenance_path = temporary_path / "com-proveniencia.sqlite"
+        create_provenance_candidate(
+            self.database_path,
+            provenance_path,
+            expected_duplicate_groups=1,
+            expected_duplicate_occurrences=2,
+            expected_duplicate_excess=1,
+        )
+        self.database_path = provenance_path
 
     def test_analyzes_exact_repetitions(self) -> None:
         analysis = analyze_duplicate_content(self.database_path)
@@ -60,8 +70,13 @@ class CandidateBaselineTest(unittest.TestCase):
                 """
             ).fetchone()[0]
             schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
+            provenance_count = connection.execute(
+                "SELECT COUNT(*) FROM cotacao_proveniencias"
+            ).fetchone()[0]
 
         self.assertEqual("primeiro.html", raw_file)
+        self.assertEqual(result.provenance_rows_before, provenance_count)
+        self.assertEqual(result.provenance_rows_after, provenance_count)
         self.assertEqual(SQLITE_SCHEMA_VERSION, schema_version)
 
     def test_writes_structured_candidate_report(self) -> None:
@@ -74,7 +89,7 @@ class CandidateBaselineTest(unittest.TestCase):
         write_duplicate_report(result, report_path)
 
         payload = json.loads(report_path.read_text(encoding="utf-8"))
-        self.assertEqual(1, payload["schema_version"])
+        self.assertEqual(3, payload["schema_version"])
         self.assertEqual("valid", payload["status"])
         self.assertEqual(1, payload["removed_observations"])
         self.assertTrue(payload["requires_full_supabase_replace"])
@@ -144,6 +159,9 @@ class CandidateBaselineTest(unittest.TestCase):
                 """,
                 (second_collection_id,),
             )
+            connection.execute("DROP TABLE cotacao_proveniencias")
+            connection.execute("DROP TABLE schema_migrations")
+            connection.execute("PRAGMA user_version = 2")
 
     def _save(self, quotes: list[Cotacao]) -> int:
         return self.storage.save_cotacoes(

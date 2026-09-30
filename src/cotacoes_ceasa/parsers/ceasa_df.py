@@ -1,4 +1,5 @@
 import re
+from dataclasses import replace
 from datetime import date
 from urllib.parse import urljoin
 
@@ -28,6 +29,12 @@ INLINE_UNIT_PATTERN = re.compile(
 )
 CATEGORY_KEYS = {"hortalicas", "frutas", "ovos"}
 DEFAULT_COLUMN_BREAK = 118
+APPLE_PRODUCT_KEY = "maca"
+APPLE_CONTINUATION_PATTERN = re.compile(
+    r"^(?:(?P<variety>.+?)\s+)?"
+    r"(?P<classification>CAT\s*-?\s*1\b.*|COMERCIAL\s*-\s*SOLTA\b.*)$",
+    re.IGNORECASE,
+)
 
 
 class CeasaDfParser:
@@ -89,6 +96,7 @@ class CeasaDfParser:
         current_product: str | None = None
         current_unit: str | None = None
         current_procedencia: str | None = None
+        current_variety: str | None = None
         cotacoes: list[Cotacao] = []
 
         for line in lines:
@@ -96,12 +104,14 @@ class CeasaDfParser:
 
             if category is not None:
                 current_category = category
+                current_variety = None
                 continue
 
             if self._is_product_header(line):
                 current_product = self._extract_product(line)
                 current_unit = self._extract_unit(line)
                 current_procedencia = self._extract_procedencia(line)
+                current_variety = None
 
             cotacao = self._parse_price_line(
                 line=line,
@@ -114,6 +124,12 @@ class CeasaDfParser:
             )
 
             if cotacao is not None:
+                classification, current_variety = self._resolve_variety_context(
+                    product=current_product,
+                    classification=cotacao.classificacao,
+                    current_variety=current_variety,
+                )
+                cotacao = replace(cotacao, classificacao=classification)
                 cotacoes.append(cotacao)
 
         return cotacoes
@@ -228,3 +244,25 @@ class CeasaDfParser:
         match = PROCEDENCE_PATTERN.search(_strip_accents(line).upper())
 
         return clean_text(match.group(1).strip(" .-")) if match is not None else None
+
+    def _resolve_variety_context(
+        self,
+        product: str | None,
+        classification: str | None,
+        current_variety: str | None,
+    ) -> tuple[str | None, str | None]:
+        if _normalize_key(product) != APPLE_PRODUCT_KEY or classification is None:
+            return classification, None
+
+        match = APPLE_CONTINUATION_PATTERN.match(classification)
+        if match is None:
+            return classification, current_variety
+
+        explicit_variety = clean_text(match.group("variety"))
+        classification_without_variety = clean_text(match.group("classification"))
+        variety = explicit_variety or current_variety
+
+        if variety is None or classification_without_variety is None:
+            return classification, variety
+
+        return f"{variety} {classification_without_variety}", variety

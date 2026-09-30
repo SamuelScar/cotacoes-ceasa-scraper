@@ -7,8 +7,10 @@ import hashlib
 import importlib
 import importlib.metadata
 import json
+import os
 import platform
 import re
+import shlex
 import sqlite3
 import sys
 import tempfile
@@ -19,6 +21,137 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable, Sequence
+from zoneinfo import ZoneInfo
+
+
+HISTORICAL_PROVENANCE_MIGRATION = "issue6_proveniencia_historica_v1"
+DEDUPLICATED_BASELINE_MIGRATION = "issue6_baseline_deduplicada_v1"
+AUDIT_TIMEZONE = ZoneInfo("America/Sao_Paulo")
+AUDIT_LOG_ROOT = Path("data/logs/auditoria")
+
+
+def audit_now() -> datetime:
+    return datetime.now(AUDIT_TIMEZONE)
+
+
+def build_execution_context(
+    database_path: Path,
+    output_directory: Path,
+) -> dict[str, object]:
+    arguments = _sanitize_arguments(sys.argv[1:])
+    command = shlex.join([sys.argv[0], *arguments])
+    workflow = {
+        "repository": os.getenv("GITHUB_REPOSITORY"),
+        "run_id": os.getenv("GITHUB_RUN_ID"),
+        "run_attempt": os.getenv("GITHUB_RUN_ATTEMPT"),
+        "event": os.getenv("GITHUB_EVENT_NAME"),
+        "ref": os.getenv("GITHUB_REF"),
+        "commit": os.getenv("GITHUB_SHA"),
+        "release_tag": os.getenv("COTACOES_AUDIT_RELEASE_TAG"),
+        "full_package": os.getenv("COTACOES_AUDIT_PACKAGE_NAME"),
+        "restored_source": os.getenv("COTACOES_AUDIT_RESTORED_SOURCE"),
+        "restored_asset": os.getenv("COTACOES_AUDIT_RESTORED_ASSET"),
+        "restore_duration_seconds": os.getenv(
+            "COTACOES_AUDIT_RESTORE_DURATION_SECONDS"
+        ),
+        "restored_data_size": os.getenv("COTACOES_AUDIT_RESTORED_DATA_SIZE"),
+    }
+    runner = {
+        "os": os.getenv("RUNNER_OS"),
+        "arch": os.getenv("RUNNER_ARCH"),
+        "name": os.getenv("RUNNER_NAME"),
+        "temp": os.getenv("RUNNER_TEMP"),
+        "workspace": os.getenv("GITHUB_WORKSPACE"),
+        "hostname": os.getenv("COTACOES_AUDIT_HOSTNAME") or platform.node(),
+        "kernel": os.getenv("COTACOES_AUDIT_KERNEL") or platform.platform(),
+        "os_release": os.getenv("COTACOES_AUDIT_OS_RELEASE"),
+        "cpu": os.getenv("COTACOES_AUDIT_CPU"),
+        "cpu_count": os.getenv("COTACOES_AUDIT_CPU_COUNT") or os.cpu_count(),
+        "memory_total": os.getenv("COTACOES_AUDIT_MEMORY_TOTAL"),
+        "memory_available": os.getenv("COTACOES_AUDIT_MEMORY_AVAILABLE"),
+        "workspace_usage": os.getenv("COTACOES_AUDIT_WORKSPACE_USAGE"),
+        "workspace_disk": os.getenv("COTACOES_AUDIT_WORKSPACE_DISK"),
+        "docker": os.getenv("COTACOES_AUDIT_DOCKER_VERSION"),
+        "docker_compose": os.getenv("COTACOES_AUDIT_COMPOSE_VERSION"),
+    }
+
+    return {
+        "request": {
+            "command": command,
+            "entrypoint": sys.argv[0],
+            "arguments": shlex.join(arguments) if arguments else "(nenhum)",
+            "flow": "Auditoria integral do banco de cotacoes",
+            "configuration_source": (
+                "argumentos CLI, configuracao das fontes e ambiente do workflow"
+            ),
+            "database": database_path.as_posix(),
+            "output": output_directory.as_posix(),
+            "http_access": "nao",
+            "sqlite_read": "sim, em modo somente leitura",
+            "sqlite_write": "nao",
+        },
+        "workflow": workflow,
+        "runner": runner,
+    }
+
+
+def _sanitize_arguments(arguments: list[str]) -> list[str]:
+    sensitive_names = (
+        "password",
+        "token",
+        "secret",
+        "api-key",
+        "database-url",
+    )
+    sanitized: list[str] = []
+    mask_next = False
+
+    for argument in arguments:
+        if mask_next:
+            sanitized.append("***")
+            mask_next = False
+            continue
+
+        option, separator, _ = argument.partition("=")
+        is_sensitive = option.startswith("--") and any(
+            name in option.lower() for name in sensitive_names
+        )
+
+        if is_sensitive and separator:
+            sanitized.append(f"{option}=***")
+        else:
+            sanitized.append(argument)
+            mask_next = is_sensitive
+
+    return sanitized
+
+
+def _display_value(value: object | None) -> str:
+    if value is None or value == "":
+        return "nao identificado"
+    return str(value)
+
+
+def _markdown_cell(value: object | None) -> str:
+    return _display_value(value).replace("|", r"\|").replace("\n", "<br>")
+
+
+def _append_markdown_table(
+    lines: list[str],
+    title: str,
+    rows: Iterable[tuple[str, object | None]],
+) -> None:
+    lines.extend(
+        [
+            f"## {title}",
+            "",
+            "| Item | Valor |",
+            "| --- | --- |",
+        ]
+    )
+    for label, value in rows:
+        lines.append(f"| {_markdown_cell(label)} | `{_markdown_cell(value)}` |")
+    lines.append("")
 
 
 REQUIRED_SCHEMA = {
@@ -82,6 +215,8 @@ TABLES = (
     "apresentacoes_unidade",
     "coletas",
     "cotacoes",
+    "cotacao_proveniencias",
+    "schema_migrations",
     "backfill_states",
 )
 
@@ -174,13 +309,18 @@ class DatabaseAuditor:
         self.findings: list[Finding] = []
         self.generated_files: list[str] = []
         self.duplicate_summary: list[dict[str, object]] = []
+        self.provenance_summary: dict[str, object] = {"status": "not_checked"}
         self.environment: dict[str, object] = {}
         self.source_config: dict[str, dict[str, object]] = {}
         self.raw_reconciliation_summary: dict[str, object] = {
             "status": "not_checked"
         }
         self.current_stage = "Inicializando"
+        self.stage_history: list[dict[str, str]] = []
         self.started_at: datetime | None = None
+        self.execution_context = build_execution_context(
+            self.database_path, self.output_directory
+        )
         self.initial_database_stat: dict[str, object] = {}
         self.raw_archive_errors: dict[str, str] = {}
         self.raw_file_index_cache: dict[
@@ -193,7 +333,7 @@ class DatabaseAuditor:
     def run(self) -> dict[str, object]:
         self._validate_paths()
         self.output_directory.mkdir(parents=True)
-        self.started_at = datetime.now().astimezone()
+        self.started_at = audit_now()
         self.initial_database_stat = self._database_stat()
         incomplete_marker = self.output_directory / "_INCOMPLETA"
         write_text_atomic(
@@ -228,6 +368,8 @@ class DatabaseAuditor:
                 self._audit_keys(connection)
                 self._step("Procurando repeticoes pela regra oficial")
                 self._audit_stored_duplicates(connection)
+                self._step("Conferindo proveniencia das cotacoes")
+                self.provenance_summary = self._audit_provenance(connection)
                 self._step("Resumindo repeticoes dos arquivos brutos")
                 self._audit_repeated_raws(connection)
 
@@ -280,7 +422,7 @@ class DatabaseAuditor:
 
             self._audit_input_stability()
             self._write_json("ambiente_auditoria.json", self.environment)
-            finished_at = datetime.now().astimezone()
+            finished_at = audit_now()
             result = self._build_result(
                 started_at=self.started_at,
                 finished_at=finished_at,
@@ -303,13 +445,19 @@ class DatabaseAuditor:
             self._write_incomplete_summary(status, error)
             self._write_execution_state(
                 status,
-                finished_at=datetime.now().astimezone(),
+                finished_at=audit_now(),
                 error=error,
             )
             raise
 
     def _step(self, message: str) -> None:
         self.current_stage = message
+        self.stage_history.append(
+            {
+                "occurred_at": audit_now().isoformat(timespec="seconds"),
+                "message": message,
+            }
+        )
         print(f"[auditoria] {message}", flush=True)
         self._write_execution_state("running")
 
@@ -419,7 +567,7 @@ class DatabaseAuditor:
         strict: bool = False,
     ) -> None:
         payload: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": status,
             "started_at": (
                 self.started_at.isoformat(timespec="seconds")
@@ -432,12 +580,14 @@ class DatabaseAuditor:
                 else None
             ),
             "stage": self.current_stage,
-            "command": sys.argv,
+            "command": self.execution_context["request"]["command"],
             "database": self.database_path.as_posix(),
             "output": self.output_directory.as_posix(),
             "safe_for_cleanup": False,
             "automatic_deletion_allowed": False,
             "generated_files": sorted(set(self.generated_files)),
+            "execution_context": self.execution_context,
+            "stages": self.stage_history,
             "environment": self.environment,
             "error": (
                 {"type": type(error).__name__, "message": str(error)}
@@ -1226,6 +1376,646 @@ class DatabaseAuditor:
                     ),
                 )
             )
+
+    def _audit_provenance(
+        self,
+        connection: sqlite3.Connection,
+    ) -> dict[str, object]:
+        table_exists = bool(
+            connection.execute(
+                """
+                SELECT 1 FROM sqlite_schema
+                WHERE type = 'table' AND name = 'cotacao_proveniencias'
+                """
+            ).fetchone()
+        )
+        if not table_exists:
+            self.findings.append(
+                Finding(
+                    code="provenance_table_missing",
+                    title="Associacao de proveniencia ainda nao migrada",
+                    severity="alerta",
+                    groups=1,
+                    occurrences=1,
+                    report_file=None,
+                    explanation=(
+                        "O banco ainda nao possui cotacao_proveniencias. "
+                        "Nenhuma consolidacao historica e segura antes da "
+                        "migracao aditiva de proveniencia."
+                    ),
+                )
+            )
+            return {"status": "not_migrated", "safe_for_consolidation": False}
+
+        required_columns = {
+            "id",
+            "chave_unica",
+            "cotacao_id",
+            "coleta_id",
+            "cotacao_origem_id",
+            "chave_cotacao_origem",
+            "ordem_ocorrencia",
+            "registrada_em",
+            "origem_registro",
+        }
+        existing_columns = {
+            str(row["name"])
+            for row in connection.execute(
+                'PRAGMA table_info("cotacao_proveniencias")'
+            )
+        }
+        missing_columns = sorted(required_columns - existing_columns)
+        if missing_columns:
+            self.findings.append(
+                Finding(
+                    code="provenance_schema_incomplete",
+                    title="Esquema de proveniencia incompleto",
+                    severity="erro",
+                    groups=len(missing_columns),
+                    occurrences=len(missing_columns),
+                    report_file=None,
+                    explanation=(
+                        "Colunas ausentes: " + ", ".join(missing_columns)
+                    ),
+                )
+            )
+            return {
+                "status": "invalid_schema",
+                "safe_for_consolidation": False,
+                "missing_columns": missing_columns,
+            }
+
+        migration_marker_valid = False
+        migration_checkpoint: int | None = None
+        migration_checkpoint_invalid = 0
+        migration_columns: set[str] = set()
+        migration_table_exists = bool(
+            connection.execute(
+                """
+                SELECT 1 FROM sqlite_schema
+                WHERE type = 'table' AND name = 'schema_migrations'
+                """
+            ).fetchone()
+        )
+        if migration_table_exists:
+            migration_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    'PRAGMA table_info("schema_migrations")'
+                )
+            }
+            if {"chave", "cotacao_id_maximo", "detalhes"} <= migration_columns:
+                migration_row = connection.execute(
+                    """
+                    SELECT cotacao_id_maximo, detalhes
+                    FROM schema_migrations
+                    WHERE chave = ?
+                    """,
+                    (HISTORICAL_PROVENANCE_MIGRATION,),
+                ).fetchone()
+                if migration_row is not None:
+                    migration_checkpoint = int(migration_row[0])
+                    if migration_checkpoint >= 0:
+                        expected_historical = int(
+                            connection.execute(
+                                "SELECT COUNT(*) FROM cotacoes WHERE id <= ?",
+                                (migration_checkpoint,),
+                            ).fetchone()[0]
+                        )
+                        try:
+                            migration_details = json.loads(str(migration_row[1]))
+                            if not isinstance(migration_details, dict):
+                                raise ValueError
+                            expected_historical = int(
+                                migration_details.get(
+                                    "cotacoes_abrangidas",
+                                    expected_historical,
+                                )
+                            )
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            migration_checkpoint_invalid = 1
+                        else:
+                            historical_totals = connection.execute(
+                                """
+                                SELECT
+                                    COUNT(*),
+                                    COUNT(DISTINCT cotacao_origem_id),
+                                    COALESCE(MAX(cotacao_origem_id), 0)
+                                FROM cotacao_proveniencias
+                                WHERE origem_registro = 'migracao_historica'
+                                """
+                            ).fetchone()
+                            invalid_historical = int(
+                                connection.execute(
+                                    """
+                                    WITH ranked AS (
+                                        SELECT
+                                            co.id,
+                                            co.coleta_id,
+                                            MIN(co.id) OVER (
+                                                PARTITION BY
+                                                    co.chave_identidade,
+                                                    co.preco_minimo,
+                                                    co.preco_comum,
+                                                    co.preco_maximo,
+                                                    co.situacao_mercado
+                                            ) AS canonical_id
+                                        FROM cotacoes co
+                                    )
+                                    SELECT COUNT(*)
+                                    FROM cotacao_proveniencias cp
+                                    LEFT JOIN ranked original
+                                      ON original.id = cp.cotacao_origem_id
+                                    LEFT JOIN cotacoes canonical
+                                      ON canonical.id = cp.cotacao_id
+                                    LEFT JOIN coletas collection
+                                      ON collection.id = cp.coleta_id
+                                    WHERE cp.origem_registro =
+                                          'migracao_historica'
+                                      AND (
+                                            cp.cotacao_origem_id IS NULL
+                                            OR cp.cotacao_origem_id < 1
+                                            OR cp.cotacao_origem_id > ?
+                                            OR cp.chave_unica IS NOT
+                                               'migracao-historica:' ||
+                                               cp.cotacao_origem_id
+                                            OR canonical.id IS NULL
+                                            OR collection.id IS NULL
+                                            OR (
+                                                original.id IS NOT NULL
+                                                AND (
+                                                    cp.coleta_id IS NOT
+                                                       original.coleta_id
+                                                    OR cp.cotacao_id IS NOT
+                                                       original.canonical_id
+                                                )
+                                            )
+                                      )
+                                    """,
+                                    (migration_checkpoint,),
+                                ).fetchone()[0]
+                            )
+                            migration_checkpoint_invalid = (
+                                invalid_historical
+                                + abs(
+                                    int(historical_totals[0])
+                                    - expected_historical
+                                )
+                                + abs(
+                                    int(historical_totals[1])
+                                    - expected_historical
+                                )
+                                + abs(
+                                    int(historical_totals[2])
+                                    - migration_checkpoint
+                                )
+                            )
+                            migration_marker_valid = (
+                                migration_checkpoint_invalid == 0
+                            )
+
+        if not migration_marker_valid:
+            self.findings.append(
+                Finding(
+                    code="provenance_migration_marker_invalid",
+                    title=(
+                        "Marcador da migracao de proveniencia ausente ou invalido"
+                    ),
+                    severity="erro",
+                    groups=1,
+                    occurrences=max(1, migration_checkpoint_invalid),
+                    report_file=None,
+                    explanation=(
+                        "A consolidacao exige o marcador "
+                        f"{HISTORICAL_PROVENANCE_MIGRATION} com checkpoint "
+                        "compativel e cobertura historica integra."
+                    ),
+                )
+            )
+
+        baseline_applied = False
+        baseline_checkpoint: int | None = None
+        baseline_marker_valid = False
+        baseline_marker_invalid = 0
+        baseline_details: dict[str, object] = {}
+        if (
+            migration_table_exists
+            and {"chave", "cotacao_id_maximo", "detalhes"}
+            <= migration_columns
+        ):
+            baseline_row = connection.execute(
+                """
+                SELECT cotacao_id_maximo, detalhes
+                FROM schema_migrations
+                WHERE chave = ?
+                """,
+                (DEDUPLICATED_BASELINE_MIGRATION,),
+            ).fetchone()
+            if baseline_row is not None:
+                baseline_applied = True
+                baseline_checkpoint = int(baseline_row[0])
+                try:
+                    parsed_details = json.loads(str(baseline_row[1]))
+                    if not isinstance(parsed_details, dict):
+                        raise ValueError
+                    baseline_details = parsed_details
+                    required_fields = {
+                        "schema_version",
+                        "source_quotes",
+                        "source_max_quote_id",
+                        "source_logical_contents",
+                        "source_duplicate_excess",
+                        "source_duplicate_groups",
+                        "source_duplicate_occurrences",
+                        "source_date_buckets",
+                        "source_date_coverage_hash",
+                        "removed_quotes",
+                        "result_quotes",
+                        "result_max_quote_id",
+                        "provenance_rows",
+                        "provenance_id_maximo",
+                        "historical_provenance_rows",
+                        "distinct_origin_references",
+                        "canonical_targets",
+                        "collections_preserved",
+                        "provenance_content_sha256",
+                    }
+                    missing_fields = required_fields - baseline_details.keys()
+                    if missing_fields:
+                        raise ValueError
+                    numeric_details = {
+                        key: int(baseline_details[key])
+                        for key in required_fields
+                        if key
+                        not in {
+                            "source_date_coverage_hash",
+                            "provenance_content_sha256",
+                        }
+                    }
+                except (
+                    json.JSONDecodeError,
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                ):
+                    baseline_marker_invalid = 1
+                else:
+                    provenance_max_id = numeric_details[
+                        "provenance_id_maximo"
+                    ]
+                    prefix_totals = connection.execute(
+                        """
+                        SELECT
+                            COUNT(*),
+                            COALESCE(MAX(id), 0),
+                            COALESCE(SUM(
+                                origem_registro = 'migracao_historica'
+                            ), 0),
+                            COUNT(DISTINCT cotacao_origem_id),
+                            COUNT(DISTINCT cotacao_id),
+                            COUNT(DISTINCT coleta_id)
+                        FROM cotacao_proveniencias
+                        WHERE id <= ?
+                        """,
+                        (provenance_max_id,),
+                    ).fetchone()
+                    baseline_quotes = connection.execute(
+                        """
+                        SELECT COUNT(*), COALESCE(MAX(id), 0)
+                        FROM cotacoes
+                        WHERE id <= ?
+                        """,
+                        (baseline_checkpoint,),
+                    ).fetchone()
+                    prefix_orphans = connection.execute(
+                        """
+                        SELECT
+                            COALESCE(SUM(canonical.id IS NULL), 0),
+                            COALESCE(SUM(collection.id IS NULL), 0)
+                        FROM cotacao_proveniencias cp
+                        LEFT JOIN cotacoes canonical
+                          ON canonical.id = cp.cotacao_id
+                        LEFT JOIN coletas collection
+                          ON collection.id = cp.coleta_id
+                        WHERE cp.id <= ?
+                        """,
+                        (provenance_max_id,),
+                    ).fetchone()
+                    prefix_duplicate_groups = int(
+                        connection.execute(
+                            """
+                            SELECT COUNT(*)
+                            FROM (
+                                SELECT 1
+                                FROM cotacoes
+                                WHERE id <= ?
+                                GROUP BY
+                                    chave_identidade,
+                                    preco_minimo,
+                                    preco_comum,
+                                    preco_maximo,
+                                    situacao_mercado
+                                HAVING COUNT(*) > 1
+                            )
+                            """,
+                            (baseline_checkpoint,),
+                        ).fetchone()[0]
+                    )
+                    stored_provenance_hash = str(
+                        baseline_details["provenance_content_sha256"]
+                    )
+                    stored_coverage_hash = str(
+                        baseline_details["source_date_coverage_hash"]
+                    )
+                    actual_provenance_hash = provenance_content_sha256(
+                        connection,
+                        provenance_max_id,
+                    )
+                    source_quotes = numeric_details["source_quotes"]
+                    source_logical = numeric_details[
+                        "source_logical_contents"
+                    ]
+                    duplicate_excess = numeric_details[
+                        "source_duplicate_excess"
+                    ]
+                    duplicate_groups = numeric_details[
+                        "source_duplicate_groups"
+                    ]
+                    duplicate_occurrences = numeric_details[
+                        "source_duplicate_occurrences"
+                    ]
+                    removed_quotes = numeric_details["removed_quotes"]
+                    result_quotes = numeric_details["result_quotes"]
+                    result_max_id = numeric_details["result_max_quote_id"]
+                    baseline_marker_invalid = sum(
+                        (
+                            numeric_details["schema_version"] != 1,
+                            any(
+                                value < 0
+                                for value in numeric_details.values()
+                            ),
+                            baseline_checkpoint < 0,
+                            numeric_details["source_max_quote_id"]
+                            != baseline_checkpoint,
+                            result_max_id > baseline_checkpoint,
+                            source_quotes - result_quotes != removed_quotes,
+                            removed_quotes != duplicate_excess,
+                            source_logical != result_quotes,
+                            duplicate_occurrences - duplicate_groups
+                            != duplicate_excess,
+                            numeric_details["source_date_buckets"] < 0,
+                            not is_valid_sha256(stored_coverage_hash),
+                            int(baseline_quotes[0]) != result_quotes,
+                            int(baseline_quotes[1]) != result_max_id,
+                            int(prefix_totals[0])
+                            != numeric_details["provenance_rows"],
+                            int(prefix_totals[1]) != provenance_max_id,
+                            int(prefix_totals[2])
+                            != numeric_details[
+                                "historical_provenance_rows"
+                            ],
+                            int(prefix_totals[3])
+                            != numeric_details[
+                                "distinct_origin_references"
+                            ],
+                            int(prefix_totals[4])
+                            != numeric_details["canonical_targets"],
+                            int(prefix_totals[5])
+                            != numeric_details["collections_preserved"],
+                            numeric_details["distinct_origin_references"]
+                            != source_quotes,
+                            numeric_details["canonical_targets"]
+                            != result_quotes,
+                            int(prefix_orphans[0]) != 0,
+                            int(prefix_orphans[1]) != 0,
+                            prefix_duplicate_groups != 0,
+                            not is_valid_sha256(stored_provenance_hash),
+                            actual_provenance_hash
+                            != stored_provenance_hash,
+                        )
+                    )
+                    baseline_marker_valid = baseline_marker_invalid == 0
+
+        if baseline_applied and not baseline_marker_valid:
+            self.findings.append(
+                Finding(
+                    code="baseline_migration_marker_invalid",
+                    title="Marcador da baseline deduplicada invalido",
+                    severity="erro",
+                    groups=1,
+                    occurrences=max(1, baseline_marker_invalid),
+                    report_file=None,
+                    explanation=(
+                        "O marcador da baseline nao corresponde aos totais, "
+                        "ao checkpoint ou ao hash da proveniencia preservada."
+                    ),
+                )
+            )
+
+        totals = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS proveniencias,
+                SUM(origem_registro = 'migracao_historica') AS historicas,
+                COUNT(DISTINCT CASE
+                    WHEN origem_registro = 'migracao_historica'
+                    THEN cotacao_origem_id
+                END) AS origens_historicas,
+                COUNT(DISTINCT cotacao_id) AS cotacoes_canonicas,
+                COUNT(DISTINCT coleta_id) AS coletas_preservadas
+            FROM cotacao_proveniencias
+            """
+        ).fetchone()
+        missing_quotes = int(
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM cotacoes co
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM cotacao_proveniencias cp
+                    WHERE cp.cotacao_origem_id = co.id
+                )
+                """
+            ).fetchone()[0]
+        )
+        orphan_row = connection.execute(
+            """
+            SELECT
+                COALESCE(SUM(canonical.id IS NULL), 0),
+                COALESCE(SUM(collection.id IS NULL), 0)
+            FROM cotacao_proveniencias cp
+            LEFT JOIN cotacoes canonical
+              ON canonical.id = cp.cotacao_id
+            LEFT JOIN coletas collection
+              ON collection.id = cp.coleta_id
+            """
+        ).fetchone()
+        orphan_canonical_targets = int(orphan_row[0])
+        orphan_collections = int(orphan_row[1])
+        duplicate_row = connection.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    co.id,
+                    co.chave_identidade,
+                    co.preco_minimo,
+                    co.preco_comum,
+                    co.preco_maximo,
+                    co.situacao_mercado,
+                    MIN(co.id) OVER (
+                        PARTITION BY
+                            co.chave_identidade,
+                            co.preco_minimo,
+                            co.preco_comum,
+                            co.preco_maximo,
+                            co.situacao_mercado
+                    ) AS canonical_id,
+                    COUNT(*) OVER (
+                        PARTITION BY
+                            co.chave_identidade,
+                            co.preco_minimo,
+                            co.preco_comum,
+                            co.preco_maximo,
+                            co.situacao_mercado
+                    ) AS group_size
+                FROM cotacoes co
+            ), grouped AS (
+                SELECT
+                    ranked.chave_identidade,
+                    ranked.preco_minimo,
+                    ranked.preco_comum,
+                    ranked.preco_maximo,
+                    ranked.situacao_mercado,
+                    COUNT(DISTINCT ranked.id) AS occurrences,
+                    COUNT(DISTINCT cp.cotacao_origem_id) AS provenances,
+                    COUNT(DISTINCT cp.cotacao_id) AS canonical_targets,
+                    MIN(ranked.canonical_id) AS expected_canonical,
+                    MIN(cp.cotacao_id) AS actual_canonical
+                FROM ranked
+                LEFT JOIN cotacao_proveniencias cp
+                  ON cp.cotacao_origem_id = ranked.id
+                 AND cp.origem_registro = 'migracao_historica'
+                WHERE ranked.group_size > 1
+                GROUP BY
+                    ranked.chave_identidade,
+                    ranked.preco_minimo,
+                    ranked.preco_comum,
+                    ranked.preco_maximo,
+                    ranked.situacao_mercado
+            )
+            SELECT
+                COUNT(*) AS duplicate_groups,
+                COALESCE(SUM(occurrences), 0) AS duplicate_occurrences,
+                COALESCE(SUM(provenances), 0) AS duplicate_provenances,
+                COALESCE(SUM(
+                    provenances != occurrences
+                    OR canonical_targets != 1
+                    OR actual_canonical != expected_canonical
+                ), 0) AS ambiguous_groups
+            FROM grouped
+            """
+        ).fetchone()
+        ambiguous_groups = int(duplicate_row[3])
+
+        provenance_errors = (
+            missing_quotes
+            + ambiguous_groups
+            + orphan_canonical_targets
+            + orphan_collections
+        )
+        if provenance_errors:
+            self.findings.append(
+                Finding(
+                    code="provenance_coverage_incomplete",
+                    title="Cobertura de proveniencia incompleta ou ambigua",
+                    severity="erro",
+                    groups=(
+                        ambiguous_groups
+                        + orphan_canonical_targets
+                        + orphan_collections
+                    ),
+                    occurrences=provenance_errors,
+                    report_file=None,
+                    explanation=(
+                        "Toda cotacao atual deve ter uma origem; os alvos "
+                        "canonicos e as coletas da proveniencia devem existir; "
+                        "e cada grupo duplicado atual deve apontar para um "
+                        "unico menor ID canonico."
+                    ),
+                )
+            )
+
+        safe = (
+            migration_marker_valid
+            and missing_quotes == 0
+            and ambiguous_groups == 0
+            and orphan_canonical_targets == 0
+            and orphan_collections == 0
+            and (not baseline_applied or baseline_marker_valid)
+        )
+        preserved_duplicate_groups = int(duplicate_row[0])
+        preserved_duplicate_occurrences = int(duplicate_row[2])
+        if baseline_marker_valid:
+            preserved_duplicate_groups = int(
+                baseline_details["source_duplicate_groups"]
+            )
+            preserved_duplicate_occurrences = int(
+                baseline_details["source_duplicate_occurrences"]
+            )
+
+        self.findings.append(
+            Finding(
+                code="provenance_preservation",
+                title="Ocorrencias historicas registradas como proveniencia",
+                severity="info" if safe else "alerta",
+                groups=preserved_duplicate_groups,
+                occurrences=preserved_duplicate_occurrences,
+                report_file=None,
+                explanation=(
+                    "A associacao preserva coleta, arquivo e hash por meio "
+                    "da referencia a coletas; nenhuma linha e autorizada a "
+                    "ser excluida por este achado."
+                ),
+            )
+        )
+        return {
+            "status": "complete" if safe else "incomplete",
+            "safe_for_consolidation": safe,
+            "provenance_rows": int(totals[0]),
+            "historical_provenance_rows": int(totals[1] or 0),
+            "historical_origins": int(totals[2]),
+            "canonical_quotes": int(totals[3]),
+            "collections_preserved": int(totals[4]),
+            "quotes_without_origin_provenance": missing_quotes,
+            "orphan_canonical_targets": orphan_canonical_targets,
+            "orphan_collections": orphan_collections,
+            "duplicate_groups": int(duplicate_row[0]),
+            "duplicate_occurrences": int(duplicate_row[1]),
+            "duplicate_provenances": int(duplicate_row[2]),
+            "ambiguous_duplicate_groups": ambiguous_groups,
+            "preserved_duplicate_groups": preserved_duplicate_groups,
+            "preserved_duplicate_occurrences": (
+                preserved_duplicate_occurrences
+            ),
+            "migration_marker_valid": migration_marker_valid,
+            "migration_key": HISTORICAL_PROVENANCE_MIGRATION,
+            "migration_checkpoint": migration_checkpoint,
+            "baseline_applied": baseline_applied,
+            "baseline_marker_valid": baseline_marker_valid,
+            "baseline_key": DEDUPLICATED_BASELINE_MIGRATION,
+            "baseline_checkpoint": baseline_checkpoint,
+            "baseline_removed_quotes": (
+                baseline_details.get("removed_quotes")
+                if baseline_applied
+                else None
+            ),
+            "baseline_provenance_sha256": (
+                baseline_details.get("provenance_content_sha256")
+                if baseline_applied
+                else None
+            ),
+        }
 
     def _audit_repeated_raws(self, connection: sqlite3.Connection) -> None:
         groups_sql = """
@@ -2372,12 +3162,30 @@ class DatabaseAuditor:
         ).fetchall()
 
         if not rows:
+            source_wide_collision_summary = (
+                self._audit_source_wide_parser_collisions(
+                    connection,
+                    {"ceasa-df"},
+                )
+            )
+            source_wide_status = str(
+                source_wide_collision_summary.get("status")
+            )
             return {
-                "status": "not_applicable",
+                "status": (
+                    "no_duplicate_groups_source_wide_check_complete"
+                    if source_wide_status == "complete"
+                    else "no_duplicate_groups_source_wide_check_incomplete"
+                ),
                 "safe_for_cleanup": False,
                 "duplicate_groups": 0,
                 "duplicate_rows": 0,
                 "scopes_total": 0,
+                "source_wide_parser_collisions": (
+                    source_wide_collision_summary
+                ),
+                "cache_mode": "fresh_temporary_deleted_after_use",
+                "pipeline_scope": "current_code_and_current_configuration",
             }
 
         scopes: dict[
@@ -2955,6 +3763,7 @@ class DatabaseAuditor:
         affected_sources = {
             str(row[0]) for row in parser_duplicate_documents.values()
         }
+        affected_sources.add("ceasa-df")
         source_wide_collision_summary = (
             self._audit_source_wide_parser_collisions(
                 connection,
@@ -3392,8 +4201,9 @@ class DatabaseAuditor:
                     occurrences=sum(int(row[-1]) for row in collision_rows),
                     report_file=collision_report,
                     explanation=(
-                        "A expansao reprocessou todos os brutos unicos das "
-                        "fontes onde o replay inicial encontrou repeticoes. "
+                        "A verificacao reprocessou todos os brutos unicos das "
+                        "fontes obrigatorias e das fontes onde o replay inicial "
+                        "encontrou repeticoes. "
                         "Uma colisao pode ser repeticao real da fonte ou perda "
                         "de uma distincao pelo parser. Ela exige conferir o "
                         "documento e impede qualquer limpeza automatica."
@@ -3413,6 +4223,37 @@ class DatabaseAuditor:
                     "erro",
                 ),
                 error_rows,
+            )
+            self.findings.append(
+                Finding(
+                    code="source_wide_parser_validation_errors",
+                    title="Brutos obrigatorios com erro no parser atual",
+                    severity="alerta",
+                    groups=len(error_rows),
+                    occurrences=len(error_rows),
+                    report_file=error_report,
+                    explanation=(
+                        "A verificacao abrangente das fontes obrigatorias nao "
+                        "foi concluida para todos os brutos. Os erros precisam "
+                        "ser resolvidos antes de validar ausencia de colisoes."
+                    ),
+                )
+            )
+        else:
+            self.findings.append(
+                Finding(
+                    code="source_wide_parser_validation",
+                    title="Brutos obrigatorios reprocessados pelo parser atual",
+                    severity="info",
+                    groups=len(sources),
+                    occurrences=len(scopes),
+                    report_file=collision_report,
+                    explanation=(
+                        "Todos os brutos unicos das fontes obrigatorias foram "
+                        "reprocessados com cache temporario. Eventuais colisoes "
+                        "sao registradas em um achado separado."
+                    ),
+                )
             )
 
         return {
@@ -3978,16 +4819,97 @@ class DatabaseAuditor:
         duplicate_summary = result["duplicate_summary"]
         raw_summary = result["raw_traceability"]
         reconciliation = result["raw_duplicate_reconciliation"]
+        source_wide = reconciliation.get(
+            "source_wide_parser_collisions",
+            {},
+        )
         safety = result["safety"]
+        execution_context = result["execution_context"]
+        request = execution_context["request"]
+        workflow = execution_context["workflow"]
+        runner = execution_context["runner"]
         lines = [
-            "# Auditoria do banco de cotações",
+            "# Relatorio de auditoria do banco de cotacoes",
             "",
-            "## Resultado",
+            "## Resumo executivo",
             "",
+            f"- Inicio: `{result['started_at']}`",
+            f"- Fim: `{result['finished_at']}`",
+            f"- Duracao: `{result['duration_seconds']:.2f} segundos`",
             f"- Status: **{verdict['status']}**",
-            f"- Banco: `{result['database']['path']}`",
-            f"- Tamanho: {result['database']['size_bytes']:,} bytes",
-            f"- Duração: {result['duration_seconds']:.2f} segundos",
+            f"- Operacoes iniciadas: **{len(result['stages'])}**",
+            f"- Informacoes: **{verdict['info_findings']}**",
+            f"- Alertas: **{verdict['warning_findings']}**",
+            f"- Erros: **{verdict['error_findings']}**",
+            "",
+        ]
+        _append_markdown_table(
+            lines,
+            "Solicitacao e configuracao efetiva",
+            (
+                ("Comando executado", request["command"]),
+                ("Ponto de entrada", request["entrypoint"]),
+                ("Argumentos recebidos", request["arguments"]),
+                ("Fluxo solicitado", request["flow"]),
+                ("Origem da configuracao", request["configuration_source"]),
+                ("Banco", request["database"]),
+                ("Diretorio de saida", request["output"]),
+                ("Acesso HTTP", request["http_access"]),
+                ("Leitura SQLite", request["sqlite_read"]),
+                ("Persistencia SQLite", request["sqlite_write"]),
+            ),
+        )
+        _append_markdown_table(
+            lines,
+            "Contexto do workflow",
+            (
+                ("Repositorio", workflow["repository"]),
+                ("Run ID", workflow["run_id"]),
+                ("Run attempt", workflow["run_attempt"]),
+                ("Evento", workflow["event"]),
+                ("Ref", workflow["ref"]),
+                ("Commit", workflow["commit"]),
+                ("Release tag", workflow["release_tag"]),
+                ("Pacote completo OneDrive", workflow["full_package"]),
+                ("Origem restaurada", workflow["restored_source"]),
+                ("Asset restaurado", workflow["restored_asset"]),
+                (
+                    "Tempo de restauracao (s)",
+                    workflow["restore_duration_seconds"],
+                ),
+                ("Tamanho de data restaurado", workflow["restored_data_size"]),
+            ),
+        )
+        _append_markdown_table(
+            lines,
+            "Ambiente do runner",
+            (
+                ("Runner OS", runner["os"]),
+                ("Runner arch", runner["arch"]),
+                ("Runner name", runner["name"]),
+                ("Runner temp", runner["temp"]),
+                ("Workspace", runner["workspace"]),
+                ("Hostname", runner["hostname"]),
+                ("Kernel", runner["kernel"]),
+                ("OS release", runner["os_release"]),
+                ("CPU", runner["cpu"]),
+                ("CPUs disponiveis", runner["cpu_count"]),
+                ("Memoria total", runner["memory_total"]),
+                ("Memoria disponivel", runner["memory_available"]),
+                ("Uso do workspace", runner["workspace_usage"]),
+                ("Disco do workspace", runner["workspace_disk"]),
+                ("Docker", runner["docker"]),
+                ("Docker Compose", runner["docker_compose"]),
+            ),
+        )
+        lines.extend(
+            [
+                "## Resultado da auditoria",
+                "",
+                f"- Status: **{verdict['status']}**",
+                f"- Banco: `{result['database']['path']}`",
+                f"- Tamanho: {result['database']['size_bytes']:,} bytes",
+                f"- Duracao: {result['duration_seconds']:.2f} segundos",
             (
                 f"- Verificacao SQLite `{structural['check']}`: "
                 f"**{structural['status']}**"
@@ -4017,6 +4939,18 @@ class DatabaseAuditor:
                 "- Grupos repetidos cobertos pela reconciliacao: "
                 f"{reconciliation.get('duplicate_groups', 0):,}"
             ),
+            (
+                "- Validacao abrangente dos parsers obrigatorios: "
+                f"**{source_wide.get('status', 'not_checked')}**"
+            ),
+            (
+                "- Brutos unicos reprocessados nessa validacao: "
+                f"{source_wide.get('unique_raw_scopes', 0):,}"
+            ),
+            (
+                "- Colisoes encontradas nessa validacao: "
+                f"{source_wide.get('collision_groups', 0):,}"
+            ),
             "",
             str(verdict["explanation"]),
             "",
@@ -4024,7 +4958,8 @@ class DatabaseAuditor:
             "",
             "| Tabela | Registros |",
             "| --- | ---: |",
-        ]
+            ]
+        )
 
         for table_name, count in table_counts.items():
             lines.append(f"| `{table_name}` | {count:,} |")
@@ -4089,6 +5024,13 @@ class DatabaseAuditor:
                 ]
             )
 
+        lines.extend(["## Historico completo da auditoria", ""])
+        for stage in result["stages"]:
+            lines.append(
+                f"- `{stage['occurred_at']}` **ETAPA** | {stage['message']}"
+            )
+        lines.append("")
+
         lines.extend(
             [
                 "## Limitações",
@@ -4098,8 +5040,9 @@ class DatabaseAuditor:
                     "- A validação de hashes confirma apenas que o conteúdo encontrado "
                     "corresponde ao hash registrado no banco; ela não fornece uma "
                     "referência externa independente nem garante a interpretação do documento. "
-                    "A reexecução dos parsers é limitada aos brutos envolvidos nas "
-                    "duplicatas exatas e reflete a versão atual dos parsers."
+                    "A reexecução dos parsers cobre os brutos envolvidos nas "
+                    "duplicatas exatas e as fontes obrigatórias configuradas, sempre "
+                    "com a versão atual dos parsers."
                 ),
                 (
                     "- Variações de preço para a mesma identidade podem representar "
@@ -4197,13 +5140,17 @@ class DatabaseAuditor:
         )
 
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "execution_status": "completed",
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "finished_at": finished_at.isoformat(timespec="seconds"),
             "generated_at": finished_at.isoformat(timespec="seconds"),
             "duration_seconds": (
                 finished_at - started_at
             ).total_seconds(),
-            "command": sys.argv,
+            "command": self.execution_context["request"]["command"],
+            "execution_context": self.execution_context,
+            "stages": self.stage_history,
             "database": {
                 "path": self.database_path.as_posix(),
                 "size_bytes": self.database_path.stat().st_size,
@@ -4241,6 +5188,7 @@ class DatabaseAuditor:
             "table_counts": table_counts,
             "source_summary": source_summary,
             "duplicate_summary": self.duplicate_summary,
+            "provenance": self.provenance_summary,
             "raw_traceability": raw_summary,
             "raw_duplicate_reconciliation": self.raw_reconciliation_summary,
             "environment": self.environment,
@@ -4289,6 +5237,44 @@ def hash_file_bytes(path: Path) -> str:
     with path.open("rb") as file:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def provenance_content_sha256(
+    connection: sqlite3.Connection,
+    maximum_id: int,
+) -> str:
+    digest = hashlib.sha256()
+    cursor = connection.execute(
+        """
+        SELECT
+            id,
+            chave_unica,
+            cotacao_id,
+            coleta_id,
+            cotacao_origem_id,
+            chave_cotacao_origem,
+            ordem_ocorrencia,
+            fonte_complemento,
+            url_complemento,
+            data_complemento,
+            registrada_em,
+            origem_registro
+        FROM cotacao_proveniencias
+        WHERE id <= ?
+        ORDER BY id
+        """,
+        (maximum_id,),
+    )
+    while rows := cursor.fetchmany(10_000):
+        for row in rows:
+            serialized = json.dumps(
+                list(row),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            digest.update(serialized.encode("utf-8"))
+            digest.update(b"\n")
     return digest.hexdigest()
 
 
@@ -4418,8 +5404,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         help=(
-            "Diretorio novo para os relatorios. Por padrao, cria uma pasta "
-            "datada dentro de auditoria_cotacoes/."
+            "Diretorio novo para os logs e relatorios. Por padrao, cria "
+            "uma pasta identificada dentro de data/logs/auditoria/."
         ),
     )
     parser.add_argument(
@@ -4449,6 +5435,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Executa PRAGMA integrity_check no lugar de quick_check.",
     )
     parser.add_argument(
+        "--fail-on-error-findings",
+        action="store_true",
+        help=(
+            "Retorna codigo 2 quando a auditoria termina com achados "
+            "classificados como erro. Alertas nao alteram o codigo."
+        ),
+    )
+    parser.add_argument(
         "--skip-semantic",
         action="store_true",
         help=(
@@ -4467,8 +5461,19 @@ def positive_integer(value: str) -> int:
 
 
 def default_output_directory() -> Path:
-    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
-    return Path("auditoria_cotacoes") / timestamp
+    timestamp = audit_now().strftime("%Y%m%d_%H%M%S_%f")
+    run_id = re.sub(r"[^0-9A-Za-z_-]", "-", os.getenv("GITHUB_RUN_ID", ""))
+    run_attempt = re.sub(
+        r"[^0-9A-Za-z_-]",
+        "-",
+        os.getenv("GITHUB_RUN_ATTEMPT", ""),
+    )
+    suffix = ""
+    if run_id:
+        suffix = f"_{run_id}"
+        if run_attempt:
+            suffix += f"_{run_attempt}"
+    return AUDIT_LOG_ROOT / f"{timestamp}{suffix}"
 
 
 def main() -> int:
@@ -4494,6 +5499,17 @@ def main() -> int:
     print(f"Status: {result['verdict']['status']}")
     print(f"Relatorio: {output_directory.resolve() / 'resumo.md'}")
     print(f"Resultado JSON: {output_directory.resolve() / 'resultado.json'}")
+
+    if (
+        args.fail_on_error_findings
+        and result["verdict"]["error_findings"] > 0
+    ):
+        print(
+            "A auditoria encontrou achados classificados como erro.",
+            file=sys.stderr,
+        )
+        return 2
+
     return 0
 
 

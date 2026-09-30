@@ -7,7 +7,11 @@ from decimal import Decimal
 from pathlib import Path
 
 from cotacoes_ceasa.core.models import Cotacao
-from cotacoes_ceasa.storage.sqlite import SQLITE_SCHEMA_VERSION, SQLiteStorage
+from cotacoes_ceasa.storage.sqlite import (
+    HISTORICAL_PROVENANCE_MIGRATION,
+    SQLITE_SCHEMA_VERSION,
+    SQLiteStorage,
+)
 from cotacoes_ceasa.workflows.prohort import ProhortComplementer
 
 
@@ -40,8 +44,16 @@ class SQLiteStorageDeduplicationTest(unittest.TestCase):
                 """
             ).fetchone()
             schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
+            provenance_count = connection.execute(
+                "SELECT COUNT(*) FROM cotacao_proveniencias"
+            ).fetchone()[0]
+            migration_row = connection.execute(
+                "SELECT chave, cotacao_id_maximo FROM schema_migrations"
+            ).fetchone()
 
         self.assertEqual((1, "primeiro.html"), row)
+        self.assertEqual(2, provenance_count)
+        self.assertEqual((HISTORICAL_PROVENANCE_MIGRATION, 0), migration_row)
         self.assertEqual(SQLITE_SCHEMA_VERSION, schema_version)
 
     def test_same_content_repeated_inside_batch_is_inserted_once(self) -> None:
@@ -55,6 +67,17 @@ class SQLiteStorageDeduplicationTest(unittest.TestCase):
 
         self.assertEqual(1, self._save([first, repeated]))
         self.assertEqual(1, self._count_quotes())
+        self.assertEqual(2, self._count_provenances())
+
+    def test_repeated_occurrences_in_same_collection_keep_provenance(self) -> None:
+        quote = self._quote("primeiro.html", "hash-1")
+
+        self.assertEqual(1, self._save([quote, quote]))
+        self.assertEqual(1, self._count_quotes())
+        self.assertEqual(2, self._count_provenances())
+
+        self.assertEqual(0, self._save([quote, quote]))
+        self.assertEqual(2, self._count_provenances())
 
     def test_price_and_market_status_changes_are_preserved(self) -> None:
         first = self._quote("primeiro.html", "hash-1")
@@ -193,6 +216,14 @@ class SQLiteStorageDeduplicationTest(unittest.TestCase):
     def _count_quotes(self) -> int:
         with sqlite3.connect(self.database_path) as connection:
             return int(connection.execute("SELECT COUNT(*) FROM cotacoes").fetchone()[0])
+
+    def _count_provenances(self) -> int:
+        with sqlite3.connect(self.database_path) as connection:
+            return int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM cotacao_proveniencias"
+                ).fetchone()[0]
+            )
 
     @staticmethod
     def _quote(
