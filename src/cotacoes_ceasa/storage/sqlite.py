@@ -13,7 +13,8 @@ from cotacoes_ceasa.normalizers.unit import NormalizedUnit, normalize_unit
 
 
 BACKFILL_STATE_TIMEZONE = ZoneInfo("America/Sao_Paulo")
-SQLITE_SCHEMA_VERSION = 2
+HISTORICAL_PROVENANCE_MIGRATION = "issue6_proveniencia_historica_v1"
+SQLITE_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -521,6 +522,30 @@ class SQLiteStorage:
                 FOREIGN KEY (apresentacao_unidade_id) REFERENCES apresentacoes_unidade (id)
             );
 
+            CREATE TABLE IF NOT EXISTS cotacao_proveniencias (
+                id INTEGER PRIMARY KEY,
+                chave_unica TEXT NOT NULL UNIQUE,
+                cotacao_id INTEGER NOT NULL,
+                coleta_id INTEGER NOT NULL,
+                cotacao_origem_id INTEGER,
+                chave_cotacao_origem TEXT NOT NULL,
+                ordem_ocorrencia INTEGER NOT NULL,
+                fonte_complemento TEXT,
+                url_complemento TEXT,
+                data_complemento TEXT,
+                registrada_em TEXT NOT NULL,
+                origem_registro TEXT NOT NULL,
+                FOREIGN KEY (cotacao_id) REFERENCES cotacoes (id),
+                FOREIGN KEY (coleta_id) REFERENCES coletas (id)
+            );
+
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                chave TEXT PRIMARY KEY,
+                aplicada_em TEXT NOT NULL,
+                cotacao_id_maximo INTEGER NOT NULL,
+                detalhes TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS backfill_states (
                 source_slug TEXT NOT NULL,
                 category_slug TEXT NOT NULL DEFAULT '',
@@ -539,6 +564,12 @@ class SQLiteStorage:
                 ON cotacoes (chave_identidade);
             CREATE INDEX IF NOT EXISTS idx_cotacoes_coleta
                 ON cotacoes (coleta_id);
+            CREATE INDEX IF NOT EXISTS idx_cotacao_proveniencias_cotacao
+                ON cotacao_proveniencias (cotacao_id);
+            CREATE INDEX IF NOT EXISTS idx_cotacao_proveniencias_coleta
+                ON cotacao_proveniencias (coleta_id);
+            CREATE INDEX IF NOT EXISTS idx_cotacao_proveniencias_origem
+                ON cotacao_proveniencias (cotacao_origem_id);
             CREATE INDEX IF NOT EXISTS idx_cotacoes_entreposto_data
                 ON cotacoes (entreposto_id, data_cotacao);
             CREATE INDEX IF NOT EXISTS idx_cotacoes_categoria_data
@@ -550,8 +581,61 @@ class SQLiteStorage:
             """
         )
         current_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if current_version < 2:
+            connection.execute("PRAGMA user_version = 2")
+
         if current_version < SQLITE_SCHEMA_VERSION:
-            connection.execute(f"PRAGMA user_version = {SQLITE_SCHEMA_VERSION}")
+            provenance_complete = bool(
+                connection.execute(
+                    """
+                    SELECT NOT EXISTS (
+                        SELECT 1 FROM cotacoes co
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM cotacao_proveniencias cp
+                            WHERE cp.cotacao_origem_id = co.id
+                        )
+                    )
+                    """
+                ).fetchone()[0]
+            )
+            has_historical_quotes = bool(
+                connection.execute("SELECT 1 FROM cotacoes LIMIT 1").fetchone()
+            )
+            migration_applied = bool(
+                connection.execute(
+                    """
+                    SELECT 1
+                    FROM schema_migrations
+                    WHERE chave = ?
+                    """,
+                    (HISTORICAL_PROVENANCE_MIGRATION,),
+                ).fetchone()
+            )
+            if not has_historical_quotes and not migration_applied:
+                connection.execute(
+                    """
+                    INSERT INTO schema_migrations (
+                        chave,
+                        aplicada_em,
+                        cotacao_id_maximo,
+                        detalhes
+                    )
+                    VALUES (?, ?, 0, ?)
+                    """,
+                    (
+                        HISTORICAL_PROVENANCE_MIGRATION,
+                        datetime.now(BACKFILL_STATE_TIMEZONE).isoformat(
+                            timespec="seconds"
+                        ),
+                        '{"origem":"schema_vazio"}',
+                    ),
+                )
+                migration_applied = True
+
+            if provenance_complete and (
+                not has_historical_quotes or migration_applied
+            ):
+                connection.execute(f"PRAGMA user_version = {SQLITE_SCHEMA_VERSION}")
 
     def insert_cotacoes(
         self,
@@ -569,6 +653,8 @@ class SQLiteStorage:
         ] = {}
         categorias_cache: dict[str, int] = {}
         produtos_aliases_cache: dict[tuple[str, str], tuple[int, str]] = {}
+        provenance_rows: list[tuple[object | None, ...]] = []
+        provenance_occurrences: dict[tuple[object | None, ...], int] = {}
         unidades_cache: dict[str, tuple[int, str | None]] = {}
         apresentacoes_cache: dict[str | None, tuple[int | None, str | None]] = {}
         rows: list[tuple[object | None, ...]] = []
@@ -590,7 +676,7 @@ class SQLiteStorage:
                     processado_em,
                 )
                 coletas_cache[coleta_key] = coleta
-            coleta_id, _ = coleta
+            coleta_id, collection_key = coleta
 
             market_name = cotacao.entreposto or self._default_market(default_market)
             market_slug = slugify(market_name) if market_name is not None else None
@@ -677,6 +763,11 @@ class SQLiteStorage:
             preco_minimo = self._decimal_to_db(cotacao.preco_minimo)
             preco_comum = self._decimal_to_db(cotacao.preco_comum)
             preco_maximo = self._decimal_to_db(cotacao.preco_maximo)
+            data_complemento = (
+                cotacao.data_complemento.isoformat(timespec="seconds")
+                if cotacao.data_complemento is not None
+                else None
+            )
             rows.append(
                 (
                     unique_key,
@@ -695,11 +786,34 @@ class SQLiteStorage:
                     cotacao.situacao_mercado,
                     cotacao.fonte_complemento,
                     cotacao.url_complemento,
-                    (
-                        cotacao.data_complemento.isoformat(timespec="seconds")
-                        if cotacao.data_complemento is not None
-                        else None
-                    ),
+                    data_complemento,
+                    identity_key,
+                    preco_minimo,
+                    preco_comum,
+                    preco_maximo,
+                    cotacao.situacao_mercado,
+                )
+            )
+            provenance_identity = (
+                collection_key,
+                unique_key,
+                cotacao.fonte_complemento,
+                cotacao.url_complemento,
+                data_complemento,
+            )
+            occurrence = provenance_occurrences.get(provenance_identity, 0) + 1
+            provenance_occurrences[provenance_identity] = occurrence
+            provenance_key = self._hash_values((*provenance_identity, occurrence))
+            provenance_rows.append(
+                (
+                    provenance_key,
+                    coleta_id,
+                    unique_key,
+                    occurrence,
+                    cotacao.fonte_complemento,
+                    cotacao.url_complemento,
+                    data_complemento,
+                    processado_em,
                     identity_key,
                     preco_minimo,
                     preco_comum,
@@ -744,8 +858,58 @@ class SQLiteStorage:
             """,
             rows,
         )
+        inserted_count = connection.total_changes - changes_before
 
-        return connection.total_changes - changes_before
+        connection.executemany(
+            """
+            INSERT INTO cotacao_proveniencias (
+                chave_unica,
+                cotacao_id,
+                coleta_id,
+                cotacao_origem_id,
+                chave_cotacao_origem,
+                ordem_ocorrencia,
+                fonte_complemento,
+                url_complemento,
+                data_complemento,
+                registrada_em,
+                origem_registro
+            )
+            SELECT
+                ?,
+                existing.id,
+                ?,
+                CASE
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                        FROM cotacao_proveniencias origin
+                        WHERE origin.cotacao_origem_id = existing.id
+                    ) THEN existing.id
+                    ELSE NULL
+                END,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                'pipeline'
+            FROM cotacoes existing
+            WHERE existing.id = (
+                SELECT MIN(candidate.id)
+                FROM cotacoes candidate
+                WHERE candidate.chave_identidade = ?
+                  AND candidate.preco_minimo IS ?
+                  AND candidate.preco_comum IS ?
+                  AND candidate.preco_maximo IS ?
+                  AND candidate.situacao_mercado IS ?
+            )
+            ON CONFLICT (chave_unica) DO NOTHING
+            """,
+            provenance_rows,
+        )
+
+        return inserted_count
 
     def _validate_cotacao(self, cotacao: Cotacao) -> None:
         if cotacao.data_cotacao is None:

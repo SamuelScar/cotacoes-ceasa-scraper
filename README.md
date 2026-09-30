@@ -48,6 +48,32 @@ Links uteis:
 - [Release latest-data](https://github.com/SamuelScar/cotacoes-ceasa-scraper/releases/tag/latest-data)
 - [Pacotes e Backups](https://github.com/SamuelScar/cotacoes-ceasa-scraper/wiki/Pacotes-e-Backups)
 
+## Auditoria dos dados
+
+A auditoria integral valida o SQLite, a proveniencia, os arquivos brutos, os
+hashes registrados e o reprocessamento dos parsers sem alterar o banco. Os
+logs de cada rodada ficam isolados em `data/logs/auditoria/`.
+
+Execucao local completa:
+
+```bash
+docker compose run --rm \
+  --user "$(id -u):$(id -g)" \
+  --entrypoint python \
+  app auditar_banco.py \
+  --verify-raw \
+  --full-integrity-check
+```
+
+O workflow `Auditar pacote de dados` tambem pode ser iniciado manualmente e
+roda semanalmente aos domingos. Ele exige o pacote completo do OneDrive,
+publica os logs como artifact por 90 dias e nao modifica nem republica o
+pacote `latest`.
+
+O status `consistente_com_alertas` nao reprova a rotina. A execucao falha
+quando a auditoria e interrompida ou encontra ocorrencias classificadas como
+erro, preservando mesmo assim os logs e relatorios produzidos.
+
 ## Licenca
 
 Este projeto esta sob a licenca [GPL-3.0](LICENSE).
