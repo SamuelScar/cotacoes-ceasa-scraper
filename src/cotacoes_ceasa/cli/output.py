@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Iterable
 from rich.console import Console
 
 from cotacoes_ceasa.cli.report import ExecutionReport
+from cotacoes_ceasa.execution import sanitize_log_text
 from cotacoes_ceasa.workflows.health import RunHealthAssessment
 
 
@@ -37,6 +39,7 @@ class TerminalOutput:
     warning_count: int = 0
     error_count: int = 0
     use_colors: bool = field(default_factory=lambda: _supports_colors(sys.stdout))
+    log_file_path: Path | None = None
     _section_count: int = field(default=0, init=False, repr=False)
     _execution_report: ExecutionReport | None = field(
         default=None,
@@ -79,6 +82,12 @@ class TerminalOutput:
             raise RuntimeError("Relatorio de execucao nao foi habilitado.")
 
         return self._execution_report.write(report_dir)
+
+    def write_execution_report_to(self, file_path: Path) -> Path:
+        if self._execution_report is None:
+            raise RuntimeError("Relatorio de execucao nao foi habilitado.")
+
+        return self._execution_report.write_to(file_path)
 
     def set_execution_status(self, status: str) -> None:
         if self._execution_report is not None:
@@ -215,6 +224,7 @@ class TerminalOutput:
         counted: bool,
         report: bool = True,
     ) -> None:
+        message = sanitize_log_text(message)
         if counted:
             self._increment_count(level)
 
@@ -253,6 +263,11 @@ class TerminalOutput:
     def _print(self, text: str = "") -> None:
         self._console.print(text, markup=False)
         self._console.file.flush()
+        if self.log_file_path is not None:
+            self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
+            plain_text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+            with self.log_file_path.open("a", encoding="utf-8") as log_file:
+                log_file.write(f"{plain_text}\n")
 
 
 def _supports_colors(stream) -> bool:

@@ -40,13 +40,49 @@ A documentacao detalhada fica na Wiki do repositorio:
 
 ## Crawler atual
 
-O crawler roda pelo GitHub Actions. Quando configurado, o OneDrive guarda o backup completo com raws, cache, relatorios e SQLite. A release fixa `latest-data` publica apenas o banco pronto para consumo em `cotacoes.sqlite.xz`.
+O crawler roda pelo GitHub Actions. Quando configurado, o OneDrive guarda o backup completo com raws, cache, logs operacionais e SQLite. A release fixa `latest-data` publica apenas o banco pronto para consumo em `cotacoes.sqlite.xz`.
 
 Links uteis:
 
 - [Actions](https://github.com/SamuelScar/cotacoes-ceasa-scraper/actions)
 - [Release latest-data](https://github.com/SamuelScar/cotacoes-ceasa-scraper/releases/tag/latest-data)
 - [Pacotes e Backups](https://github.com/SamuelScar/cotacoes-ceasa-scraper/wiki/Pacotes-e-Backups)
+
+## Logs das execucoes
+
+Cada rodada do crawler possui um diretorio proprio em
+`data/logs/execucao/<timestamp>_<run-id>_<run-attempt>/`. Execucoes locais usam
+um identificador `local` unico e nao dependem das variaveis do GitHub Actions.
+
+Os principais arquivos sao:
+
+```text
+resumo.md                  relatorio consolidado para leitura e email
+resultado.json             resultado estruturado da rodada
+execucao.json              estado, etapa atual, historico e arquivos gerados
+console.log                saida do crawler e dos gates no workflow
+etapas/scraper.md          relatorio detalhado da coleta
+etapas/saude.json          avaliacao de saude
+etapas/gate-checkpoint.json
+etapas/gate-publicacao.json
+etapas/supabase.md
+etapas/publicacao.json     restauracao, pacotes, uploads e publicacao
+```
+
+O arquivo `_INCOMPLETA` indica uma rodada ainda em andamento ou interrompida
+antes da consolidacao. A retencao nunca remove diretorios com esse marcador,
+sem `execucao.json` valido ou sem a autorizacao `retention_safe`.
+
+No workflow, `COTACOES_EXECUTION_RETENTION_DAYS` controla a idade maxima e
+`COTACOES_EXECUTION_RETENTION_COUNT` a quantidade maxima de execucoes mantidas
+no pacote completo. Ambos aceitam somente inteiros maiores ou iguais a 1; um
+valor invalido interrompe a limpeza sem remover logs. Os padroes sao 30 dias e
+120 execucoes. O artifact contém somente o diretorio da rodada atual e permanece
+por 30 dias. Falhas no envio do email ou na preservacao do artifact tambem sao
+incorporadas ao estado final e ao resumo do workflow.
+
+Os arquivos existentes em `data/relatorios/` continuam legiveis durante a
+migracao, mas o workflow nao os utiliza para escolher resumo, email ou artifact.
 
 ## Auditoria dos dados
 

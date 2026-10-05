@@ -1,11 +1,18 @@
 name: Enviar relatorio por email
-description: Envia o ultimo relatorio Markdown por SMTP, se os secrets estiverem configurados.
+description: Envia um relatorio Markdown explicito por SMTP, se os secrets estiverem configurados.
+
+inputs:
+  report-path:
+    required: true
+    description: Caminho do relatorio Markdown da execucao atual.
 
 runs:
   using: composite
   steps:
     - name: Enviar email
       shell: bash
+      env:
+        REPORT_PATH: ${{ inputs.report-path }}
       run: |
         set -euo pipefail
 
@@ -19,25 +26,19 @@ runs:
           exit 0
         fi
 
-        latest_report=""
-        if [ -d data/relatorios ]; then
-          latest_report=$(find data/relatorios -maxdepth 1 -type f -name "*.md" -printf "%T@ %p\n" | sort -n | tail -n 1 | cut -d " " -f 2-)
-        fi
-
-        if [ -z "${latest_report}" ]; then
-          echo "Nenhum relatorio encontrado em data/relatorios."
+        if [ ! -f "$REPORT_PATH" ]; then
+          echo "Relatorio da execucao atual nao encontrado: $REPORT_PATH"
           exit 0
         fi
 
-        echo "Enviando relatorio: ${latest_report}"
-        export latest_report
+        echo "Enviando relatorio: ${REPORT_PATH}"
         python - <<'PY'
         import os
         import smtplib
         from email.message import EmailMessage
         from pathlib import Path
 
-        report_path = Path(os.environ["latest_report"])
+        report_path = Path(os.environ["REPORT_PATH"])
         status = os.environ.get("WORKFLOW_STATUS", "desconhecido")
 
         message = EmailMessage()

@@ -1,4 +1,6 @@
+import os
 import shlex
+import shutil
 import sys
 from pathlib import Path
 
@@ -25,6 +27,13 @@ from cotacoes_ceasa.cli.parser import (
     format_quotes_back,
 )
 from cotacoes_ceasa.config import AppConfig, load_config
+from cotacoes_ceasa.execution import (
+    EXECUTION_LOG_ROOT,
+    ExecutionContext,
+    cleanup_completed_executions,
+    sanitize_log_text,
+    write_text_atomic,
+)
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 from cotacoes_ceasa.workflows.collection import PartialDownloadError
 from cotacoes_ceasa.workflows.backfill import (
@@ -54,12 +63,20 @@ HEALTH_REPORT_PATH = REPORT_DIR / "saude_ultima.json"
 
 def main() -> None:
     """Executa os comandos disponiveis no projeto."""
-    output = TerminalOutput()
+    execution = ExecutionContext.from_environment()
+    execution.initialize()
+    output = TerminalOutput(
+        log_file_path=(
+            None
+            if execution.externally_managed
+            else execution.directory / "console.log"
+        )
+    )
     output.enable_execution_report(build_initial_report_configuration())
 
     try:
         try:
-            run(output)
+            run(output, execution)
         except KeyboardInterrupt:
             output.set_execution_status("Interrompida pelo usuario")
             output.error("Execucao interrompida pelo usuario.")
@@ -74,29 +91,118 @@ def main() -> None:
         except PartialDownloadError as error:
             output.set_execution_status("Encerrada com erro")
             output.error(
-                f"{type(error.original_error).__name__}: {error.original_error}"
+                sanitize_log_text(
+                    f"{type(error.original_error).__name__}: {error.original_error}"
+                )
             )
             output.summary()
             raise SystemExit(1)
         except Exception as error:
             output.set_execution_status("Encerrada com erro")
-            output.error(f"{type(error).__name__}: {error}")
+            output.error(sanitize_log_text(f"{type(error).__name__}: {error}"))
             output.summary()
             raise SystemExit(1)
     finally:
-        save_execution_report(output)
+        error_type, error, _ = sys.exc_info()
+        exit_code = _resolve_exit_code(error)
+        status = (
+            "cancelled"
+            if exit_code == 130
+            else "failed"
+            if exit_code != 0
+            else "completed"
+        )
+        final_error = (
+            sanitize_log_text(f"{error_type.__name__}: {error}")
+            if error_type is not None and exit_code != 0
+            else None
+        )
+        report_error = save_execution_report(output, execution)
+        if report_error:
+            final_error = (
+                f"{final_error}; {report_error}" if final_error else report_error
+            )
+            if status == "completed":
+                status = "failed"
+                exit_code = 1
+        execution.finish_step(status, exit_code, final_error)
+        if not execution.externally_managed and report_error is None:
+            report_path = execution.steps_directory / f"{execution.step_name}.md"
+            execution.finalize(
+                status,
+                exit_code,
+                final_error,
+                required_files=(
+                    execution.directory / "console.log",
+                    report_path,
+                    report_path.with_suffix(".relatorio.json"),
+                    execution.directory / "resumo.md",
+                    execution.directory / "resultado.json",
+                ),
+            )
+            try:
+                cleanup_completed_executions(
+                    root=EXECUTION_LOG_ROOT,
+                    current_directory=execution.directory,
+                    max_age_days=_retention_limit(
+                        "COTACOES_EXECUTION_RETENTION_DAYS", 30
+                    ),
+                    max_count=_retention_limit(
+                        "COTACOES_EXECUTION_RETENTION_COUNT", 120
+                    ),
+                )
+            except OSError as cleanup_error:
+                output.warning(
+                    "Nao foi possivel aplicar a retencao dos logs: "
+                    f"{sanitize_log_text(cleanup_error)}"
+                )
+        if report_error is not None and error_type is None:
+            raise SystemExit(1)
 
 
-def run(output: TerminalOutput) -> None:
+def run(output: TerminalOutput, execution: ExecutionContext) -> None:
     """Seleciona e executa o fluxo solicitado pela CLI."""
     config = load_config()
     args = build_parser(config).parse_args()
     config = prepare_collection_mode(args, config)
+    if execution.step_name == "cli":
+        execution.set_step_name(resolve_execution_step(args))
+
+    if (
+        not execution.externally_managed
+        and args.download_and_process
+        and args.source is None
+        and args.health_report_path == HEALTH_REPORT_PATH.as_posix()
+    ):
+        args.health_report_path = (
+            execution.steps_directory / "saude.json"
+        ).as_posix()
+
+    if (
+        not execution.externally_managed
+        and (args.validate_publication or args.validate_checkpoint)
+        and args.publication_gate_report_path
+        == "data/relatorios/gate_publicacao_ultima.json"
+    ):
+        gate_name = (
+            "gate-checkpoint.json"
+            if args.validate_checkpoint
+            else "gate-publicacao.json"
+        )
+        args.publication_gate_report_path = (
+            execution.steps_directory / gate_name
+        ).as_posix()
+
+    execution.record_stage(execution.step_name)
 
     output.configure_execution_report(
         report_name=resolve_report_name(args),
         report_title=resolve_report_flow(args),
-        configuration=build_report_configuration(args, config),
+        configuration=(
+            *build_report_configuration(args, config),
+            ("Identificador da execucao", execution.execution_id),
+            ("Diretorio da execucao", execution.directory.as_posix()),
+        ),
     )
 
     if args.base_url and args.source is None:
@@ -535,12 +641,13 @@ def record_run_health(
     json_error = None
 
     try:
-        write_health_assessment(assessment, HEALTH_REPORT_PATH)
+        health_report_path = Path(args.health_report_path)
+        write_health_assessment(assessment, health_report_path)
     except OSError as error:
         json_error = f"{type(error).__name__}: {error}"
 
         try:
-            HEALTH_REPORT_PATH.unlink()
+            Path(args.health_report_path).unlink()
         except FileNotFoundError:
             pass
         except OSError as invalidation_error:
@@ -550,12 +657,12 @@ def record_run_health(
             )
 
         output.progress(
-            f"Nao foi possivel salvar {HEALTH_REPORT_PATH}: {json_error}",
+            f"Nao foi possivel salvar {args.health_report_path}: {json_error}",
         )
 
     output.record_health_assessment(
         assessment,
-        HEALTH_REPORT_PATH,
+        Path(args.health_report_path),
         json_error=json_error,
     )
 
@@ -889,6 +996,16 @@ def resolve_report_name(args) -> str:
     return "coleta"
 
 
+def resolve_execution_step(args) -> str:
+    if args.validate_publication:
+        return "gate-publicacao"
+    if args.validate_checkpoint:
+        return "gate-checkpoint"
+    if args.sync_supabase or args.replace_supabase:
+        return "supabase"
+    return "scraper"
+
+
 def build_initial_report_configuration() -> tuple[tuple[str, object], ...]:
     arguments = _sanitize_arguments(sys.argv[1:])
     command = shlex.join([sys.argv[0], *arguments])
@@ -925,14 +1042,48 @@ def _sanitize_arguments(arguments: list[str]) -> list[str]:
     return sanitized
 
 
-def save_execution_report(output: TerminalOutput) -> None:
+def save_execution_report(
+    output: TerminalOutput,
+    execution: ExecutionContext,
+) -> str | None:
+    report_path = execution.steps_directory / f"{execution.step_name}.md"
     try:
-        report_path = output.write_execution_report(REPORT_DIR)
+        report_path = output.write_execution_report_to(report_path)
+        execution.register_file(report_path)
+        structured_report_path = report_path.with_suffix(".relatorio.json")
+        execution.register_file(structured_report_path)
+        if not execution.externally_managed:
+            summary_path = execution.directory / "resumo.md"
+            result_path = execution.directory / "resultado.json"
+            write_text_atomic(summary_path, report_path.read_text(encoding="utf-8"))
+            shutil.copyfile(structured_report_path, result_path)
+            execution.register_file(summary_path)
+            execution.register_file(result_path)
     except Exception as error:
-        output.error(f"Nao foi possivel salvar o relatorio: {error}")
-        return
+        message = sanitize_log_text(f"Nao foi possivel salvar o relatorio: {error}")
+        output.error(message)
+        return message
 
     output.report_saved(report_path)
+    return None
+
+
+def _resolve_exit_code(error: BaseException | None) -> int:
+    if error is None:
+        return 0
+    if isinstance(error, SystemExit):
+        return error.code if isinstance(error.code, int) else 1
+    if isinstance(error, KeyboardInterrupt):
+        return 130
+    return 1
+
+
+def _retention_limit(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value >= 1 else default
 
 
 if __name__ == "__main__":

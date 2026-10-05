@@ -1,3 +1,4 @@
+import json
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -127,17 +128,74 @@ class ExecutionReport:
             self._record_event("RESUMO", label, value)
 
     def write(self, report_dir: Path) -> Path:
-        finished_at = report_now()
         report_dir.mkdir(parents=True, exist_ok=True)
         file_path = report_dir / (
             f"{self.report_name}_{self.started_at.strftime('%Y%m%d_%H%M%S_%f')}.md"
         )
-        file_path.write_text(
-            self._build_markdown(finished_at),
-            encoding="utf-8",
+        return self.write_to(file_path)
+
+    def write_to(self, file_path: Path) -> Path:
+        finished_at = report_now()
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_text_atomic(file_path, self._build_markdown(finished_at))
+
+        structured_path = file_path.with_suffix(".relatorio.json")
+        _write_text_atomic(
+            structured_path,
+            json.dumps(
+                self._build_structured_result(finished_at),
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
         )
 
         return file_path
+
+    def _build_structured_result(self, finished_at: datetime) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "report_name": self.report_name,
+            "report_title": self.report_title,
+            "started_at": self.started_at.isoformat(timespec="seconds"),
+            "finished_at": finished_at.isoformat(timespec="seconds"),
+            "duration_seconds": (finished_at - self.started_at).total_seconds(),
+            "status": self._resolve_status(),
+            "message_counts": dict(self.message_counts),
+            "configuration": [
+                {"label": label, "value": value}
+                for label, value in self.configuration
+            ],
+            "summaries": [
+                {
+                    "title": summary.title,
+                    "details": [
+                        {"label": label, "value": value}
+                        for label, value in summary.details
+                    ],
+                    "rows": [
+                        {"label": label, "value": value}
+                        for label, value in summary.rows
+                    ],
+                }
+                for summary in self.summaries
+            ],
+            "health": (
+                self.health_assessment.to_dict()
+                if self.health_assessment is not None
+                else None
+            ),
+            "events": [
+                {
+                    "occurred_at": event.occurred_at.isoformat(timespec="seconds"),
+                    "type": event.event_type,
+                    "label": event.label,
+                    "detail": event.detail,
+                    "counted": event.counted,
+                }
+                for event in self.events
+            ],
+        }
 
     def _record_event(
         self,
@@ -160,13 +218,7 @@ class ExecutionReport:
         duration_seconds = (finished_at - self.started_at).total_seconds()
         warning_count = self.message_counts["AVISO"]
         error_count = self.message_counts["ERRO"]
-        status = self.final_status or (
-            "Encerrada com erro"
-            if error_count
-            else "Concluida com avisos"
-            if warning_count
-            else "Concluida sem avisos"
-        )
+        status = self._resolve_status()
         operation_count = sum(
             event.event_type == "OPERACAO" for event in self.events
         )
@@ -196,6 +248,17 @@ class ExecutionReport:
         self._append_history(lines)
 
         return "\n".join(lines).rstrip() + "\n"
+
+    def _resolve_status(self) -> str:
+        warning_count = self.message_counts["AVISO"]
+        error_count = self.message_counts["ERRO"]
+        return self.final_status or (
+            "Encerrada com erro"
+            if error_count
+            else "Concluida com avisos"
+            if warning_count
+            else "Concluida sem avisos"
+        )
 
     def _append_consolidated_results(self, lines: list[str]) -> None:
         results = self._build_consolidated_results()
@@ -507,3 +570,13 @@ def _summarize_alert_reason(detail: str) -> str:
         return "PDF invalido: Invalid Elementary Object"
 
     return reason
+
+
+def _write_text_atomic(destination: Path, content: str) -> None:
+    temporary = destination.with_suffix(f"{destination.suffix}.tmp")
+    try:
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(destination)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
