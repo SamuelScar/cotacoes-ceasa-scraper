@@ -1,11 +1,20 @@
 #!/bin/sh
 set -u
 
-REPORT_DIR="/app/data/relatorios"
+if [ -n "${COTACOES_EXECUTION_DIR:-}" ]; then
+    case "$COTACOES_EXECUTION_DIR" in
+        /app/*) REPORT_DIR="${COTACOES_EXECUTION_DIR}/etapas" ;;
+        *) REPORT_DIR="/app/${COTACOES_EXECUTION_DIR}/etapas" ;;
+    esac
+    REPORT_PATH="${REPORT_DIR}/supabase.md"
+    SUMMARY_PATH="${REPORT_DIR}/supabase-pgloader.json"
+else
+    REPORT_DIR="/app/data/relatorios"
+    TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+    REPORT_PATH="${REPORT_DIR}/migracao_supabase_pgloader_${TIMESTAMP}.md"
+    SUMMARY_PATH="${REPORT_DIR}/migracao_supabase_pgloader_${TIMESTAMP}.json"
+fi
 STARTED_AT="$(date --iso-8601=seconds)"
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-REPORT_PATH="${REPORT_DIR}/migracao_supabase_pgloader_${TIMESTAMP}.md"
-SUMMARY_PATH="${REPORT_DIR}/migracao_supabase_pgloader_${TIMESTAMP}.json"
 
 mkdir -p "$REPORT_DIR"
 

@@ -34,6 +34,8 @@ jobs:
       DATA_ONEDRIVE_BACKUP_ENABLED: ${{ vars.DATA_ONEDRIVE_BACKUP_ENABLED || 'false' }}
       DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
       DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
+      COTACOES_EXECUTION_RETENTION_DAYS: ${{ vars.COTACOES_EXECUTION_RETENTION_DAYS || '30' }}
+      COTACOES_EXECUTION_RETENTION_COUNT: ${{ vars.COTACOES_EXECUTION_RETENTION_COUNT || '120' }}
 
     steps:
       - name: Liberar execucao
@@ -47,6 +49,30 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: false
+
+      - name: Preparar contexto da execucao
+        id: contexto_execucao
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          timestamp="$(TZ=America/Sao_Paulo date +%Y%m%d_%H%M%S)"
+          execution_id="${timestamp}_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          execution_dir="data/logs/execucao/${execution_id}"
+
+          {
+            echo "COTACOES_EXECUTION_ID=${execution_id}"
+            echo "COTACOES_EXECUTION_DIR=${execution_dir}"
+            echo "COTACOES_EXECUTION_MANAGED=true"
+          } >> "$GITHUB_ENV"
+          {
+            echo "execution_id=${execution_id}"
+            echo "execution_dir=${execution_dir}"
+          } >> "$GITHUB_OUTPUT"
+
+          PYTHONPATH=src python -m cotacoes_ceasa.execution init \
+            --directory "$execution_dir" \
+            --execution-id "$execution_id"
 
       - name: Resolver variaveis do scraper
         if: steps.janela.outputs.should_run == 'true'
@@ -190,7 +216,21 @@ jobs:
 
       - name: Build da imagem Docker
         if: steps.janela.outputs.should_run == 'true'
-        run: docker compose build
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python -m cotacoes_ceasa.execution record \
+            --directory "$COTACOES_EXECUTION_DIR" \
+            --execution-id "$COTACOES_EXECUTION_ID" \
+            --stage building-image
+          docker compose build
+
+      - name: Registrar inicio da restauracao
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          PYTHONPATH=src python -m cotacoes_ceasa.execution record \
+            --directory "$COTACOES_EXECUTION_DIR" \
+            --execution-id "$COTACOES_EXECUTION_ID" \
+            --stage restoring-data
 
       - name: Restaurar pacote atual
         id: restaurar_data
@@ -212,7 +252,7 @@ jobs:
         if: steps.janela.outputs.should_run == 'true'
         continue-on-error: true
         run: |
-          set -euo pipefail
+          set -uo pipefail
           started_at="$(date +%s)"
 
           finish() {
@@ -223,8 +263,18 @@ jobs:
           }
 
           trap finish EXIT
-          docker compose run --rm app \
-            --download-and-process --collection-mode current
+          docker compose run --rm \
+            -e COTACOES_EXECUTION_ID \
+            -e COTACOES_EXECUTION_DIR \
+            -e COTACOES_EXECUTION_MANAGED \
+            -e COTACOES_EXECUTION_STEP=scraper \
+            app \
+            --download-and-process \
+            --collection-mode current \
+            --health-report-path "$COTACOES_EXECUTION_DIR/etapas/saude.json" \
+            2>&1 | tee -a "$COTACOES_EXECUTION_DIR/console.log"
+          scraper_status="${PIPESTATUS[0]}"
+          exit "$scraper_status"
 
       - name: Conferir pasta data gerada
         id: conferir_data
@@ -259,17 +309,26 @@ jobs:
           du -sh data
           echo "Arquivos principais:"
           find data -maxdepth 2 -type f | sort | head -n 50
-          echo "Relatorios recentes:"
-          find data/relatorios -maxdepth 1 -type f -printf "%TY-%Tm-%Td %TH:%TM %p\n" 2>/dev/null | sort | tail -n 10 || true
+          echo "Logs da execucao atual:"
+          find "$COTACOES_EXECUTION_DIR" -maxdepth 2 -type f | sort || true
 
       - name: Validar checkpoint interno
         id: gate_checkpoint
         if: steps.janela.outputs.should_run == 'true'
         run: |
-          set -euo pipefail
-          docker compose run --rm app \
+          set -uo pipefail
+          docker compose run --rm \
+            -e COTACOES_EXECUTION_ID \
+            -e COTACOES_EXECUTION_DIR \
+            -e COTACOES_EXECUTION_MANAGED \
+            -e COTACOES_EXECUTION_STEP=gate-checkpoint \
+            app \
             --validate-checkpoint \
-            --publication-gate-report-path data/relatorios/gate_checkpoint_ultima.json
+            --health-report-path "$COTACOES_EXECUTION_DIR/etapas/saude.json" \
+            --publication-gate-report-path "$COTACOES_EXECUTION_DIR/etapas/gate-checkpoint.json" \
+            2>&1 | tee -a "$COTACOES_EXECUTION_DIR/console.log"
+          gate_status="${PIPESTATUS[0]}"
+          exit "$gate_status"
 
       - name: Validar gate de publicacao
         id: gate_publicacao
@@ -279,14 +338,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          if docker compose run --rm app --validate-publication; then
+          set +e
+          docker compose run --rm \
+            -e COTACOES_EXECUTION_ID \
+            -e COTACOES_EXECUTION_DIR \
+            -e COTACOES_EXECUTION_MANAGED \
+            -e COTACOES_EXECUTION_STEP=gate-publicacao \
+            app \
+            --validate-publication \
+            --health-report-path "$COTACOES_EXECUTION_DIR/etapas/saude.json" \
+            --publication-gate-report-path "$COTACOES_EXECUTION_DIR/etapas/gate-publicacao.json" \
+            2>&1 | tee -a "$COTACOES_EXECUTION_DIR/console.log"
+          gate_exit_code="${PIPESTATUS[0]}"
+          set -e
+
+          if [ "$gate_exit_code" -eq 0 ]; then
             echo "Gate de publicacao aprovado."
             echo "approved=true" >> "$GITHUB_OUTPUT"
             echo "decision=approved" >> "$GITHUB_OUTPUT"
             echo "bypassed=false" >> "$GITHUB_OUTPUT"
             exit 0
-          else
-            gate_exit_code=$?
           fi
 
           if [ "$gate_exit_code" -ne 2 ]; then
@@ -316,19 +387,11 @@ jobs:
             sudo chown "$(id -u):$(id -g)" data || true
           fi
 
-          if [ -d data/relatorios ]; then
-            sudo chown -R "$(id -u):$(id -g)" data/relatorios || true
-          fi
+          sudo chown -R "$(id -u):$(id -g)" "$COTACOES_EXECUTION_DIR" || true
 
-          latest_report=""
-          if [ -d data/relatorios ]; then
-            latest_report=$(find data/relatorios -maxdepth 1 -type f -name "*.md" -printf "%T@ %p\n" | sort -n | tail -n 1 | cut -d " " -f 2-)
-          fi
-
-          if [ -z "$latest_report" ]; then
-            mkdir -p data/relatorios
-            timestamp=$(date -u +%Y%m%d_%H%M%S)
-            latest_report="data/relatorios/workflow_ambiente_${timestamp}.md"
+          latest_report="$COTACOES_EXECUTION_DIR/etapas/scraper.md"
+          if [ ! -f "$latest_report" ]; then
+            latest_report="$COTACOES_EXECUTION_DIR/resumo.md"
             {
               echo "# Ambiente do workflow"
               echo
@@ -414,6 +477,17 @@ jobs:
           } >> "$latest_report"
 
           echo "Ambiente registrado no relatorio: $latest_report"
+
+      - name: Aplicar retencao segura dos logs operacionais
+        if: ${{ !cancelled() && steps.contexto_execucao.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          sudo chown -R "$(id -u):$(id -g)" data/logs/execucao || true
+          PYTHONPATH=src python -m cotacoes_ceasa.execution cleanup \
+            --root data/logs/execucao \
+            --current-directory "$COTACOES_EXECUTION_DIR" \
+            --max-age-days "$COTACOES_EXECUTION_RETENTION_DAYS" \
+            --max-count "$COTACOES_EXECUTION_RETENTION_COUNT"
 
       - name: Compactar pacote completo para OneDrive
         id: pacote_onedrive
@@ -537,19 +611,11 @@ jobs:
             sudo chown "$(id -u):$(id -g)" data || true
           fi
 
-          if [ -d data/relatorios ]; then
-            sudo chown -R "$(id -u):$(id -g)" data/relatorios || true
-          fi
+          sudo chown -R "$(id -u):$(id -g)" "$COTACOES_EXECUTION_DIR" || true
 
-          latest_report=""
-          if [ -d data/relatorios ]; then
-            latest_report=$(find data/relatorios -maxdepth 1 -type f -name "*.md" -printf "%T@ %p\n" | sort -n | tail -n 1 | cut -d " " -f 2-)
-          fi
-
-          if [ -z "$latest_report" ]; then
-            mkdir -p data/relatorios
-            timestamp=$(date -u +%Y%m%d_%H%M%S)
-            latest_report="data/relatorios/workflow_salvamento_${timestamp}.md"
+          latest_report="$COTACOES_EXECUTION_DIR/etapas/scraper.md"
+          if [ ! -f "$latest_report" ]; then
+            latest_report="$COTACOES_EXECUTION_DIR/resumo.md"
             {
               echo "# Salvamento do workflow"
               echo
@@ -634,18 +700,69 @@ jobs:
 
           echo "Salvamento registrado no relatorio: $latest_report"
 
-      - name: Preservar diagnosticos da rodada
-        if: always() && steps.janela.outputs.should_run == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: relatorios-coleta-${{ github.run_id }}-${{ github.run_attempt }}
-          path: data/relatorios/
-          if-no-files-found: warn
-          retention-days: 30
+      - name: Preparar resumo da execucao
+        if: always() && steps.contexto_execucao.outcome == 'success'
+        env:
+          WORKFLOW_CURRENT_STATUS: ${{ job.status }}
+          COTACOES_RESULT_RESTORE_OUTCOME: ${{ steps.restaurar_data.outcome }}
+          COTACOES_RESULT_RESTORE_SOURCE: ${{ steps.restaurar_data.outputs.restored_source }}
+          COTACOES_RESULT_RESTORE_ASSET: ${{ steps.restaurar_data.outputs.restored_asset }}
+          COTACOES_RESULT_RESTORE_DURATION: ${{ steps.restaurar_data.outputs.duration_seconds }}
+          COTACOES_RESULT_RESTORE_SIZE: ${{ steps.restaurar_data.outputs.data_size }}
+          COTACOES_RESULT_SCRAPER_OUTCOME: ${{ steps.executar_scraper.outcome }}
+          COTACOES_RESULT_CHECKPOINT_OUTCOME: ${{ steps.gate_checkpoint.outcome }}
+          COTACOES_RESULT_GATE_OUTCOME: ${{ steps.gate_publicacao.outcome }}
+          COTACOES_RESULT_GATE_DECISION: ${{ steps.gate_publicacao.outputs.decision }}
+          COTACOES_RESULT_GATE_BYPASSED: ${{ steps.gate_publicacao.outputs.bypassed }}
+          COTACOES_RESULT_ONEDRIVE_PACKAGE_OUTCOME: ${{ steps.pacote_onedrive.outcome }}
+          COTACOES_RESULT_ONEDRIVE_PACKAGE_DURATION: ${{ steps.pacote_onedrive.outputs.duration_seconds }}
+          COTACOES_RESULT_ONEDRIVE_PACKAGE_SIZE: ${{ steps.pacote_onedrive.outputs.package_size }}
+          COTACOES_RESULT_ONEDRIVE_UPLOAD_OUTCOME: ${{ steps.backup_onedrive.outcome }}
+          COTACOES_RESULT_ONEDRIVE_UPLOAD_DURATION: ${{ steps.backup_onedrive.outputs.duration_seconds }}
+          COTACOES_RESULT_ONEDRIVE_LATEST_PATH: ${{ steps.backup_onedrive.outputs.latest_path }}
+          COTACOES_RESULT_ONEDRIVE_HISTORY_PATH: ${{ steps.backup_onedrive.outputs.history_path }}
+          COTACOES_RESULT_GITHUB_PACKAGE_OUTCOME: ${{ steps.banco_github.outcome }}
+          COTACOES_RESULT_GITHUB_PACKAGE_DURATION: ${{ steps.banco_github.outputs.duration_seconds }}
+          COTACOES_RESULT_GITHUB_DATABASE_SIZE: ${{ steps.banco_github.outputs.database_size }}
+          COTACOES_RESULT_GITHUB_UPLOAD_OUTCOME: ${{ steps.publicar_github.outcome }}
+          COTACOES_RESULT_GITHUB_UPLOAD_DURATION: ${{ steps.publicar_github.outputs.duration_seconds }}
+          COTACOES_RESULT_REMOVED_LEGACY_ASSETS: ${{ steps.publicar_github.outputs.removed_legacy_assets }}
+          COTACOES_RESULT_SAVE_OUTCOME: ${{ steps.validar_salvamento.outcome }}
+        run: |
+          set -euo pipefail
+          sudo chown -R "$(id -u):$(id -g)" "$COTACOES_EXECUTION_DIR" || true
+
+          execution_status=completed
+          exit_code=0
+          final_error=""
+          if [ "$WORKFLOW_CURRENT_STATUS" = "cancelled" ]; then
+            execution_status=cancelled
+            exit_code=130
+            final_error="O workflow foi cancelado antes da conclusao de todas as etapas."
+          elif [ "$WORKFLOW_CURRENT_STATUS" != "success" ]; then
+            execution_status=failed
+            exit_code=1
+            final_error="Uma ou mais etapas do workflow terminaram com falha."
+          fi
+
+          arguments=(
+            --directory "$COTACOES_EXECUTION_DIR"
+            --execution-id "$COTACOES_EXECUTION_ID"
+            --status "$execution_status"
+            --exit-code "$exit_code"
+            --defer-finalization
+          )
+          if [ -n "$final_error" ]; then
+            arguments+=(--error "$final_error")
+          fi
+          PYTHONPATH=src python scripts/finalizar_execucao.py "${arguments[@]}"
 
       - name: Enviar relatorio por email
-        if: always() && steps.janela.outputs.should_run == 'true'
+        id: enviar_relatorio
+        if: always() && steps.contexto_execucao.outcome == 'success'
         uses: ./.github/actions/send-report-email
+        with:
+          report-path: ${{ env.COTACOES_EXECUTION_DIR }}/resumo.md
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -655,3 +772,94 @@ jobs:
           REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
           COTACOES_SEND_REPORT_EMAIL: ${{ steps.scraper-vars.outputs.send_report_email }}
           WORKFLOW_STATUS: ${{ job.status }}
+
+      - name: Consolidar logs da execucao
+        if: always() && steps.contexto_execucao.outcome == 'success'
+        env:
+          WORKFLOW_CURRENT_STATUS: ${{ job.status }}
+          COTACOES_RESULT_EMAIL_OUTCOME: ${{ steps.enviar_relatorio.outcome }}
+          COTACOES_RESULT_ARTIFACT_OUTCOME: pending
+        run: |
+          set -euo pipefail
+          sudo chown -R "$(id -u):$(id -g)" "$COTACOES_EXECUTION_DIR" || true
+
+          execution_status=completed
+          exit_code=0
+          final_error=""
+          if [ "$WORKFLOW_CURRENT_STATUS" = "cancelled" ]; then
+            execution_status=cancelled
+            exit_code=130
+            final_error="O workflow foi cancelado antes da conclusao de todas as etapas."
+          elif [ "$WORKFLOW_CURRENT_STATUS" != "success" ]; then
+            execution_status=failed
+            exit_code=1
+            final_error="Uma ou mais etapas do workflow, incluindo o envio do relatorio, terminaram com falha."
+          fi
+
+          arguments=(
+            --directory "$COTACOES_EXECUTION_DIR"
+            --execution-id "$COTACOES_EXECUTION_ID"
+            --status "$execution_status"
+            --exit-code "$exit_code"
+          )
+          if [ -n "$final_error" ]; then
+            arguments+=(--error "$final_error")
+          fi
+          PYTHONPATH=src python scripts/finalizar_execucao.py "${arguments[@]}"
+
+      - name: Preservar diagnosticos da rodada
+        id: preservar_diagnosticos
+        if: always() && steps.contexto_execucao.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorios-coleta-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.COTACOES_EXECUTION_DIR }}/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Registrar resultado da preservacao dos diagnosticos
+        if: always() && steps.contexto_execucao.outcome == 'success'
+        env:
+          WORKFLOW_CURRENT_STATUS: ${{ job.status }}
+          ARTIFACT_OUTCOME: ${{ steps.preservar_diagnosticos.outcome }}
+          COTACOES_RESULT_ARTIFACT_OUTCOME: ${{ steps.preservar_diagnosticos.outcome }}
+        run: |
+          set -euo pipefail
+
+          execution_status=completed
+          exit_code=0
+          final_error=""
+          if [ "$WORKFLOW_CURRENT_STATUS" = "cancelled" ]; then
+            execution_status=cancelled
+            exit_code=130
+            final_error="O workflow foi cancelado antes da conclusao de todas as etapas."
+          elif [ "$WORKFLOW_CURRENT_STATUS" != "success" ] || [ "$ARTIFACT_OUTCOME" != "success" ]; then
+            execution_status=failed
+            exit_code=1
+            final_error="Uma ou mais etapas do workflow terminaram com falha. Resultado do artifact: ${ARTIFACT_OUTCOME}."
+          fi
+
+          arguments=(
+            --directory "$COTACOES_EXECUTION_DIR"
+            --execution-id "$COTACOES_EXECUTION_ID"
+            --status "$execution_status"
+            --exit-code "$exit_code"
+          )
+          if [ -n "$final_error" ]; then
+            arguments+=(--error "$final_error")
+          fi
+          PYTHONPATH=src python scripts/finalizar_execucao.py "${arguments[@]}"
+
+          if [ "$ARTIFACT_OUTCOME" != "success" ]; then
+            exit 1
+          fi
+
+      - name: Publicar resumo da execucao
+        if: always() && steps.contexto_execucao.outcome == 'success'
+        run: |
+          if [ -f "$COTACOES_EXECUTION_DIR/resumo.md" ]; then
+            cat "$COTACOES_EXECUTION_DIR/resumo.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "A execucao nao gerou resumo." >> "$GITHUB_STEP_SUMMARY"
+          fi
