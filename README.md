@@ -65,6 +65,8 @@ etapas/scraper.md          relatorio detalhado da coleta
 etapas/saude.json          avaliacao de saude
 etapas/gate-checkpoint.json
 etapas/gate-publicacao.json
+etapas/backup-workflow.json  resultado das camadas e da retencao no OneDrive
+etapas/backup-*.json         manifesto auditavel enviado ao OneDrive
 etapas/supabase.md
 etapas/publicacao.json     restauracao, pacotes, uploads e publicacao
 ```

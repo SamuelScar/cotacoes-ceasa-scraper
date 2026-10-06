@@ -30,10 +30,12 @@ jobs:
     env:
       DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'latest-data' }}
       DATA_ASSET_NAME: ${{ vars.DATA_ASSET_NAME || 'cotacoes.sqlite.xz' }}
-      DATA_ONEDRIVE_ASSET_NAME: ${{ vars.DATA_ONEDRIVE_ASSET_NAME || 'ceasa-data-full-latest.tar.xz' }}
       DATA_ONEDRIVE_BACKUP_ENABLED: ${{ vars.DATA_ONEDRIVE_BACKUP_ENABLED || 'false' }}
       DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
       DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
+      DATA_ONEDRIVE_DAILY_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DAILY_RETENTION_DAYS || '7' }}
+      DATA_ONEDRIVE_DEEP_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DEEP_RETENTION_DAYS || '30' }}
+      DATA_ONEDRIVE_AUDIT_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_AUDIT_RETENTION_DAYS || '365' }}
       COTACOES_EXECUTION_RETENTION_DAYS: ${{ vars.COTACOES_EXECUTION_RETENTION_DAYS || '30' }}
       COTACOES_EXECUTION_RETENTION_COUNT: ${{ vars.COTACOES_EXECUTION_RETENTION_COUNT || '120' }}
 
@@ -191,16 +193,11 @@ jobs:
           set -euo pipefail
 
           release_asset_name="$DATA_ASSET_NAME"
-          onedrive_asset_name="$DATA_ONEDRIVE_ASSET_NAME"
+          onedrive_asset_name="ceasa-data-latest.zip"
 
           if [[ "$release_asset_name" == *.gz ]]; then
             echo "DATA_ASSET_NAME nao pode mais usar .gz: $release_asset_name."
             echo "Use um nome .xz, como cotacoes.sqlite.xz."
-            exit 1
-          fi
-
-          if [[ "$onedrive_asset_name" != *.tar.xz ]]; then
-            echo "DATA_ONEDRIVE_ASSET_NAME deve terminar com .tar.xz: $onedrive_asset_name."
             exit 1
           fi
 
@@ -210,7 +207,6 @@ jobs:
           fi
 
           echo "DATA_ASSET_NAME=$release_asset_name" >> "$GITHUB_ENV"
-          echo "DATA_ONEDRIVE_ASSET_NAME=$onedrive_asset_name" >> "$GITHUB_ENV"
           echo "release_asset_name=$release_asset_name" >> "$GITHUB_OUTPUT"
           echo "onedrive_asset_name=$onedrive_asset_name" >> "$GITHUB_OUTPUT"
 
@@ -449,7 +445,7 @@ jobs:
             echo "| Commit | ${GITHUB_SHA} |"
             echo "| Release tag | ${DATA_RELEASE_TAG} |"
             echo "| Banco GitHub | ${DATA_ASSET_NAME} |"
-            echo "| Pacote completo OneDrive | ${DATA_ONEDRIVE_ASSET_NAME} |"
+            echo "| Pacote latest OneDrive | ${{ steps.data_assets.outputs.onedrive_asset_name }} |"
             echo "| Gate do checkpoint | ${{ steps.gate_checkpoint.outcome }} |"
             echo "| Gate de publicacao | ${{ steps.gate_publicacao.outputs.decision || 'nao executado' }} |"
             echo "| Excecao manual do gate | ${{ steps.gate_publicacao.outputs.bypassed || 'false' }} |"
@@ -489,43 +485,112 @@ jobs:
             --max-age-days "$COTACOES_EXECUTION_RETENTION_DAYS" \
             --max-count "$COTACOES_EXECUTION_RETENTION_COUNT"
 
-      - name: Compactar pacote completo para OneDrive
-        id: pacote_onedrive
+      - name: Executar backups em camadas no OneDrive
+        id: backups_onedrive
         if: ${{ !cancelled() && steps.janela.outputs.should_run == 'true' && steps.gate_checkpoint.outcome == 'success' && steps.onedrive_config.outputs.enabled == 'true' }}
         continue-on-error: true
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
         run: |
           set -euo pipefail
-          started_at="$(date +%s)"
 
-          finish() {
-            local finished_at duration package_size
-            finished_at="$(date +%s)"
-            duration=$((finished_at - started_at))
-            package_size="$(du -h "$DATA_ONEDRIVE_ASSET_NAME" 2>/dev/null | cut -f 1 || true)"
+          runtime_dir=".backup-work/${COTACOES_EXECUTION_ID}"
+          config_path="${runtime_dir}/rclone.conf"
+          result_path="${COTACOES_EXECUTION_DIR}/etapas/backup-workflow.json"
 
-            {
-              echo "duration_seconds=${duration}"
-              echo "package_size=${package_size:-nao gerado}"
-            } >> "$GITHUB_OUTPUT"
+          cleanup() {
+            case "$runtime_dir" in
+              .backup-work/*)
+                sudo rm -rf -- "$runtime_dir"
+                ;;
+              *)
+                echo "::warning::Diretorio temporario inesperado: $runtime_dir"
+                ;;
+            esac
           }
+          trap cleanup EXIT
 
-          trap finish EXIT
+          mkdir -p "$runtime_dir"
+          chmod 700 "$runtime_dir"
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "$config_path"
+          chmod 600 "$config_path"
 
-          docker compose run --rm --entrypoint python app \
-            scripts/cotacoes.py compactar --incluir-sqlite --arquivo "$DATA_ONEDRIVE_ASSET_NAME"
-          ls -lh "$DATA_ONEDRIVE_ASSET_NAME"
+          set +e
+          docker compose run --rm \
+            -e COTACOES_EXECUTION_ID \
+            -e COTACOES_EXECUTION_DIR \
+            -e DATA_ONEDRIVE_REMOTE \
+            -e DATA_ONEDRIVE_DIR \
+            -e DATA_ONEDRIVE_DAILY_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_DEEP_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_AUDIT_RETENTION_DAYS \
+            -e RCLONE_CONFIG="/app/${config_path}" \
+            --entrypoint python \
+            app scripts/executar_backups.py \
+            --execution-id "$COTACOES_EXECUTION_ID" \
+            --diretorio-execucao "$COTACOES_EXECUTION_DIR" \
+            --origem data \
+            --trabalho "/app/${runtime_dir}/packages" \
+            --resultado "$result_path"
+          backup_exit_code=$?
+          set -e
 
-      - name: Salvar backup do pacote no OneDrive
-        id: backup_onedrive
-        if: ${{ !cancelled() && steps.janela.outputs.should_run == 'true' && steps.gate_checkpoint.outcome == 'success' && steps.onedrive_config.outputs.enabled == 'true' && steps.pacote_onedrive.outcome == 'success' }}
-        continue-on-error: true
-        uses: ./.github/actions/backup-release-data
-        with:
-          mode: upload
-          asset-name: ${{ steps.data_assets.outputs.onedrive_asset_name }}
-          rclone-config: ${{ secrets.RCLONE_CONFIG }}
-          rclone-remote: ${{ env.DATA_ONEDRIVE_REMOTE }}
-          backup-dir: ${{ env.DATA_ONEDRIVE_DIR }}
+          sudo chown -R "$(id -u):$(id -g)" data || true
+
+          python - "$result_path" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          result_path = Path(sys.argv[1])
+          output_path = Path(sys.argv[2])
+          result = json.loads(result_path.read_text(encoding="utf-8"))
+
+          def scalar(value):
+              if value is None:
+                  return ""
+              if isinstance(value, bool):
+                  return str(value).lower()
+              return str(value).replace("\r", " ").replace("\n", " ")
+
+          def layer_value(layer_name, section, field):
+              layer = result.get("layers", {}).get(layer_name, {})
+              return layer.get(section, {}).get(field)
+
+          values = {
+              "status": result.get("status"),
+              "result_path": result_path.as_posix(),
+              "manifest_path": result.get("manifest_path"),
+              "latest_status": result.get("layers", {}).get("latest", {}).get("status"),
+              "latest_size_bytes": layer_value("latest", "package", "size_bytes"),
+              "latest_compression_seconds": layer_value("latest", "package", "compression_duration_seconds"),
+              "latest_upload_seconds": layer_value("latest", "publication", "duration_seconds"),
+              "latest_path": layer_value("latest", "publication", "final_path"),
+              "daily_status": result.get("layers", {}).get("daily", {}).get("status"),
+              "daily_size_bytes": layer_value("daily", "package", "size_bytes"),
+              "daily_compression_seconds": layer_value("daily", "package", "compression_duration_seconds"),
+              "daily_upload_seconds": layer_value("daily", "publication", "duration_seconds"),
+              "daily_path": layer_value("daily", "publication", "final_path"),
+              "deep_status": result.get("layers", {}).get("deep", {}).get("status"),
+              "deep_size_bytes": layer_value("deep", "package", "size_bytes"),
+              "deep_compression_seconds": layer_value("deep", "package", "compression_duration_seconds"),
+              "deep_upload_seconds": layer_value("deep", "publication", "duration_seconds"),
+              "deep_path": layer_value("deep", "publication", "final_path"),
+              "retention_status": (result.get("retention") or {}).get("status"),
+              "removed_files": len((result.get("retention") or {}).get("removed_files", [])),
+              "audit_status": (result.get("audit_publication") or {}).get("status"),
+              "audit_path": (result.get("audit_publication") or {}).get("final_path"),
+              "quota_before_used": (result.get("quota", {}).get("before") or {}).get("used"),
+              "quota_before_free": (result.get("quota", {}).get("before") or {}).get("free"),
+              "quota_after_used": (result.get("quota", {}).get("after") or {}).get("used"),
+              "quota_after_free": (result.get("quota", {}).get("after") or {}).get("free"),
+          }
+          with output_path.open("a", encoding="utf-8") as output_file:
+              for name, value in values.items():
+                  output_file.write(f"{name}={scalar(value)}\n")
+          PY
+
+          exit "$backup_exit_code"
 
       - name: Compactar banco para GitHub
         id: banco_github
@@ -572,13 +637,18 @@ jobs:
 
           scraper_outcome="${{ steps.executar_scraper.outcome }}"
           publication_approved="${{ steps.gate_publicacao.outputs.approved || 'false' }}"
-          onedrive_outcome="${{ steps.backup_onedrive.outcome }}"
+          onedrive_outcome="${{ steps.backups_onedrive.outcome }}"
+          latest_status="${{ steps.backups_onedrive.outputs.latest_status }}"
           github_outcome="${{ steps.publicar_github.outcome }}"
           saved=false
 
-          if [ "${{ steps.onedrive_config.outputs.enabled }}" = "true" ] && [ "$onedrive_outcome" = "success" ]; then
+          if [ "${{ steps.onedrive_config.outputs.enabled }}" = "true" ]; then
+            if [ "$onedrive_outcome" != "success" ] || [ "$latest_status" != "completed" ]; then
+              echo "A camada latest solicitada nao foi salva corretamente no OneDrive."
+              exit 1
+            fi
             saved=true
-            echo "Pacote completo salvo no OneDrive."
+            echo "Camadas de backup salvas no OneDrive."
           fi
 
           if [ "$github_outcome" = "success" ]; then
@@ -623,18 +693,13 @@ jobs:
             } > "$latest_report"
           fi
 
-          onedrive_size="nao gerado"
-          if [ -f "$DATA_ONEDRIVE_ASSET_NAME" ]; then
-            onedrive_size=$(du -h "$DATA_ONEDRIVE_ASSET_NAME" | cut -f 1)
-          fi
-
           github_size="nao gerado"
           if [ -f "$DATA_ASSET_NAME" ]; then
             github_size=$(du -h "$DATA_ASSET_NAME" | cut -f 1)
           fi
 
           saved_outside_runner="nao"
-          if [ "${{ steps.backup_onedrive.outcome }}" = "success" ] || [ "${{ steps.publicar_github.outcome }}" = "success" ]; then
+          if [ "${{ steps.backups_onedrive.outcome }}" = "success" ] || [ "${{ steps.publicar_github.outcome }}" = "success" ]; then
             saved_outside_runner="sim"
           fi
 
@@ -654,8 +719,8 @@ jobs:
             echo "| OneDrive ativo efetivo | ${{ steps.onedrive_config.outputs.enabled }} |"
             echo "| OneDrive remote | ${DATA_ONEDRIVE_REMOTE} |"
             echo "| OneDrive diretorio | ${DATA_ONEDRIVE_DIR} |"
-            echo "| Pacote completo OneDrive | ${DATA_ONEDRIVE_ASSET_NAME} |"
-            echo "| Tamanho pacote OneDrive | ${onedrive_size} |"
+            echo "| Pacote latest OneDrive | ${{ steps.data_assets.outputs.onedrive_asset_name }} |"
+            echo "| Tamanho latest (bytes) | ${{ steps.backups_onedrive.outputs.latest_size_bytes || 'nao gerado' }} |"
             echo "| Banco GitHub | ${DATA_ASSET_NAME} |"
             echo "| Tamanho banco GitHub | ${github_size} |"
             echo "| Release tag | ${DATA_RELEASE_TAG} |"
@@ -669,8 +734,12 @@ jobs:
             echo "| Gate do checkpoint | ${{ steps.gate_checkpoint.outcome }} |"
             echo "| Gate de publicacao | ${{ steps.gate_publicacao.outputs.decision || 'nao executado' }} |"
             echo "| Excecao manual do gate | ${{ steps.gate_publicacao.outputs.bypassed || 'false' }} |"
-            echo "| Compactar pacote completo OneDrive | ${{ steps.pacote_onedrive.outcome }} |"
-            echo "| Salvar backup OneDrive | ${{ steps.backup_onedrive.outcome }} |"
+            echo "| Executar backups em camadas | ${{ steps.backups_onedrive.outcome }} |"
+            echo "| Publicar latest | ${{ steps.backups_onedrive.outputs.latest_status || 'nao executado' }} |"
+            echo "| Publicar daily | ${{ steps.backups_onedrive.outputs.daily_status || 'nao executado' }} |"
+            echo "| Publicar deep | ${{ steps.backups_onedrive.outputs.deep_status || 'nao executado' }} |"
+            echo "| Publicar manifesto audit | ${{ steps.backups_onedrive.outputs.audit_status || 'nao executado' }} |"
+            echo "| Aplicar retencao | ${{ steps.backups_onedrive.outputs.retention_status || 'nao executado' }} |"
             echo "| Compactar banco GitHub | ${{ steps.banco_github.outcome }} |"
             echo "| Publicar release GitHub | ${{ steps.publicar_github.outcome }} |"
             echo "| Validar salvamento | ${{ steps.validar_salvamento.outcome }} |"
@@ -687,11 +756,21 @@ jobs:
             echo "| Tempo conferencia data (s) | ${{ steps.conferir_data.outputs.duration_seconds || 'nao medido' }} |"
             echo "| Tamanho data final | ${{ steps.conferir_data.outputs.data_size || 'nao medido' }} |"
             echo "| Arquivos em data final | ${{ steps.conferir_data.outputs.data_files || 'nao medido' }} |"
-            echo "| Tempo compactacao OneDrive (s) | ${{ steps.pacote_onedrive.outputs.duration_seconds || 'nao medido' }} |"
-            echo "| Tamanho pacote OneDrive | ${{ steps.pacote_onedrive.outputs.package_size || 'nao gerado' }} |"
-            echo "| Tempo upload OneDrive (s) | ${{ steps.backup_onedrive.outputs.duration_seconds || 'nao medido' }} |"
-            echo "| Caminho OneDrive latest | ${{ steps.backup_onedrive.outputs.latest_path || 'nao gerado' }} |"
-            echo "| Caminho OneDrive history novo | ${{ steps.backup_onedrive.outputs.history_path || 'nao gerado' }} |"
+            echo "| Compactacao latest (s) | ${{ steps.backups_onedrive.outputs.latest_compression_seconds || 'nao medido' }} |"
+            echo "| Upload latest (s) | ${{ steps.backups_onedrive.outputs.latest_upload_seconds || 'nao medido' }} |"
+            echo "| Caminho latest | ${{ steps.backups_onedrive.outputs.latest_path || 'nao gerado' }} |"
+            echo "| Compactacao daily (s) | ${{ steps.backups_onedrive.outputs.daily_compression_seconds || 'nao medido' }} |"
+            echo "| Upload daily (s) | ${{ steps.backups_onedrive.outputs.daily_upload_seconds || 'nao medido' }} |"
+            echo "| Caminho daily | ${{ steps.backups_onedrive.outputs.daily_path || 'nao gerado' }} |"
+            echo "| Compactacao deep (s) | ${{ steps.backups_onedrive.outputs.deep_compression_seconds || 'nao medido' }} |"
+            echo "| Upload deep (s) | ${{ steps.backups_onedrive.outputs.deep_upload_seconds || 'nao medido' }} |"
+            echo "| Caminho deep | ${{ steps.backups_onedrive.outputs.deep_path || 'nao gerado' }} |"
+            echo "| Caminho audit | ${{ steps.backups_onedrive.outputs.audit_path || 'nao gerado' }} |"
+            echo "| Arquivos removidos pela retencao | ${{ steps.backups_onedrive.outputs.removed_files || '0' }} |"
+            echo "| OneDrive usado antes (bytes) | ${{ steps.backups_onedrive.outputs.quota_before_used || 'indisponivel' }} |"
+            echo "| OneDrive livre antes (bytes) | ${{ steps.backups_onedrive.outputs.quota_before_free || 'indisponivel' }} |"
+            echo "| OneDrive usado depois (bytes) | ${{ steps.backups_onedrive.outputs.quota_after_used || 'indisponivel' }} |"
+            echo "| OneDrive livre depois (bytes) | ${{ steps.backups_onedrive.outputs.quota_after_free || 'indisponivel' }} |"
             echo "| Tempo compactacao banco (s) | ${{ steps.banco_github.outputs.duration_seconds || 'nao medido' }} |"
             echo "| Tamanho banco compactado | ${{ steps.banco_github.outputs.database_size || 'nao gerado' }} |"
             echo "| Tempo publicacao release (s) | ${{ steps.publicar_github.outputs.duration_seconds || 'nao medido' }} |"
@@ -709,18 +788,22 @@ jobs:
           COTACOES_RESULT_RESTORE_ASSET: ${{ steps.restaurar_data.outputs.restored_asset }}
           COTACOES_RESULT_RESTORE_DURATION: ${{ steps.restaurar_data.outputs.duration_seconds }}
           COTACOES_RESULT_RESTORE_SIZE: ${{ steps.restaurar_data.outputs.data_size }}
+          COTACOES_RESULT_RESTORE_VALIDATION: ${{ steps.restaurar_data.outputs.validation_status }}
+          COTACOES_RESULT_RESTORE_CHECKSUM: ${{ steps.restaurar_data.outputs.checksum_validation }}
+          COTACOES_RESULT_RESTORE_MANIFEST: ${{ steps.restaurar_data.outputs.manifest_status }}
           COTACOES_RESULT_SCRAPER_OUTCOME: ${{ steps.executar_scraper.outcome }}
           COTACOES_RESULT_CHECKPOINT_OUTCOME: ${{ steps.gate_checkpoint.outcome }}
           COTACOES_RESULT_GATE_OUTCOME: ${{ steps.gate_publicacao.outcome }}
           COTACOES_RESULT_GATE_DECISION: ${{ steps.gate_publicacao.outputs.decision }}
           COTACOES_RESULT_GATE_BYPASSED: ${{ steps.gate_publicacao.outputs.bypassed }}
-          COTACOES_RESULT_ONEDRIVE_PACKAGE_OUTCOME: ${{ steps.pacote_onedrive.outcome }}
-          COTACOES_RESULT_ONEDRIVE_PACKAGE_DURATION: ${{ steps.pacote_onedrive.outputs.duration_seconds }}
-          COTACOES_RESULT_ONEDRIVE_PACKAGE_SIZE: ${{ steps.pacote_onedrive.outputs.package_size }}
-          COTACOES_RESULT_ONEDRIVE_UPLOAD_OUTCOME: ${{ steps.backup_onedrive.outcome }}
-          COTACOES_RESULT_ONEDRIVE_UPLOAD_DURATION: ${{ steps.backup_onedrive.outputs.duration_seconds }}
-          COTACOES_RESULT_ONEDRIVE_LATEST_PATH: ${{ steps.backup_onedrive.outputs.latest_path }}
-          COTACOES_RESULT_ONEDRIVE_HISTORY_PATH: ${{ steps.backup_onedrive.outputs.history_path }}
+          COTACOES_RESULT_ONEDRIVE_PACKAGE_OUTCOME: ${{ steps.backups_onedrive.outcome }}
+          COTACOES_RESULT_ONEDRIVE_PACKAGE_DURATION: ${{ steps.backups_onedrive.outputs.latest_compression_seconds }}
+          COTACOES_RESULT_ONEDRIVE_PACKAGE_SIZE: ${{ steps.backups_onedrive.outputs.latest_size_bytes }}
+          COTACOES_RESULT_ONEDRIVE_UPLOAD_OUTCOME: ${{ steps.backups_onedrive.outputs.latest_status }}
+          COTACOES_RESULT_ONEDRIVE_UPLOAD_DURATION: ${{ steps.backups_onedrive.outputs.latest_upload_seconds }}
+          COTACOES_RESULT_ONEDRIVE_LATEST_PATH: ${{ steps.backups_onedrive.outputs.latest_path }}
+          COTACOES_RESULT_ONEDRIVE_HISTORY_PATH: ${{ steps.backups_onedrive.outputs.daily_path }}
+          COTACOES_RESULT_ONEDRIVE_BACKUP_RESULT: ${{ steps.backups_onedrive.outputs.result_path }}
           COTACOES_RESULT_GITHUB_PACKAGE_OUTCOME: ${{ steps.banco_github.outcome }}
           COTACOES_RESULT_GITHUB_PACKAGE_DURATION: ${{ steps.banco_github.outputs.duration_seconds }}
           COTACOES_RESULT_GITHUB_DATABASE_SIZE: ${{ steps.banco_github.outputs.database_size }}
