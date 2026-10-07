@@ -11,13 +11,20 @@ on:
         options:
           - plan
           - apply
+          - history-plan
+          - history-apply
       plan_sha256:
         description: SHA-256 exibido pela execucao plan aprovada
         required: false
         default: ""
         type: string
       confirmation:
-        description: Para apply, informe EXCLUIR_LEGADOS_VENCIDOS
+        description: Confirmacao exigida pela operacao apply selecionada
+        required: false
+        default: ""
+        type: string
+      cleanup_confirmation:
+        description: Para history-apply, informe EXCLUIR_HISTORICOS_MIGRADOS
         required: false
         default: ""
         type: string
@@ -32,6 +39,7 @@ concurrency:
 jobs:
   migrar-backups:
     name: Migrar backups legados
+    if: inputs.mode == 'plan' || inputs.mode == 'apply'
     runs-on: ubuntu-latest
     environment: Crawler
     timeout-minutes: 360
@@ -255,3 +263,704 @@ jobs:
             echo "Migracao concluida para o plano: ${{ steps.apply.outputs.plan_sha256 }}"
             echo "Revise os artifacts antes de desativar DATA_MIGRATION_LOCKED manualmente."
           fi
+
+  planejar-historico:
+    name: Planejar migracao historica
+    if: inputs.mode == 'history-plan' || inputs.mode == 'history-apply'
+    runs-on: ubuntu-latest
+    environment: Crawler
+    timeout-minutes: 60
+    outputs:
+      plan_sha256: ${{ steps.plano_historico.outputs.plan_sha256 }}
+      plan_artifact_name: ${{ steps.plano_historico.outputs.artifact_name }}
+    env:
+      DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
+      DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
+      DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
+      DATA_ONEDRIVE_DAILY_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DAILY_RETENTION_DAYS || '7' }}
+      DATA_ONEDRIVE_DEEP_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DEEP_RETENTION_DAYS || '30' }}
+      MIGRATION_RUNTIME_DIR: .migration-work/${{ github.run_id }}_${{ github.run_attempt }}
+      MIGRATION_MODE: ${{ inputs.mode }}
+
+    steps:
+      - name: Exigir trava da migracao
+        run: |
+          set -euo pipefail
+
+          if [ "${DATA_MIGRATION_LOCKED,,}" != "true" ]; then
+            echo "::error::Ative DATA_MIGRATION_LOCKED=true antes da migracao historica."
+            exit 1
+          fi
+
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Build da imagem Docker
+        run: docker compose build
+
+      - name: Registrar versao do rclone
+        run: docker compose run --rm --entrypoint rclone app version
+
+      - name: Preparar acesso ao OneDrive
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+            echo "::error::O secret RCLONE_CONFIG nao esta configurado."
+            exit 1
+          fi
+
+          runtime_dir="$MIGRATION_RUNTIME_DIR"
+          mkdir -p "${runtime_dir}/history-plan"
+          chmod 700 "$runtime_dir"
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "${runtime_dir}/rclone.conf"
+          chmod 600 "${runtime_dir}/rclone.conf"
+
+      - name: Gerar e conferir plano historico
+        id: plano_historico
+        continue-on-error: true
+        env:
+          EXPECTED_PLAN_SHA256: ${{ inputs.plan_sha256 }}
+          MIGRATION_CONFIRMATION: ${{ inputs.confirmation }}
+          CLEANUP_CONFIRMATION: ${{ inputs.cleanup_confirmation }}
+        run: |
+          set -euo pipefail
+
+          results_dir="${MIGRATION_RUNTIME_DIR}/history-plan"
+          config_path="${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          result_path="${results_dir}/migration-history-plan.json"
+          report_path="${results_dir}/migration-history-plan.md"
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e RCLONE_CONFIG="/app/${config_path}" \
+            -e DATA_ONEDRIVE_REMOTE \
+            -e DATA_ONEDRIVE_DIR \
+            -e DATA_ONEDRIVE_DAILY_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_DEEP_RETENTION_DAYS \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_SHA \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python \
+            app scripts/migrar_backups_legados.py history-plan \
+            --lotes 3 \
+            --resultado "/app/${result_path}" \
+            --relatorio "/app/${report_path}" \
+            --workspace /app
+
+          plan_status="$(python3 -c '
+          import json
+          import pathlib
+          import sys
+          data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          print(data["status"])
+          ' "$result_path")"
+          plan_sha256="$(python3 -c '
+          import json
+          import pathlib
+          import sys
+          data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          print(data["plan_sha256"])
+          ' "$result_path")"
+          echo "plan_sha256=${plan_sha256}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=migration-history-plan-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+          if [ "$plan_status" != "completed" ]; then
+            echo "::error::O plano historico possui destinos bloqueados."
+            exit 1
+          fi
+
+          if [ "$MIGRATION_MODE" = "history-apply" ]; then
+            if [ "$EXPECTED_PLAN_SHA256" != "$plan_sha256" ]; then
+              echo "::error::O inventario mudou desde o plano historico aprovado."
+              exit 1
+            fi
+            if [ "$MIGRATION_CONFIRMATION" != "MIGRAR_HISTORICOS_VALIDOS" ]; then
+              echo "::error::Informe MIGRAR_HISTORICOS_VALIDOS para executar os lotes."
+              exit 1
+            fi
+            if [ "$CLEANUP_CONFIRMATION" != "EXCLUIR_HISTORICOS_MIGRADOS" ]; then
+              echo "::error::Informe EXCLUIR_HISTORICOS_MIGRADOS para autorizar a limpeza final."
+              exit 1
+            fi
+          fi
+
+      - name: Publicar resumo do plano historico
+        if: always()
+        run: |
+          report_path="${MIGRATION_RUNTIME_DIR}/history-plan/migration-history-plan.md"
+          if [ -f "$report_path" ]; then
+            cat "$report_path" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "O plano historico nao gerou relatorio." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo
+            echo 'Mantenha `DATA_MIGRATION_LOCKED=true` durante todos os lotes.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preservar plano aprovado como artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.plano_historico.outputs.artifact_name }}
+          path: ${{ env.MIGRATION_RUNTIME_DIR }}/history-plan/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Remover configuracao temporaria
+        if: always()
+        run: rm -f -- "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+
+      - name: Consolidar plano historico
+        if: always()
+        run: |
+          if [ "${{ steps.plano_historico.outcome }}" != "success" ]; then
+            echo "::error::O plano historico nao foi aprovado para continuar."
+            exit 1
+          fi
+          echo "Plano historico confirmado: ${{ steps.plano_historico.outputs.plan_sha256 }}"
+
+  migrar-historico-lote-1:
+    name: Migrar historico - lote 1
+    if: inputs.mode == 'history-apply'
+    needs: planejar-historico
+    runs-on: ubuntu-latest
+    environment: Crawler
+    timeout-minutes: 360
+    env:
+      BATCH_NUMBER: "1"
+      DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
+      DATA_ONEDRIVE_DAILY_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DAILY_RETENTION_DAYS || '7' }}
+      DATA_ONEDRIVE_DEEP_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DEEP_RETENTION_DAYS || '30' }}
+      DATA_ONEDRIVE_AUDIT_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_AUDIT_RETENTION_DAYS || '365' }}
+      MIGRATION_RUNTIME_DIR: .migration-work/${{ github.run_id }}_${{ github.run_attempt }}
+
+    steps:
+      - name: Exigir trava da migracao
+        run: |
+          set -euo pipefail
+          if [ "${DATA_MIGRATION_LOCKED,,}" != "true" ]; then
+            echo "::error::Ative DATA_MIGRATION_LOCKED=true antes de executar o lote."
+            exit 1
+          fi
+
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Build da imagem Docker
+        run: docker compose build
+
+      - name: Baixar plano historico aprovado
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.planejar-historico.outputs.plan_artifact_name }}
+          path: ${{ env.MIGRATION_RUNTIME_DIR }}/approved-plan
+
+      - name: Preparar acesso ao OneDrive
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+            echo "::error::O secret RCLONE_CONFIG nao esta configurado."
+            exit 1
+          fi
+          mkdir -p "${MIGRATION_RUNTIME_DIR}/batch-${BATCH_NUMBER}"
+          chmod 700 "$MIGRATION_RUNTIME_DIR"
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          chmod 600 "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+
+      - name: Registrar versao do rclone
+        run: docker compose run --rm --entrypoint rclone app version
+
+      - name: Executar lote historico
+        id: executar_lote
+        continue-on-error: true
+        env:
+          APPROVED_PLAN_SHA256: ${{ needs.planejar-historico.outputs.plan_sha256 }}
+          MIGRATION_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+
+          results_dir="${MIGRATION_RUNTIME_DIR}/batch-${BATCH_NUMBER}"
+          config_path="${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          plan_path="${MIGRATION_RUNTIME_DIR}/approved-plan/migration-history-plan.json"
+          result_path="${results_dir}/migration-history-batch-${BATCH_NUMBER}.json"
+          report_path="${results_dir}/migration-history-batch-${BATCH_NUMBER}.md"
+          operation_root="${MIGRATION_RUNTIME_DIR}/history-batch-${BATCH_NUMBER}"
+          execution_id="history_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}_batch_${BATCH_NUMBER}"
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e RCLONE_CONFIG="/app/${config_path}" \
+            -e DATA_MIGRATION_LOCKED \
+            -e DATA_ONEDRIVE_DAILY_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_DEEP_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_AUDIT_RETENTION_DAYS \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_SHA \
+            -e GITHUB_REF \
+            -e GITHUB_WORKFLOW \
+            -e GITHUB_JOB \
+            -e RUNNER_OS \
+            -e RUNNER_ARCH \
+            -e RUNNER_NAME \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python \
+            app scripts/migrar_backups_legados.py history-batch \
+            --plano-aprovado "/app/${plan_path}" \
+            --plan-sha256 "$APPROVED_PLAN_SHA256" \
+            --confirmacao "$MIGRATION_CONFIRMATION" \
+            --lote "$BATCH_NUMBER" \
+            --execution-id "$execution_id" \
+            --trabalho "/app/${operation_root}" \
+            --resultado "/app/${result_path}" \
+            --relatorio "/app/${report_path}" \
+            --workspace /app
+
+      - name: Publicar resumo do lote
+        if: always()
+        run: |
+          report_path="${MIGRATION_RUNTIME_DIR}/batch-${BATCH_NUMBER}/migration-history-batch-${BATCH_NUMBER}.md"
+          if [ -f "$report_path" ]; then
+            cat "$report_path" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "O lote ${BATCH_NUMBER} nao gerou relatorio." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Preservar evidencias do lote
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-history-batch-${{ env.BATCH_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.MIGRATION_RUNTIME_DIR }}/batch-${{ env.BATCH_NUMBER }}/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Remover configuracao temporaria
+        if: always()
+        run: rm -f -- "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+
+      - name: Consolidar lote
+        if: always()
+        run: |
+          if [ "${{ steps.executar_lote.outcome }}" != "success" ]; then
+            echo "::error::O lote ${BATCH_NUMBER} falhou. Os lotes seguintes nao serao executados."
+            exit 1
+          fi
+          echo "Lote ${BATCH_NUMBER} concluido sem remover arquivos legados."
+
+  migrar-historico-lote-2:
+    name: Migrar historico - lote 2
+    if: inputs.mode == 'history-apply'
+    needs:
+      - planejar-historico
+      - migrar-historico-lote-1
+    runs-on: ubuntu-latest
+    environment: Crawler
+    timeout-minutes: 360
+    env:
+      BATCH_NUMBER: "2"
+      DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
+      DATA_ONEDRIVE_DAILY_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DAILY_RETENTION_DAYS || '7' }}
+      DATA_ONEDRIVE_DEEP_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DEEP_RETENTION_DAYS || '30' }}
+      DATA_ONEDRIVE_AUDIT_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_AUDIT_RETENTION_DAYS || '365' }}
+      MIGRATION_RUNTIME_DIR: .migration-work/${{ github.run_id }}_${{ github.run_attempt }}
+    steps:
+      - name: Exigir trava da migracao
+        run: |
+          set -euo pipefail
+          if [ "${DATA_MIGRATION_LOCKED,,}" != "true" ]; then
+            echo "::error::Ative DATA_MIGRATION_LOCKED=true antes de executar o lote."
+            exit 1
+          fi
+
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Build da imagem Docker
+        run: docker compose build
+
+      - name: Baixar plano historico aprovado
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.planejar-historico.outputs.plan_artifact_name }}
+          path: ${{ env.MIGRATION_RUNTIME_DIR }}/approved-plan
+
+      - name: Preparar acesso ao OneDrive
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+            echo "::error::O secret RCLONE_CONFIG nao esta configurado."
+            exit 1
+          fi
+          mkdir -p "${MIGRATION_RUNTIME_DIR}/batch-${BATCH_NUMBER}"
+          chmod 700 "$MIGRATION_RUNTIME_DIR"
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          chmod 600 "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+
+      - name: Registrar versao do rclone
+        run: docker compose run --rm --entrypoint rclone app version
+
+      - name: Executar lote historico
+        id: executar_lote
+        continue-on-error: true
+        env:
+          APPROVED_PLAN_SHA256: ${{ needs.planejar-historico.outputs.plan_sha256 }}
+          MIGRATION_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+
+          results_dir="${MIGRATION_RUNTIME_DIR}/batch-${BATCH_NUMBER}"
+          config_path="${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          plan_path="${MIGRATION_RUNTIME_DIR}/approved-plan/migration-history-plan.json"
+          result_path="${results_dir}/migration-history-batch-${BATCH_NUMBER}.json"
+          report_path="${results_dir}/migration-history-batch-${BATCH_NUMBER}.md"
+          operation_root="${MIGRATION_RUNTIME_DIR}/history-batch-${BATCH_NUMBER}"
+          execution_id="history_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}_batch_${BATCH_NUMBER}"
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e RCLONE_CONFIG="/app/${config_path}" \
+            -e DATA_MIGRATION_LOCKED \
+            -e DATA_ONEDRIVE_DAILY_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_DEEP_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_AUDIT_RETENTION_DAYS \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_SHA \
+            -e GITHUB_REF \
+            -e GITHUB_WORKFLOW \
+            -e GITHUB_JOB \
+            -e RUNNER_OS \
+            -e RUNNER_ARCH \
+            -e RUNNER_NAME \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python \
+            app scripts/migrar_backups_legados.py history-batch \
+            --plano-aprovado "/app/${plan_path}" \
+            --plan-sha256 "$APPROVED_PLAN_SHA256" \
+            --confirmacao "$MIGRATION_CONFIRMATION" \
+            --lote "$BATCH_NUMBER" \
+            --execution-id "$execution_id" \
+            --trabalho "/app/${operation_root}" \
+            --resultado "/app/${result_path}" \
+            --relatorio "/app/${report_path}" \
+            --workspace /app
+
+      - name: Publicar resumo do lote
+        if: always()
+        run: |
+          report_path="${MIGRATION_RUNTIME_DIR}/batch-${BATCH_NUMBER}/migration-history-batch-${BATCH_NUMBER}.md"
+          if [ -f "$report_path" ]; then
+            cat "$report_path" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "O lote ${BATCH_NUMBER} nao gerou relatorio." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Preservar evidencias do lote
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-history-batch-${{ env.BATCH_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.MIGRATION_RUNTIME_DIR }}/batch-${{ env.BATCH_NUMBER }}/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Remover configuracao temporaria
+        if: always()
+        run: rm -f -- "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+
+      - name: Consolidar lote
+        if: always()
+        run: |
+          if [ "${{ steps.executar_lote.outcome }}" != "success" ]; then
+            echo "::error::O lote ${BATCH_NUMBER} falhou. Os lotes seguintes nao serao executados."
+            exit 1
+          fi
+          echo "Lote ${BATCH_NUMBER} concluido sem remover arquivos legados."
+
+  migrar-historico-lote-3:
+    name: Migrar historico - lote 3
+    if: inputs.mode == 'history-apply'
+    needs:
+      - planejar-historico
+      - migrar-historico-lote-2
+    runs-on: ubuntu-latest
+    environment: Crawler
+    timeout-minutes: 360
+    env:
+      BATCH_NUMBER: "3"
+      DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
+      DATA_ONEDRIVE_DAILY_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DAILY_RETENTION_DAYS || '7' }}
+      DATA_ONEDRIVE_DEEP_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DEEP_RETENTION_DAYS || '30' }}
+      DATA_ONEDRIVE_AUDIT_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_AUDIT_RETENTION_DAYS || '365' }}
+      MIGRATION_RUNTIME_DIR: .migration-work/${{ github.run_id }}_${{ github.run_attempt }}
+    steps:
+      - name: Exigir trava da migracao
+        run: |
+          set -euo pipefail
+          if [ "${DATA_MIGRATION_LOCKED,,}" != "true" ]; then
+            echo "::error::Ative DATA_MIGRATION_LOCKED=true antes de executar o lote."
+            exit 1
+          fi
+
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Build da imagem Docker
+        run: docker compose build
+
+      - name: Baixar plano historico aprovado
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.planejar-historico.outputs.plan_artifact_name }}
+          path: ${{ env.MIGRATION_RUNTIME_DIR }}/approved-plan
+
+      - name: Preparar acesso ao OneDrive
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+            echo "::error::O secret RCLONE_CONFIG nao esta configurado."
+            exit 1
+          fi
+          mkdir -p "${MIGRATION_RUNTIME_DIR}/batch-${BATCH_NUMBER}"
+          chmod 700 "$MIGRATION_RUNTIME_DIR"
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          chmod 600 "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+
+      - name: Registrar versao do rclone
+        run: docker compose run --rm --entrypoint rclone app version
+
+      - name: Executar lote historico
+        id: executar_lote
+        continue-on-error: true
+        env:
+          APPROVED_PLAN_SHA256: ${{ needs.planejar-historico.outputs.plan_sha256 }}
+          MIGRATION_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+
+          results_dir="${MIGRATION_RUNTIME_DIR}/batch-${BATCH_NUMBER}"
+          config_path="${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          plan_path="${MIGRATION_RUNTIME_DIR}/approved-plan/migration-history-plan.json"
+          result_path="${results_dir}/migration-history-batch-${BATCH_NUMBER}.json"
+          report_path="${results_dir}/migration-history-batch-${BATCH_NUMBER}.md"
+          operation_root="${MIGRATION_RUNTIME_DIR}/history-batch-${BATCH_NUMBER}"
+          execution_id="history_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}_batch_${BATCH_NUMBER}"
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e RCLONE_CONFIG="/app/${config_path}" \
+            -e DATA_MIGRATION_LOCKED \
+            -e DATA_ONEDRIVE_DAILY_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_DEEP_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_AUDIT_RETENTION_DAYS \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_SHA \
+            -e GITHUB_REF \
+            -e GITHUB_WORKFLOW \
+            -e GITHUB_JOB \
+            -e RUNNER_OS \
+            -e RUNNER_ARCH \
+            -e RUNNER_NAME \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python \
+            app scripts/migrar_backups_legados.py history-batch \
+            --plano-aprovado "/app/${plan_path}" \
+            --plan-sha256 "$APPROVED_PLAN_SHA256" \
+            --confirmacao "$MIGRATION_CONFIRMATION" \
+            --lote "$BATCH_NUMBER" \
+            --execution-id "$execution_id" \
+            --trabalho "/app/${operation_root}" \
+            --resultado "/app/${result_path}" \
+            --relatorio "/app/${report_path}" \
+            --workspace /app
+
+      - name: Publicar resumo do lote
+        if: always()
+        run: |
+          report_path="${MIGRATION_RUNTIME_DIR}/batch-${BATCH_NUMBER}/migration-history-batch-${BATCH_NUMBER}.md"
+          if [ -f "$report_path" ]; then
+            cat "$report_path" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "O lote ${BATCH_NUMBER} nao gerou relatorio." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Preservar evidencias do lote
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-history-batch-${{ env.BATCH_NUMBER }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.MIGRATION_RUNTIME_DIR }}/batch-${{ env.BATCH_NUMBER }}/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Remover configuracao temporaria
+        if: always()
+        run: rm -f -- "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+
+      - name: Consolidar lote
+        if: always()
+        run: |
+          if [ "${{ steps.executar_lote.outcome }}" != "success" ]; then
+            echo "::error::O lote ${BATCH_NUMBER} falhou. Os lotes seguintes nao serao executados."
+            exit 1
+          fi
+          echo "Lote ${BATCH_NUMBER} concluido sem remover arquivos legados."
+
+  finalizar-migracao-historica:
+    name: Validar e limpar historico legado
+    if: inputs.mode == 'history-apply'
+    needs:
+      - planejar-historico
+      - migrar-historico-lote-3
+    runs-on: ubuntu-latest
+    environment: Crawler
+    timeout-minutes: 60
+    env:
+      DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
+      MIGRATION_RUNTIME_DIR: .migration-work/${{ github.run_id }}_${{ github.run_attempt }}
+
+    steps:
+      - name: Exigir trava da migracao
+        run: |
+          set -euo pipefail
+          if [ "${DATA_MIGRATION_LOCKED,,}" != "true" ]; then
+            echo "::error::Ative DATA_MIGRATION_LOCKED=true antes da limpeza final."
+            exit 1
+          fi
+
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Build da imagem Docker
+        run: docker compose build
+
+      - name: Baixar plano historico aprovado
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.planejar-historico.outputs.plan_artifact_name }}
+          path: ${{ env.MIGRATION_RUNTIME_DIR }}/approved-plan
+
+      - name: Preparar acesso ao OneDrive
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+            echo "::error::O secret RCLONE_CONFIG nao esta configurado."
+            exit 1
+          fi
+          mkdir -p "${MIGRATION_RUNTIME_DIR}/finalization"
+          chmod 700 "$MIGRATION_RUNTIME_DIR"
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          chmod 600 "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+
+      - name: Registrar versao do rclone
+        run: docker compose run --rm --entrypoint rclone app version
+
+      - name: Validar camadas e remover legados aprovados
+        id: finalizar_historico
+        continue-on-error: true
+        env:
+          APPROVED_PLAN_SHA256: ${{ needs.planejar-historico.outputs.plan_sha256 }}
+          CLEANUP_CONFIRMATION: ${{ inputs.cleanup_confirmation }}
+        run: |
+          set -euo pipefail
+
+          results_dir="${MIGRATION_RUNTIME_DIR}/finalization"
+          config_path="${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          plan_path="${MIGRATION_RUNTIME_DIR}/approved-plan/migration-history-plan.json"
+          result_path="${results_dir}/migration-history-finalization.json"
+          report_path="${results_dir}/migration-history-finalization.md"
+          execution_id="history_finalize_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e RCLONE_CONFIG="/app/${config_path}" \
+            -e DATA_MIGRATION_LOCKED \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_SHA \
+            -e GITHUB_REF \
+            -e GITHUB_WORKFLOW \
+            -e GITHUB_JOB \
+            -e RUNNER_OS \
+            -e RUNNER_ARCH \
+            -e RUNNER_NAME \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python \
+            app scripts/migrar_backups_legados.py history-finalize \
+            --plano-aprovado "/app/${plan_path}" \
+            --plan-sha256 "$APPROVED_PLAN_SHA256" \
+            --confirmacao "$CLEANUP_CONFIRMATION" \
+            --execution-id "$execution_id" \
+            --resultado "/app/${result_path}" \
+            --relatorio "/app/${report_path}" \
+            --workspace /app
+
+      - name: Publicar resumo do encerramento
+        if: always()
+        run: |
+          report_path="${MIGRATION_RUNTIME_DIR}/finalization/migration-history-finalization.md"
+          if [ -f "$report_path" ]; then
+            cat "$report_path" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "O encerramento historico nao gerou relatorio." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo
+            echo 'Revise todas as evidencias antes de alterar `DATA_MIGRATION_LOCKED`.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preservar evidencias consolidadas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-history-finalization-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.MIGRATION_RUNTIME_DIR }}/finalization/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Remover configuracao temporaria
+        if: always()
+        run: rm -f -- "${MIGRATION_RUNTIME_DIR}/rclone.conf"
+
+      - name: Consolidar encerramento
+        if: always()
+        run: |
+          if [ "${{ steps.finalizar_historico.outcome }}" != "success" ]; then
+            echo "::error::O encerramento falhou. Mantenha DATA_MIGRATION_LOCKED=true."
+            exit 1
+          fi
+          echo "Migracao historica concluida. Revise as evidencias antes do desbloqueio manual."

@@ -42,6 +42,7 @@ class ManifestRequest:
     execution_directory: Path
     source_directory: Path
     backup_date: date | None = None
+    required_layers: frozenset[BackupLayer] | None = None
 
 
 def create_backup_manifest(request: ManifestRequest) -> Path:
@@ -57,6 +58,7 @@ def create_backup_manifest(request: ManifestRequest) -> Path:
         )
     started_at = execution_now()
     backup_date = request.backup_date or started_at.date()
+    required_layers = _normalize_required_layers(request.required_layers)
     file_name = f"backup-{started_at.strftime('%Y%m%d-%H%M%S')}.json"
     manifest_path = request.execution_directory / "etapas" / file_name
     if manifest_path.exists():
@@ -114,6 +116,7 @@ def create_backup_manifest(request: ManifestRequest) -> Path:
         "execution_id": execution_id,
         "status": "running",
         "timezone": "America/Sao_Paulo",
+        "backup_date": backup_date.isoformat(),
         "started_at": started_at.isoformat(timespec="seconds"),
         "finished_at": None,
         "file_name": file_name,
@@ -125,6 +128,7 @@ def create_backup_manifest(request: ManifestRequest) -> Path:
             "files": 0,
             "bytes": 0,
         },
+        "required_layers": sorted(layer.value for layer in required_layers),
         "layers": layers,
         "onedrive": {
             "quota_before": None,
@@ -532,8 +536,15 @@ def _validate_completed_manifest(payload: dict[str, Any]) -> None:
             + ", ".join(sorted(incomplete))
             + "."
         )
+    required_layers = _manifest_required_layers(payload)
     latest = layers.get(BackupLayer.LATEST.value)
-    if not isinstance(latest, dict) or latest.get("status") != "uploaded":
+    if (
+        BackupLayer.LATEST in required_layers
+        and (
+            not isinstance(latest, dict)
+            or latest.get("status") != "uploaded"
+        )
+    ):
         raise BackupManifestError(
             "O manifesto nao pode ser concluido sem publicar a camada latest."
         )
@@ -549,6 +560,45 @@ def _validate_completed_manifest(payload: dict[str, Any]) -> None:
         raise BackupManifestError(
             "As quotas do OneDrive antes e depois devem ser registradas."
         )
+
+
+def _normalize_required_layers(
+    value: frozenset[BackupLayer] | None,
+) -> frozenset[BackupLayer]:
+    required = frozenset(BackupLayer) if value is None else value
+    if not required:
+        raise BackupManifestError(
+            "O manifesto exige ao menos uma camada de backup."
+        )
+    invalid = [item for item in required if not isinstance(item, BackupLayer)]
+    if invalid:
+        raise BackupManifestError(
+            "O manifesto recebeu uma camada de backup desconhecida."
+        )
+    return required
+
+
+def _manifest_required_layers(
+    payload: dict[str, Any],
+) -> frozenset[BackupLayer]:
+    raw_layers = payload.get("required_layers")
+    if raw_layers is None:
+        return frozenset(BackupLayer)
+    if not isinstance(raw_layers, list) or not raw_layers:
+        raise BackupManifestError(
+            "As camadas obrigatorias do manifesto sao invalidas."
+        )
+    try:
+        required = frozenset(BackupLayer(item) for item in raw_layers)
+    except (TypeError, ValueError) as error:
+        raise BackupManifestError(
+            "As camadas obrigatorias do manifesto sao desconhecidas."
+        ) from error
+    if len(required) != len(raw_layers):
+        raise BackupManifestError(
+            "As camadas obrigatorias do manifesto estao duplicadas."
+        )
+    return required
 
 
 def _append_error(payload: dict[str, Any], error: str) -> None:

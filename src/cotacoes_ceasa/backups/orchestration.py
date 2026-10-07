@@ -58,6 +58,9 @@ class LayeredBackupRequest:
     remote: str = "onedrive"
     remote_root: str = "cotacoes-ceasa"
     backup_date: date | None = None
+    layers: frozenset[BackupLayer] | None = None
+    apply_retention: bool = True
+    retention_reference_date: date | None = None
     pre_audit_action: Callable[[Path], dict[str, Any]] | None = None
 
 
@@ -70,12 +73,14 @@ def run_layered_backup(request: LayeredBackupRequest) -> dict[str, Any]:
     work_directory = request.work_directory.resolve(strict=False)
     work_directory.mkdir(parents=True, exist_ok=True)
     backup_date = request.backup_date or execution_now().date()
+    requested_layers = _normalize_requested_layers(request.layers)
     manifest_path = create_backup_manifest(
         ManifestRequest(
             execution_id=request.execution_id,
             execution_directory=execution_directory,
             source_directory=source,
             backup_date=backup_date,
+            required_layers=requested_layers,
         )
     )
 
@@ -89,6 +94,7 @@ def run_layered_backup(request: LayeredBackupRequest) -> dict[str, Any]:
         "manifest_path": manifest_path.as_posix(),
         "remote": remote,
         "remote_root": remote_root.as_posix(),
+        "requested_layers": sorted(layer.value for layer in requested_layers),
         "layers": {},
         "quota": {"before": None, "after": None},
         "retention": None,
@@ -117,6 +123,22 @@ def run_layered_backup(request: LayeredBackupRequest) -> dict[str, Any]:
         destination = (
             specification.remote_directory / specification.file_name
         ).as_posix()
+        if layer not in requested_layers:
+            detail = "Camada nao solicitada para esta execucao."
+            record_layer_outcome(
+                manifest_path,
+                layer_name,
+                "skipped",
+                detail,
+            )
+            result["layers"][layer_name] = {
+                "status": "skipped_not_requested",
+                "file_name": specification.file_name,
+                "destination_path": destination,
+                "detail": detail,
+            }
+            write_json_atomic(request.result_path, result)
+            continue
         if remote_setup_error is not None:
             record_layer_outcome(
                 manifest_path,
@@ -178,9 +200,13 @@ def run_layered_backup(request: LayeredBackupRequest) -> dict[str, Any]:
                 remote_root=remote_root.as_posix(),
                 policy=RetentionPolicy.from_environment(),
                 newly_published_layers=frozenset(newly_published),
-                apply_changes=True,
-                manifest_path=manifest_path,
-                reference_date=backup_date,
+                apply_changes=request.apply_retention,
+                manifest_path=(
+                    manifest_path if request.apply_retention else None
+                ),
+                reference_date=(
+                    request.retention_reference_date or backup_date
+                ),
             )
         )
     except Exception as error:
@@ -281,15 +307,31 @@ def run_layered_backup(request: LayeredBackupRequest) -> dict[str, Any]:
             }
         )
 
-    latest_status = result["layers"].get("latest", {}).get("status")
+    successful_layer_statuses = {"completed", "skipped_existing"}
+    requested_layers_completed = all(
+        result["layers"].get(layer.value, {}).get("status")
+        in successful_layer_statuses
+        for layer in requested_layers
+    )
     result["status"] = (
         "completed"
-        if latest_status == "completed" and not result["errors"]
+        if requested_layers_completed and not result["errors"]
         else "failed"
     )
     result["finished_at"] = execution_now().isoformat(timespec="seconds")
     write_json_atomic(request.result_path, result)
     return result
+
+
+def _normalize_requested_layers(
+    value: frozenset[BackupLayer] | None,
+) -> frozenset[BackupLayer]:
+    requested = frozenset(BackupLayer) if value is None else value
+    if not requested:
+        raise ValueError("A execucao exige ao menos uma camada de backup.")
+    if any(not isinstance(layer, BackupLayer) for layer in requested):
+        raise ValueError("A execucao recebeu uma camada de backup invalida.")
+    return requested
 
 
 def _create_and_publish_layer(
