@@ -139,6 +139,7 @@ def create_legacy_migration_plan(
         raise LegacyMigrationPlanError(
             "Mais de um backup latest legado foi encontrado."
         )
+    read_probe = _probe_legacy_latest_read(remote, legacy_latest)
 
     legacy_history = [
         item for item in inventory if item["classification"] == "legacy_history"
@@ -198,6 +199,7 @@ def create_legacy_migration_plan(
         "runner": _runner_information(request.workspace_path),
         "safety": {
             "read_only": True,
+            "legacy_latest_read_probe": read_probe,
             "downloaded_files": 0,
             "moved_files": 0,
             "removed_files": 0,
@@ -972,6 +974,50 @@ def _run_rclone_json(*arguments: str) -> object:
         raise LegacyMigrationPlanError(
             f"Saida JSON invalida do rclone {arguments[0]}: {error}."
         ) from error
+
+
+def _probe_legacy_latest_read(
+    remote: str,
+    legacy_latest: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Comprova acesso ao conteudo sem baixar o pacote completo."""
+    if not legacy_latest:
+        return {
+            "status": "skipped",
+            "reason": "legacy_latest_not_found",
+            "bytes_read": 0,
+        }
+    remote_path = legacy_latest[0]["remote_path"]
+    try:
+        completed = subprocess.run(
+            [
+                "rclone",
+                "cat",
+                f"{remote}:{remote_path}",
+                "--head",
+                "1",
+            ],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = sanitize_log_text(
+            error.stderr.decode("utf-8", errors="replace").strip()
+        )
+        suffix = f": {detail}" if detail else ""
+        raise LegacyMigrationPlanError(
+            "Nao foi possivel ler o conteudo do latest legado"
+            f"{suffix}."
+        ) from error
+    if len(completed.stdout) != 1:
+        raise LegacyMigrationPlanError(
+            "A prova de leitura do latest legado nao retornou um byte."
+        )
+    return {
+        "status": "passed",
+        "remote_path": remote_path,
+        "bytes_read": 1,
+    }
 
 
 def _run_rclone(*arguments: str) -> subprocess.CompletedProcess[str]:

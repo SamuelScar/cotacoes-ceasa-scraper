@@ -135,10 +135,41 @@ runs:
               ;;
           esac
 
-          if [ "$rclone_ready" = "true" ] && ! command -v rclone >/dev/null 2>&1; then
-            if ! sudo apt-get update || ! sudo apt-get install -y rclone; then
-              echo "Nao foi possivel instalar rclone. A release sera tentada como fallback."
-              rclone_ready=false
+          if [ "$rclone_ready" = "true" ]; then
+            rclone_version="1.75.1"
+            case "${RUNNER_ARCH:-X64}" in
+              X64)
+                rclone_arch="amd64"
+                rclone_sha256="982b5aa772841168f8e380f139e9e787b2a105403e32b94da8676a0e1c0a13ab"
+                ;;
+              ARM64)
+                rclone_arch="arm64"
+                rclone_sha256="03f2504174034b6d004152ed7369251c9a9ec1f7e0836eda420f5c7a5ec0dff9"
+                ;;
+              *)
+                echo "Arquitetura sem binario rclone configurado: ${RUNNER_ARCH:-desconhecida}."
+                rclone_ready=false
+                ;;
+            esac
+
+            if [ "$rclone_ready" = "true" ]; then
+              rclone_install_dir="$(mktemp -d "${RUNNER_TEMP}/rclone-install-XXXXXXXX")"
+              rclone_archive="rclone-v${rclone_version}-linux-${rclone_arch}.zip"
+              if curl -fsSLo "${rclone_install_dir}/${rclone_archive}" \
+                  "https://downloads.rclone.org/v${rclone_version}/${rclone_archive}" \
+                && echo "${rclone_sha256}  ${rclone_install_dir}/${rclone_archive}" \
+                  | sha256sum -c - \
+                && unzip -q "${rclone_install_dir}/${rclone_archive}" \
+                  -d "$rclone_install_dir" \
+                && sudo install -m 0755 \
+                  "${rclone_install_dir}/rclone-v${rclone_version}-linux-${rclone_arch}/rclone" \
+                  /usr/local/bin/rclone; then
+                rclone version | head -n 1
+              else
+                echo "Nao foi possivel instalar o rclone oficial. A release sera tentada como fallback."
+                rclone_ready=false
+              fi
+              rm -rf -- "$rclone_install_dir"
             fi
           fi
 

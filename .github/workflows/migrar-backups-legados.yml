@@ -73,6 +73,9 @@ jobs:
       - name: Build da imagem Docker
         run: docker compose build
 
+      - name: Registrar versao do rclone
+        run: docker compose run --rm --entrypoint rclone app version
+
       - name: Preparar acesso ao OneDrive
         env:
           RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
