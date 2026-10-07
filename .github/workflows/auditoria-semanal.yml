@@ -21,7 +21,7 @@ jobs:
     env:
       DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'latest-data' }}
       DATA_ASSET_NAME: ${{ vars.DATA_ASSET_NAME || 'cotacoes.sqlite.xz' }}
-      DATA_ONEDRIVE_ASSET_NAME: ${{ vars.DATA_ONEDRIVE_ASSET_NAME || 'ceasa-data-full-latest.tar.xz' }}
+      DATA_ONEDRIVE_LATEST_ASSET_NAME: ceasa-data-latest.zip
       DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
       DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
 
@@ -52,7 +52,7 @@ jobs:
         with:
           release-tag: ${{ env.DATA_RELEASE_TAG }}
           asset-name: ${{ env.DATA_ASSET_NAME }}
-          backup-asset-name: ${{ env.DATA_ONEDRIVE_ASSET_NAME }}
+          backup-asset-name: ${{ env.DATA_ONEDRIVE_LATEST_ASSET_NAME }}
           backup-enabled: "true"
           rclone-config: ${{ secrets.RCLONE_CONFIG }}
           rclone-remote: ${{ env.DATA_ONEDRIVE_REMOTE }}
@@ -66,6 +66,11 @@ jobs:
           if [ "${{ steps.restaurar_data.outputs.restored_source }}" != "onedrive" ]; then
             echo "::error::A auditoria integral exige o pacote completo do OneDrive com banco, raws e cache."
             echo "Origem restaurada: ${{ steps.restaurar_data.outputs.restored_source }}"
+            exit 1
+          fi
+
+          if [ "${{ steps.restaurar_data.outputs.validation_status }}" != "passed" ] || [ "${{ steps.restaurar_data.outputs.checksum_validation }}" != "passed" ]; then
+            echo "::error::O ZIP latest nao passou pela validacao integral com SHA-256."
             exit 1
           fi
 
@@ -120,7 +125,7 @@ jobs:
           workspace_disk="${workspace_disk:-nao identificado}"
 
           write_env COTACOES_AUDIT_RELEASE_TAG "$DATA_RELEASE_TAG"
-          write_env COTACOES_AUDIT_PACKAGE_NAME "$DATA_ONEDRIVE_ASSET_NAME"
+          write_env COTACOES_AUDIT_PACKAGE_NAME "$DATA_ONEDRIVE_LATEST_ASSET_NAME"
           write_env COTACOES_AUDIT_RESTORED_SOURCE "${{ steps.restaurar_data.outputs.restored_source }}"
           write_env COTACOES_AUDIT_RESTORED_ASSET "${{ steps.restaurar_data.outputs.restored_asset }}"
           write_env COTACOES_AUDIT_RESTORE_DURATION_SECONDS "${{ steps.restaurar_data.outputs.duration_seconds }}"

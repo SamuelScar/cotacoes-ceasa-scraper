@@ -1,0 +1,254 @@
+name: Migrar backups legados do OneDrive
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Operacao da migracao
+        required: true
+        default: plan
+        type: choice
+        options:
+          - plan
+          - apply
+      plan_sha256:
+        description: SHA-256 exibido pela execucao plan aprovada
+        required: false
+        default: ""
+        type: string
+      confirmation:
+        description: Para apply, informe EXCLUIR_LEGADOS_VENCIDOS
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: latest-data-release
+  cancel-in-progress: false
+
+jobs:
+  migrar-backups:
+    name: Migrar backups legados
+    runs-on: ubuntu-latest
+    environment: Crawler
+    timeout-minutes: 360
+    env:
+      DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
+      DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
+      DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
+      DATA_ONEDRIVE_DAILY_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DAILY_RETENTION_DAYS || '7' }}
+      DATA_ONEDRIVE_DEEP_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DEEP_RETENTION_DAYS || '30' }}
+      DATA_ONEDRIVE_AUDIT_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_AUDIT_RETENTION_DAYS || '365' }}
+      MIGRATION_RUNTIME_DIR: .migration-work/${{ github.run_id }}_${{ github.run_attempt }}
+      MIGRATION_MODE: ${{ inputs.mode }}
+
+    steps:
+      - name: Exigir trava da migracao
+        run: |
+          set -euo pipefail
+
+          migration_locked="${DATA_MIGRATION_LOCKED,,}"
+          case "$migration_locked" in
+            true)
+              echo "Trava da migracao confirmada."
+              ;;
+            false)
+              echo "::error::Ative DATA_MIGRATION_LOCKED=true antes de executar a migracao."
+              exit 1
+              ;;
+            *)
+              echo "::error::DATA_MIGRATION_LOCKED deve ser true ou false. Valor recebido: $DATA_MIGRATION_LOCKED"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Build da imagem Docker
+        run: docker compose build
+
+      - name: Preparar acesso ao OneDrive
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+            echo "::error::O secret RCLONE_CONFIG nao esta configurado."
+            exit 1
+          fi
+
+          runtime_dir="$MIGRATION_RUNTIME_DIR"
+          results_dir="${runtime_dir}/results"
+          config_path="${runtime_dir}/rclone.conf"
+          mkdir -p "$results_dir"
+          chmod 700 "$runtime_dir"
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "$config_path"
+          chmod 600 "$config_path"
+
+      - name: Gerar plano somente leitura
+        id: plano
+        if: inputs.mode == 'plan'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          results_dir="${MIGRATION_RUNTIME_DIR}/results"
+          config_path="${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          result_path="${results_dir}/migration-plan.json"
+          report_path="${results_dir}/migration-plan.md"
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e RCLONE_CONFIG="/app/${config_path}" \
+            -e DATA_ONEDRIVE_REMOTE \
+            -e DATA_ONEDRIVE_DIR \
+            -e DATA_ONEDRIVE_DEEP_RETENTION_DAYS \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_SHA \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python \
+            app scripts/migrar_backups_legados.py plan \
+            --resultado "/app/${result_path}" \
+            --relatorio "/app/${report_path}" \
+            --workspace /app
+
+          plan_sha256="$(python3 -c '
+          import json
+          import pathlib
+          import sys
+          data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          print(data["plan_sha256"])
+          ' "$result_path")"
+          echo "plan_sha256=${plan_sha256}" >> "$GITHUB_OUTPUT"
+
+      - name: Converter e publicar novas camadas
+        id: apply
+        if: inputs.mode == 'apply'
+        continue-on-error: true
+        env:
+          EXPECTED_PLAN_SHA256: ${{ inputs.plan_sha256 }}
+          MIGRATION_CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+
+          results_dir="${MIGRATION_RUNTIME_DIR}/results"
+          config_path="${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          result_path="${results_dir}/migration-apply.json"
+          report_path="${results_dir}/migration-apply.md"
+          current_plan_path="${results_dir}/migration-current-plan.json"
+          current_plan_report="${results_dir}/migration-current-plan.md"
+          validation_path="${results_dir}/migration-apply-check.json"
+          validation_report="${results_dir}/migration-apply-check.md"
+          backup_result_path="${results_dir}/migration-layered-backup.json"
+          operation_root="${MIGRATION_RUNTIME_DIR}/operation"
+          execution_id="migration_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e RCLONE_CONFIG="/app/${config_path}" \
+            -e DATA_ONEDRIVE_REMOTE \
+            -e DATA_ONEDRIVE_DIR \
+            -e DATA_ONEDRIVE_DAILY_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_DEEP_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_AUDIT_RETENTION_DAYS \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_SHA \
+            -e GITHUB_REF \
+            -e GITHUB_WORKFLOW \
+            -e GITHUB_JOB \
+            -e RUNNER_OS \
+            -e RUNNER_ARCH \
+            -e RUNNER_NAME \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python \
+            app scripts/migrar_backups_legados.py apply \
+            --plan-sha256 "$EXPECTED_PLAN_SHA256" \
+            --confirmacao "$MIGRATION_CONFIRMATION" \
+            --resultado "/app/${result_path}" \
+            --relatorio "/app/${report_path}" \
+            --plano-atual "/app/${current_plan_path}" \
+            --relatorio-plano-atual "/app/${current_plan_report}" \
+            --validacao "/app/${validation_path}" \
+            --relatorio-validacao "/app/${validation_report}" \
+            --execution-id "$execution_id" \
+            --trabalho "/app/${operation_root}" \
+            --resultado-backup "/app/${backup_result_path}" \
+            --workspace /app
+
+          current_plan_sha256="$(python3 -c '
+          import json
+          import pathlib
+          import sys
+          data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          print(data["plan_sha256"])
+          ' "$result_path")"
+          echo "plan_sha256=${current_plan_sha256}" >> "$GITHUB_OUTPUT"
+
+      - name: Publicar resumo da operacao
+        if: always()
+        run: |
+          if [ "$MIGRATION_MODE" = "apply" ]; then
+            report_path="${MIGRATION_RUNTIME_DIR}/results/migration-apply.md"
+          else
+            report_path="${MIGRATION_RUNTIME_DIR}/results/migration-plan.md"
+          fi
+          if [ -f "$report_path" ]; then
+            cat "$report_path" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "# Migracao dos backups legados"
+              echo
+              echo "A operacao nao gerou o relatorio esperado."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo
+            echo "## Trava do coletor"
+            echo
+            echo 'Este workflow nao altera `DATA_MIGRATION_LOCKED`.'
+            echo 'Mantenha a variavel como `true` ate revisar as evidencias.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preservar evidencias como artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.MIGRATION_RUNTIME_DIR }}/results/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Remover configuracao temporaria
+        if: always()
+        run: |
+          config_path="${MIGRATION_RUNTIME_DIR}/rclone.conf"
+          rm -f -- "$config_path"
+
+      - name: Consolidar operacao
+        if: always()
+        run: |
+          if [ "$MIGRATION_MODE" = "plan" ]; then
+            if [ "${{ steps.plano.outcome }}" != "success" ]; then
+              echo "::error::O plano da migracao nao foi concluido."
+              exit 1
+            fi
+            echo "Plano concluido: ${{ steps.plano.outputs.plan_sha256 }}"
+          else
+            if [ "${{ steps.apply.outcome }}" != "success" ]; then
+              echo "::error::A migracao nao foi concluida. Mantenha DATA_MIGRATION_LOCKED=true."
+              exit 1
+            fi
+            echo "Migracao concluida para o plano: ${{ steps.apply.outputs.plan_sha256 }}"
+            echo "Revise os artifacts antes de desativar DATA_MIGRATION_LOCKED manualmente."
+          fi

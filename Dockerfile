@@ -9,7 +9,14 @@ WORKDIR /app
 COPY . .
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends xz-utils pigz qpdf poppler-utils \
+    && apt-get install -y --no-install-recommends \
+        7zip \
+        pigz \
+        poppler-utils \
+        qpdf \
+        rclone \
+        xz-utils \
+        zpaq \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -e .

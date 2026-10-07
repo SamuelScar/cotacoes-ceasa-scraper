@@ -52,6 +52,10 @@ def main() -> int:
     write_json_atomic(publication_path, publication)
     context.register_file(publication_path)
 
+    backup_result_path = args.directory / "etapas/backup-workflow.json"
+    if backup_result_path.is_file():
+        context.register_file(backup_result_path)
+
     result = build_result(args, publication)
     result_path = args.directory / "resultado.json"
     write_json_atomic(result_path, result)
@@ -104,6 +108,15 @@ def build_publication_result(directory: Path) -> dict[str, Any]:
         if bypass_value
         else bool(previous_gate.get("bypassed", False))
     )
+    configured_backup_result = os.getenv(
+        "COTACOES_RESULT_ONEDRIVE_BACKUP_RESULT", ""
+    ).strip()
+    backup_result_path = (
+        Path(configured_backup_result)
+        if configured_backup_result
+        else directory / "etapas/backup-workflow.json"
+    )
+    layered_backup = load_json(backup_result_path)
     return {
         "schema_version": 1,
         "restore": {
@@ -124,6 +137,24 @@ def build_publication_result(directory: Path) -> dict[str, Any]:
             ),
             "data_size": env_or_previous(
                 "COTACOES_RESULT_RESTORE_SIZE", previous, "restore", "data_size"
+            ),
+            "validation_status": env_or_previous(
+                "COTACOES_RESULT_RESTORE_VALIDATION",
+                previous,
+                "restore",
+                "validation_status",
+            ),
+            "checksum_validation": env_or_previous(
+                "COTACOES_RESULT_RESTORE_CHECKSUM",
+                previous,
+                "restore",
+                "checksum_validation",
+            ),
+            "manifest_status": env_or_previous(
+                "COTACOES_RESULT_RESTORE_MANIFEST",
+                previous,
+                "restore",
+                "manifest_status",
             ),
         },
         "checkpoint": {
@@ -146,6 +177,7 @@ def build_publication_result(directory: Path) -> dict[str, Any]:
             "bypassed": bypassed,
         },
         "onedrive": {
+            "layered_backup": layered_backup,
             "package_outcome": env_or_previous(
                 "COTACOES_RESULT_ONEDRIVE_PACKAGE_OUTCOME",
                 previous,
@@ -316,6 +348,9 @@ def build_summary(
         f"| Commit | {escape(env('GITHUB_SHA'))} |",
         f"| Origem restaurada | {escape(restore['source'])} |",
         f"| Asset restaurado | {escape(restore['asset'])} |",
+        f"| Validacao da restauracao | {escape(restore['validation_status'])} |",
+        f"| SHA-256 da restauracao | {escape(restore['checksum_validation'])} |",
+        f"| Manifesto da restauracao | {escape(restore['manifest_status'])} |",
         f"| Resultado do scraper | {escape(result['scraper_outcome'])} |",
         f"| Gate do checkpoint | {escape(publication['checkpoint']['outcome'])} |",
         f"| Decisao avaliada do gate | {escape(gate['evaluated_decision'])} |",
@@ -330,6 +365,34 @@ def build_summary(
         f"| Preservacao do artifact | {escape(delivery['artifact_outcome'])} |",
         "",
     ]
+    layered_backup = onedrive.get("layered_backup")
+    if isinstance(layered_backup, dict):
+        layers = mapping(layered_backup.get("layers"))
+        quota = mapping(layered_backup.get("quota"))
+        quota_before = mapping(quota.get("before"))
+        quota_after = mapping(quota.get("after"))
+        retention = mapping(layered_backup.get("retention"))
+        audit = mapping(layered_backup.get("audit_publication"))
+        lines.extend(
+            [
+                "## Backups em camadas do OneDrive",
+                "",
+                "| Item | Valor |",
+                "| --- | --- |",
+                f"| Resultado geral | {escape(layered_backup.get('status'))} |",
+                f"| Latest | {escape(mapping(layers.get('latest')).get('status'))} |",
+                f"| Daily | {escape(mapping(layers.get('daily')).get('status'))} |",
+                f"| Deep | {escape(mapping(layers.get('deep')).get('status'))} |",
+                f"| Manifesto audit | {escape(audit.get('status'))} |",
+                f"| Retencao | {escape(retention.get('status'))} |",
+                f"| Arquivos removidos | {len(retention.get('removed_files', [])) if isinstance(retention.get('removed_files'), list) else 0} |",
+                f"| OneDrive usado antes (bytes) | {escape(quota_before.get('used'))} |",
+                f"| OneDrive livre antes (bytes) | {escape(quota_before.get('free'))} |",
+                f"| OneDrive usado depois (bytes) | {escape(quota_after.get('used'))} |",
+                f"| OneDrive livre depois (bytes) | {escape(quota_after.get('free'))} |",
+                "",
+            ]
+        )
     if args.error:
         lines.extend(["## Erro final", "", sanitize_log_text(args.error), ""])
     return "\n".join(lines).rstrip() + "\n"

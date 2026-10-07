@@ -1,5 +1,5 @@
 name: Restaurar dados
-description: Baixa e restaura o pacote completo do OneDrive ou o banco da release fixa.
+description: Restaura atomicamente o pacote completo do OneDrive ou o banco da release fixa.
 
 inputs:
   release-tag:
@@ -10,12 +10,12 @@ inputs:
     description: Nome do banco compactado da release.
   backup-asset-name:
     required: false
-    default: ""
-    description: Nome do pacote completo salvo no OneDrive.
+    default: "ceasa-data-latest.zip"
+    description: Nome do pacote completo salvo em backups/latest/ no OneDrive.
   backup-enabled:
     required: false
     default: "false"
-    description: Define se deve tentar restaurar do OneDrive quando a release falhar.
+    description: Define se deve tentar restaurar do OneDrive antes da release.
   rclone-config:
     required: false
     default: ""
@@ -45,6 +45,21 @@ outputs:
   data_size:
     description: Tamanho final de data/.
     value: ${{ steps.restore_data.outputs.data_size }}
+  validation_status:
+    description: Resultado da validacao integral do pacote.
+    value: ${{ steps.restore_data.outputs.validation_status }}
+  checksum_validation:
+    description: Resultado da conferencia do SHA-256.
+    value: ${{ steps.restore_data.outputs.checksum_validation }}
+  manifest_status:
+    description: Situacao do manifesto usado na restauracao.
+    value: ${{ steps.restore_data.outputs.manifest_status }}
+  rollback_restored:
+    description: Indica se o rollback local precisou ser restaurado.
+    value: ${{ steps.restore_data.outputs.rollback_restored }}
+  result_path:
+    description: Caminho do resultado estruturado da restauracao.
+    value: ${{ steps.restore_data.outputs.result_path }}
 
 runs:
   using: composite
@@ -54,13 +69,32 @@ runs:
       shell: bash
       env:
         RCLONE_CONFIG_CONTENT: ${{ inputs.rclone-config }}
+        INPUT_RELEASE_TAG: ${{ inputs.release-tag }}
+        INPUT_ASSET_NAME: ${{ inputs.asset-name }}
+        INPUT_BACKUP_ASSET_NAME: ${{ inputs.backup-asset-name }}
+        INPUT_BACKUP_ENABLED: ${{ inputs.backup-enabled }}
+        INPUT_RCLONE_REMOTE: ${{ inputs.rclone-remote }}
+        INPUT_BACKUP_DIR: ${{ inputs.backup-dir }}
       run: |
         set -euo pipefail
         started_at="$(date +%s)"
         restored=false
         restored_source="none"
         restored_asset=""
-        backup_asset_name="${{ inputs.backup-asset-name }}"
+        validation_status="not_run"
+        checksum_validation="not_run"
+        manifest_status="not_provided"
+        rollback_restored="false"
+        result_path=""
+        restore_dir=""
+
+        cleanup() {
+          if [ -n "$restore_dir" ] && [ "$(dirname "$restore_dir")" = "$PWD" ]; then
+            case "$(basename "$restore_dir")" in
+              .restore-download-*) rm -rf -- "$restore_dir" ;;
+            esac
+          fi
+        }
 
         write_outputs() {
           local finished_at duration data_size
@@ -68,42 +102,47 @@ runs:
           duration=$((finished_at - started_at))
           data_size="$(du -sh data 2>/dev/null | cut -f 1 || true)"
           data_size="${data_size:-nao gerado}"
-
+          cleanup
           {
             echo "restored=${restored}"
             echo "restored_source=${restored_source}"
             echo "restored_asset=${restored_asset}"
             echo "duration_seconds=${duration}"
             echo "data_size=${data_size}"
+            echo "validation_status=${validation_status}"
+            echo "checksum_validation=${checksum_validation}"
+            echo "manifest_status=${manifest_status}"
+            echo "rollback_restored=${rollback_restored}"
+            echo "result_path=${result_path}"
           } >> "$GITHUB_OUTPUT"
         }
 
         trap write_outputs EXIT
 
-        if [ -z "$backup_asset_name" ]; then
-          backup_asset_name="${{ inputs.asset-name }}"
-        fi
-
-        if [ "${{ inputs.backup-enabled }}" = "true" ]; then
+        if [ "$INPUT_BACKUP_ENABLED" = "true" ]; then
           echo "Tentando restaurar pacote completo pelo OneDrive."
-          rclone_remote="${{ inputs.rclone-remote }}"
-          backup_dir="${{ inputs.backup-dir }}"
-
-          if [ -z "$RCLONE_CONFIG_CONTENT" ] || [ -z "$rclone_remote" ] || [ -z "$backup_dir" ]; then
+          rclone_ready=true
+          if [ -z "$RCLONE_CONFIG_CONTENT" ] || [ -z "$INPUT_RCLONE_REMOTE" ] || [ -z "$INPUT_BACKUP_DIR" ]; then
             echo "Backup OneDrive incompleto. A release sera tentada como fallback."
             rclone_ready=false
-          else
-            rclone_ready=true
           fi
 
-          if [ "${rclone_ready:-false}" = "true" ] && ! command -v rclone >/dev/null 2>&1; then
+          case "$INPUT_BACKUP_ASSET_NAME" in
+            *.zip|*.tar.xz|*.zpaq|*.tar.gz) ;;
+            *)
+              echo "Nome de pacote OneDrive nao suportado: $INPUT_BACKUP_ASSET_NAME."
+              rclone_ready=false
+              ;;
+          esac
+
+          if [ "$rclone_ready" = "true" ] && ! command -v rclone >/dev/null 2>&1; then
             if ! sudo apt-get update || ! sudo apt-get install -y rclone; then
               echo "Nao foi possivel instalar rclone. A release sera tentada como fallback."
               rclone_ready=false
             fi
           fi
 
-          if [ "${rclone_ready:-false}" = "true" ]; then
+          if [ "$rclone_ready" = "true" ]; then
             rclone_config_dir="${RUNNER_TEMP}/rclone"
             mkdir -p "$rclone_config_dir"
             chmod 700 "$rclone_config_dir"
@@ -111,22 +150,89 @@ runs:
             chmod 600 "${rclone_config_dir}/rclone.conf"
             export RCLONE_CONFIG="${rclone_config_dir}/rclone.conf"
 
-            backup_dir="${backup_dir%/}"
-            latest_path="${backup_dir}/latest/${backup_asset_name}"
-            echo "Tentando restaurar ${rclone_remote}:${latest_path}."
+            restore_dir="$(mktemp -d -p "$PWD" .restore-download-XXXXXXXX)"
+            archive_path="${restore_dir}/${INPUT_BACKUP_ASSET_NAME}"
+            manifest_path=""
+            manifest_list="${restore_dir}/manifestos.txt"
+            backup_dir="${INPUT_BACKUP_DIR%/}"
+            latest_path="${backup_dir}/backups/latest/${INPUT_BACKUP_ASSET_NAME}"
+            audit_path="${backup_dir}/backups/audit"
+            echo "Tentando restaurar ${INPUT_RCLONE_REMOTE}:${latest_path}."
 
-            if rclone copyto "${rclone_remote}:${latest_path}" "$backup_asset_name" --progress; then
-              if docker compose run --rm --entrypoint python app \
-                scripts/cotacoes.py descompactar --incluir-sqlite --arquivo "$backup_asset_name"; then
+            if rclone copyto "${INPUT_RCLONE_REMOTE}:${latest_path}" "$archive_path" --progress; then
+              if rclone lsf "${INPUT_RCLONE_REMOTE}:${audit_path}" \
+                --files-only --include "backup-*.json" > "$manifest_list" 2>/dev/null; then
+                sort -r "$manifest_list" -o "$manifest_list"
+                candidate_count=0
+                while IFS= read -r candidate_name && [ "$candidate_count" -lt 50 ]; do
+                  [ -n "$candidate_name" ] || continue
+                  candidate_count=$((candidate_count + 1))
+                  candidate_path="${restore_dir}/candidate-${candidate_count}.json"
+                  if ! rclone copyto \
+                    "${INPUT_RCLONE_REMOTE}:${audit_path}/${candidate_name}" \
+                    "$candidate_path" >/dev/null 2>&1; then
+                    continue
+                  fi
+                  if MANIFEST_CANDIDATE="$candidate_path" BACKUP_ASSET="$INPUT_BACKUP_ASSET_NAME" python3 -c '
+        import json, os, pathlib, re
+        payload = json.loads(pathlib.Path(os.environ["MANIFEST_CANDIDATE"]).read_text(encoding="utf-8"))
+        name = os.environ["BACKUP_ASSET"]
+        layers = payload.get("layers", {})
+        valid = isinstance(layers, dict) and any(
+            layer.get("file_name") == name
+            and pathlib.PurePosixPath(str(layer.get("upload", {}).get("final_path", ""))).name == name
+            and layer.get("package", {}).get("status") == "completed"
+            and layer.get("validation", {}).get("status") == "passed"
+            and layer.get("upload", {}).get("status") == "completed"
+            and re.fullmatch(r"[0-9a-fA-F]{64}", str(layer.get("package", {}).get("sha256", "")))
+            for layer in layers.values() if isinstance(layer, dict)
+        )
+        raise SystemExit(0 if valid else 1)
+        '; then
+                    manifest_path="$candidate_path"
+                    manifest_status="located"
+                    break
+                  fi
+                done < "$manifest_list"
+              fi
+
+              result_path="${COTACOES_EXECUTION_DIR:-data/logs}/restauracao-backup.json"
+              container_archive_path="/app/${archive_path#"$PWD"/}"
+              restore_args=(
+                scripts/gerenciar_backups.py restaurar
+                --arquivo "$container_archive_path"
+                --raiz-projeto /app
+                --resultado "$result_path"
+              )
+              if [ -n "$manifest_path" ]; then
+                container_manifest_path="/app/${manifest_path#"$PWD"/}"
+                restore_args+=(--manifesto "$container_manifest_path")
+              fi
+              if [ -n "${COTACOES_EXECUTION_DIR:-}" ]; then
+                restore_args+=(--preservar "$COTACOES_EXECUTION_DIR")
+              fi
+
+              if docker compose run --rm --entrypoint python app "${restore_args[@]}"; then
                 restored=true
                 restored_source="onedrive"
-                restored_asset="$backup_asset_name"
+                restored_asset="$INPUT_BACKUP_ASSET_NAME"
+                validation_status="passed"
+                readarray -t restore_values < <(python3 -c '
+        import json, pathlib, sys
+        data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+        print(data.get("checksum_validation", "unknown"))
+        print(data.get("manifest_status", "unknown"))
+        print(str(bool(data.get("rollback_restored"))).lower())
+        ' "$result_path")
+                checksum_validation="${restore_values[0]:-unknown}"
+                manifest_status="${restore_values[1]:-$manifest_status}"
+                rollback_restored="${restore_values[2]:-false}"
               else
-                echo "Falha ao descompactar pacote completo $backup_asset_name. A release sera tentada como fallback."
-                rm -f "$backup_asset_name"
+                validation_status="failed"
+                echo "Falha ao validar ou restaurar $INPUT_BACKUP_ASSET_NAME. A release sera tentada como fallback."
               fi
             else
-              echo "Backup $backup_asset_name nao encontrado ou indisponivel."
+              echo "Backup $INPUT_BACKUP_ASSET_NAME nao encontrado ou indisponivel."
             fi
 
             if [ "$restored" != "true" ]; then
@@ -135,21 +241,22 @@ runs:
           fi
         fi
 
-        if [ "$restored" = "false" ] && gh release view "${{ inputs.release-tag }}" >/dev/null 2>&1; then
-          echo "Release ${{ inputs.release-tag }} encontrada. Tentando baixar banco ${{ inputs.asset-name }}."
-          if gh release download "${{ inputs.release-tag }}" --pattern "${{ inputs.asset-name }}" --clobber; then
+        if [ "$restored" = "false" ] && gh release view "$INPUT_RELEASE_TAG" >/dev/null 2>&1; then
+          echo "Release $INPUT_RELEASE_TAG encontrada. Tentando baixar banco $INPUT_ASSET_NAME."
+          if gh release download "$INPUT_RELEASE_TAG" --pattern "$INPUT_ASSET_NAME" --clobber; then
             echo "Banco atual baixado."
             if docker compose run --rm --entrypoint python app \
-              scripts/cotacoes.py descompactar-banco --arquivo "${{ inputs.asset-name }}"; then
+              scripts/cotacoes.py descompactar-banco --arquivo "$INPUT_ASSET_NAME"; then
               restored=true
               restored_source="github-release-database"
-              restored_asset="${{ inputs.asset-name }}"
+              restored_asset="$INPUT_ASSET_NAME"
+              validation_status="passed"
             else
               echo "Falha ao restaurar banco da release."
-              rm -f "${{ inputs.asset-name }}"
+              rm -f "$INPUT_ASSET_NAME"
             fi
           else
-            echo "Banco ${{ inputs.asset-name }} nao encontrado na release."
+            echo "Banco $INPUT_ASSET_NAME nao encontrado na release."
           fi
         fi
 
