@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .env
 .backup-work/
+.migration-work/
 data/
 data.tar.gz
 data.tar.gz.tmp

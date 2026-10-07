@@ -36,6 +36,7 @@ jobs:
       DATA_ONEDRIVE_DAILY_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DAILY_RETENTION_DAYS || '7' }}
       DATA_ONEDRIVE_DEEP_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DEEP_RETENTION_DAYS || '30' }}
       DATA_ONEDRIVE_AUDIT_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_AUDIT_RETENTION_DAYS || '365' }}
+      DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
       COTACOES_EXECUTION_RETENTION_DAYS: ${{ vars.COTACOES_EXECUTION_RETENTION_DAYS || '30' }}
       COTACOES_EXECUTION_RETENTION_COUNT: ${{ vars.COTACOES_EXECUTION_RETENTION_COUNT || '120' }}
 
@@ -43,8 +44,33 @@ jobs:
       - name: Liberar execucao
         id: janela
         run: |
-          echo "should_run=true" >> "$GITHUB_OUTPUT"
-          echo "Execucao liberada. Agendamentos comecam com intervalo minimo de 6 horas."
+          set -euo pipefail
+
+          migration_locked="${DATA_MIGRATION_LOCKED,,}"
+          case "$migration_locked" in
+            true)
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "migration_locked=true" >> "$GITHUB_OUTPUT"
+              {
+                echo "## Execucao bloqueada"
+                echo
+                echo "A variavel \`DATA_MIGRATION_LOCKED\` esta ativa."
+                echo "O coletor nao sera executado durante a migracao dos backups."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "Execucao bloqueada pela migracao dos backups."
+              ;;
+            false)
+              echo "should_run=true" >> "$GITHUB_OUTPUT"
+              echo "migration_locked=false" >> "$GITHUB_OUTPUT"
+              echo "Execucao liberada. Agendamentos comecam com intervalo minimo de 6 horas."
+              ;;
+            *)
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "migration_locked=invalid" >> "$GITHUB_OUTPUT"
+              echo "::error::DATA_MIGRATION_LOCKED deve ser true ou false. Valor recebido: $DATA_MIGRATION_LOCKED"
+              exit 1
+              ;;
+          esac
 
       - name: Checkout do codigo
         if: steps.janela.outputs.should_run == 'true'

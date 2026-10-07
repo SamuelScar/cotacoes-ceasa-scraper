@@ -332,6 +332,38 @@ def record_retention_removal(
     _write_manifest(manifest_path, payload)
 
 
+def record_legacy_migration_cleanup(
+    manifest_path: Path,
+    cleanup: dict[str, Any],
+) -> None:
+    """Registra a limpeza legada antes de finalizar o manifesto."""
+    if cleanup.get("status") not in {"completed", "failed"}:
+        raise BackupManifestError(
+            "A limpeza legada deve estar concluida ou ter falhado."
+        )
+    if not isinstance(cleanup.get("planned_files"), list):
+        raise BackupManifestError(
+            "A limpeza legada deve informar os arquivos planejados."
+        )
+    if not isinstance(cleanup.get("removed_files"), list):
+        raise BackupManifestError(
+            "A limpeza legada deve informar os arquivos removidos."
+        )
+
+    payload = _load_running_manifest(manifest_path)
+    if "legacy_migration" in payload:
+        raise BackupManifestError(
+            "A limpeza legada ja foi registrada neste manifesto."
+        )
+    payload["legacy_migration"] = {"cleanup": cleanup}
+    _append_history(
+        payload,
+        "legacy_migration_cleanup",
+        detail=str(cleanup["status"]),
+    )
+    _write_manifest(manifest_path, payload)
+
+
 def finalize_backup_manifest(
     manifest_path: Path,
     status: str,

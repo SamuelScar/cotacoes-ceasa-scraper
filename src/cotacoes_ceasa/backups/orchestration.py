@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 from cotacoes_ceasa.backups.manifest import (
     ManifestRequest,
@@ -58,6 +58,7 @@ class LayeredBackupRequest:
     remote: str = "onedrive"
     remote_root: str = "cotacoes-ceasa"
     backup_date: date | None = None
+    pre_audit_action: Callable[[Path], dict[str, Any]] | None = None
 
 
 def run_layered_backup(request: LayeredBackupRequest) -> dict[str, Any]:
@@ -91,6 +92,7 @@ def run_layered_backup(request: LayeredBackupRequest) -> dict[str, Any]:
         "layers": {},
         "quota": {"before": None, "after": None},
         "retention": None,
+        "pre_audit_action": None,
         "audit_publication": None,
         "errors": [],
     }
@@ -196,6 +198,45 @@ def run_layered_backup(request: LayeredBackupRequest) -> dict[str, Any]:
                 "message": "A retencao remota nao foi concluida.",
             }
         )
+
+    if request.pre_audit_action is not None:
+        if result["errors"]:
+            pre_audit_result = {
+                "status": "skipped",
+                "reason": "layered_backup_not_valid",
+            }
+        else:
+            try:
+                pre_audit_result = request.pre_audit_action(manifest_path)
+            except Exception as error:
+                pre_audit_result = {
+                    "status": "failed",
+                    "errors": [{"message": sanitize_log_text(error)}],
+                }
+            if not isinstance(pre_audit_result, dict):
+                pre_audit_result = {
+                    "status": "failed",
+                    "errors": [
+                        {
+                            "message": (
+                                "A operacao anterior ao manifesto retornou "
+                                "um resultado invalido."
+                            )
+                        }
+                    ],
+                }
+            if pre_audit_result.get("status") != "completed":
+                result["errors"].append(
+                    {
+                        "stage": "pre_audit_action",
+                        "message": (
+                            "A operacao anterior ao manifesto de auditoria "
+                            "nao foi concluida."
+                        ),
+                    }
+                )
+        result["pre_audit_action"] = pre_audit_result
+        write_json_atomic(request.result_path, result)
 
     quota_after = _collect_quota(remote)
     result["quota"]["after"] = quota_after
