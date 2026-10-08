@@ -8,7 +8,7 @@ import subprocess
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -32,9 +32,31 @@ class BackupPackagingError(RuntimeError):
 class BackupLayer(StrEnum):
     """Camadas independentes de backup previstas pela politica."""
 
+    STAGING = "staging"
     LATEST = "latest"
     DAILY = "daily"
     DEEP = "deep"
+
+
+LAYERED_BACKUP_LAYERS = frozenset(
+    {
+        BackupLayer.LATEST,
+        BackupLayer.DAILY,
+        BackupLayer.DEEP,
+    }
+)
+COLLECTION_BACKUP_LAYERS = frozenset(
+    {
+        BackupLayer.STAGING,
+        BackupLayer.LATEST,
+    }
+)
+CONSOLIDATION_BACKUP_LAYERS = frozenset(
+    {
+        BackupLayer.DAILY,
+        BackupLayer.DEEP,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -55,9 +77,41 @@ class BackupLayerSpec:
         cls,
         layer: BackupLayer,
         backup_date: date | None = None,
+        *,
+        backup_datetime: datetime | None = None,
     ) -> "BackupLayerSpec":
-        local_date = backup_date or execution_now().date()
+        local_datetime = backup_datetime or execution_now()
+        if (
+            local_datetime.tzinfo is None
+            or local_datetime.utcoffset() is None
+        ):
+            raise BackupPackagingError(
+                "A data e hora do backup devem possuir fuso horario."
+            )
+        local_datetime = local_datetime.astimezone(execution_now().tzinfo)
+        local_date = backup_date or local_datetime.date()
         compact_date = local_date.strftime("%Y%m%d")
+        if layer is BackupLayer.STAGING:
+            if backup_date is not None:
+                local_datetime = local_datetime.replace(
+                    year=backup_date.year,
+                    month=backup_date.month,
+                    day=backup_date.day,
+                )
+            compact_timestamp = local_datetime.strftime("%Y%m%d-%H%M%S")
+            return cls(
+                layer=layer,
+                format="zip",
+                file_name=f"ceasa-data-{compact_timestamp}.zip",
+                extension=".zip",
+                remote_directory=PurePosixPath("backups/staging"),
+                algorithm="ZIP/Deflate",
+                parameters=(
+                    f"-mx={ZIP_COMPRESSION_LEVEL}",
+                    "-mmt=on",
+                ),
+                executable="7z",
+            )
         if layer is BackupLayer.LATEST:
             return cls(
                 layer=layer,

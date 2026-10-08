@@ -10,12 +10,14 @@ from pathlib import PurePosixPath
 BACKUP_LAYOUT_ROOT = PurePosixPath("backups")
 MANAGED_REMOTE_DIRECTORIES = (
     BACKUP_LAYOUT_ROOT / "latest",
+    BACKUP_LAYOUT_ROOT / "staging",
     BACKUP_LAYOUT_ROOT / "history" / "daily",
     BACKUP_LAYOUT_ROOT / "history" / "deep",
     BACKUP_LAYOUT_ROOT / "audit",
 )
 LAYER_REMOTE_DIRECTORIES = {
     "latest": BACKUP_LAYOUT_ROOT / "latest",
+    "staging": BACKUP_LAYOUT_ROOT / "staging",
     "daily": BACKUP_LAYOUT_ROOT / "history" / "daily",
     "deep": BACKUP_LAYOUT_ROOT / "history" / "deep",
     "audit": BACKUP_LAYOUT_ROOT / "audit",
@@ -28,6 +30,9 @@ REMOTE_CLEANUP_ENABLED = True
 _REMOTE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _LAYER_FILE_PATTERNS = {
     "latest": re.compile(r"^ceasa-data-latest\.zip$"),
+    "staging": re.compile(
+        r"^ceasa-data-[0-9]{8}-[0-9]{6}\.zip$"
+    ),
     "daily": re.compile(r"^ceasa-data-[0-9]{8}\.tar\.xz$"),
     "deep": re.compile(r"^ceasa-data-[0-9]{8}\.(?:zpaq|tar\.xz)$"),
     "audit": re.compile(r"^backup-[0-9]{8}-[0-9]{6}\.json$"),
@@ -132,6 +137,17 @@ def layer_file_date(layer: str, file_name: str) -> date | None:
         )
     if layer == "latest":
         return None
+    if layer == "staging":
+        try:
+            return datetime.strptime(
+                file_name[11:26],
+                "%Y%m%d-%H%M%S",
+            ).date()
+        except ValueError as error:
+            raise BackupPolicyError(
+                f"Data ou hora invalida no arquivo da camada {layer}: "
+                f"{file_name}."
+            ) from error
     date_text = (
         file_name[11:19]
         if layer in {"daily", "deep"}

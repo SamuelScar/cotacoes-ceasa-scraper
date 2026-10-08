@@ -30,6 +30,7 @@ class RemotePublicationRequest:
     expected_sha256: str | None = None
     remote: str = "onedrive"
     remote_root: str = "cotacoes-ceasa"
+    allow_local_name_mismatch: bool = False
 
 
 @dataclass
@@ -85,7 +86,10 @@ def publish_backup_atomically(
     local_file = request.local_file.resolve(strict=True)
     if not local_file.is_file():
         raise ValueError(f"Arquivo local invalido para publicacao: {local_file}.")
-    if local_file.name != destination.name:
+    if (
+        not request.allow_local_name_mismatch
+        and local_file.name != destination.name
+    ):
         raise ValueError(
             "O nome do arquivo local deve ser igual ao nome definitivo remoto."
         )
@@ -134,6 +138,7 @@ def publish_backup_atomically(
         )
         final_exists = _remote_file_exists(remote, final_spec)
         if request.layer != "latest" and final_exists:
+            _require_remote_size(final_spec, result.size_bytes)
             result.already_present = True
             return _complete(result, started_at, status="skipped")
 
@@ -141,6 +146,7 @@ def publish_backup_atomically(
         _require_remote_size(temporary_spec, result.size_bytes)
 
         if request.layer != "latest" and _remote_file_exists(remote, final_spec):
+            _require_remote_size(final_spec, result.size_bytes)
             _delete_remote_file(temporary_spec, result)
             result.already_present = True
             return _complete(result, started_at, status="skipped")

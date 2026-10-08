@@ -26,6 +26,7 @@ from cotacoes_ceasa.execution import execution_now, sanitize_log_text
 
 
 RETENTION_ENVIRONMENTS = {
+    "staging": ("DATA_ONEDRIVE_STAGING_RETENTION_DAYS", 2),
     "daily": ("DATA_ONEDRIVE_DAILY_RETENTION_DAYS", 7),
     "deep": ("DATA_ONEDRIVE_DEEP_RETENTION_DAYS", 30),
     "audit": ("DATA_ONEDRIVE_AUDIT_RETENTION_DAYS", 365),
@@ -38,6 +39,7 @@ class BackupRetentionError(RuntimeError):
 
 @dataclass(frozen=True)
 class RetentionPolicy:
+    staging_days: int
     daily_days: int
     deep_days: int
     audit_days: int
@@ -49,6 +51,10 @@ class RetentionPolicy:
     ) -> "RetentionPolicy":
         values = environment if environment is not None else os.environ
         return cls(
+            staging_days=_positive_days(
+                values,
+                *RETENTION_ENVIRONMENTS["staging"],
+            ),
             daily_days=_positive_days(values, *RETENTION_ENVIRONMENTS["daily"]),
             deep_days=_positive_days(values, *RETENTION_ENVIRONMENTS["deep"]),
             audit_days=_positive_days(values, *RETENTION_ENVIRONMENTS["audit"]),
@@ -57,6 +63,7 @@ class RetentionPolicy:
     def days_for(self, layer: str) -> int | None:
         return {
             "latest": None,
+            "staging": self.staging_days,
             "daily": self.daily_days,
             "deep": self.deep_days,
             "audit": self.audit_days,
@@ -64,6 +71,7 @@ class RetentionPolicy:
 
     def as_dict(self) -> dict[str, int]:
         return {
+            "staging_days": self.staging_days,
             "daily_days": self.daily_days,
             "deep_days": self.deep_days,
             "audit_days": self.audit_days,
@@ -79,6 +87,8 @@ class RetentionRequest:
     apply_changes: bool = False
     manifest_path: Path | None = None
     reference_date: date | None = None
+    consolidated_staging_dates: frozenset[date] = frozenset()
+    validated_existing_layers: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -109,14 +119,29 @@ def apply_remote_retention(request: RetentionRequest) -> dict[str, Any]:
     remote = validate_remote_name(request.remote)
     remote_root = normalize_remote_root(request.remote_root)
     reference_date = request.reference_date or execution_now().date()
-    unknown_layers = request.newly_published_layers.difference(
-        LAYER_REMOTE_DIRECTORIES
+    unknown_layers = (
+        request.newly_published_layers.difference(
+            LAYER_REMOTE_DIRECTORIES
+        )
+        | request.validated_existing_layers.difference(
+            LAYER_REMOTE_DIRECTORIES
+        )
     )
     if unknown_layers:
         raise BackupRetentionError(
             "Camadas publicadas desconhecidas: "
             + ", ".join(sorted(unknown_layers))
             + "."
+        )
+    future_consolidations = {
+        item
+        for item in request.consolidated_staging_dates
+        if item > reference_date
+    }
+    if future_consolidations:
+        raise BackupRetentionError(
+            "A retencao recebeu datas de consolidacao posteriores a data "
+            "de referencia."
         )
     if request.apply_changes:
         ensure_remote_cleanup_enabled()
@@ -138,20 +163,32 @@ def apply_remote_retention(request: RetentionRequest) -> dict[str, Any]:
         "remote_root": remote_root.as_posix(),
         "policy": request.policy.as_dict(),
         "newly_published_layers": sorted(request.newly_published_layers),
+        "validated_existing_layers": sorted(
+            request.validated_existing_layers
+        ),
+        "consolidated_staging_dates": sorted(
+            item.isoformat()
+            for item in request.consolidated_staging_dates
+        ),
         "layers": {},
         "planned_removals": [],
         "removed_files": [],
         "errors": [],
     }
 
-    for layer in ("latest", "daily", "deep", "audit"):
+    valid_backup_layers = (
+        request.newly_published_layers
+        | request.validated_existing_layers
+    )
+    for layer in ("latest", "staging", "daily", "deep", "audit"):
         layer_result = _plan_layer(
             remote,
             remote_root,
             layer,
             request.policy.days_for(layer),
             reference_date,
-            request.newly_published_layers,
+            valid_backup_layers,
+            request.consolidated_staging_dates,
         )
         result["layers"][layer] = layer_result
         result["planned_removals"].extend(layer_result["planned_removals"])
@@ -171,11 +208,19 @@ def _plan_layer(
     retention_days: int | None,
     reference_date: date,
     newly_published_layers: frozenset[str],
+    consolidated_staging_dates: frozenset[date],
 ) -> dict[str, Any]:
     files, ignored = _list_layer_files(remote, remote_root, layer)
-    eligible = layer in newly_published_layers or (
-        layer == "audit" and "latest" in newly_published_layers
-    )
+    if layer == "staging":
+        eligible = bool(consolidated_staging_dates)
+    elif layer == "audit":
+        eligible = bool(
+            newly_published_layers.intersection(
+                {"latest", "daily", "deep"}
+            )
+        )
+    else:
+        eligible = layer in newly_published_layers
     cutoff = (
         reference_date - timedelta(days=retention_days - 1)
         if retention_days is not None
@@ -187,6 +232,10 @@ def _plan_layer(
         if cutoff is not None
         and item.backup_date is not None
         and item.backup_date < cutoff
+        and (
+            layer != "staging"
+            or item.backup_date in consolidated_staging_dates
+        )
     ]
     protected: list[RemoteBackupFile] = []
     if files and len(files) == len(expired):
@@ -207,6 +256,12 @@ def _plan_layer(
         ).as_posix(),
         "retention_days": retention_days,
         "cutoff_date": cutoff.isoformat() if cutoff else None,
+        "consolidated_dates_required": layer == "staging",
+        "consolidated_dates": (
+            sorted(item.isoformat() for item in consolidated_staging_dates)
+            if layer == "staging"
+            else []
+        ),
         "eligible_for_apply": eligible,
         "status": "planned" if eligible else "waiting_new_valid_backup",
         "valid_files": [item.as_dict() for item in files],
@@ -272,7 +327,7 @@ def _execute_plan(
     remote: str,
     result: dict[str, Any],
 ) -> None:
-    for layer in ("latest", "daily", "deep", "audit"):
+    for layer in ("latest", "staging", "daily", "deep", "audit"):
         layer_result = result["layers"][layer]
         if not layer_result["eligible_for_apply"]:
             layer_result["status"] = "skipped_no_new_valid_backup"

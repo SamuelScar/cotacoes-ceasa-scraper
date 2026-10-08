@@ -5,18 +5,23 @@ from cotacoes_ceasa.backups.packaging import (
     BackupLayer,
     BackupLayerSpec,
     BackupPackagingError,
+    COLLECTION_BACKUP_LAYERS,
+    CONSOLIDATION_BACKUP_LAYERS,
+    LAYERED_BACKUP_LAYERS,
     SourceMetrics,
     create_backup,
 )
 from cotacoes_ceasa.backups.manifest import (
     BackupManifestError,
     ManifestRequest,
+    ManifestSourceBackup,
     create_backup_manifest,
     finalize_backup_manifest,
     get_manifest_layer_sha256,
     record_backup_artifact,
     record_layer_outcome,
     record_onedrive_quota,
+    record_reused_backup_artifact,
     record_retention_removal,
     record_upload_result,
 )
@@ -54,8 +59,15 @@ from cotacoes_ceasa.backups.restore import (
     restore_backup,
 )
 from cotacoes_ceasa.backups.orchestration import (
+    CollectionBackupRequest,
     LayeredBackupRequest,
+    run_collection_backup,
     run_layered_backup,
+)
+from cotacoes_ceasa.backups.daily_consolidation import (
+    DailyConsolidationError,
+    DailyConsolidationRequest,
+    run_daily_consolidation,
 )
 
 __all__ = [
@@ -71,9 +83,16 @@ __all__ = [
     "BackupRetentionError",
     "BackupRestoreError",
     "DataInventory",
+    "CollectionBackupRequest",
+    "DailyConsolidationError",
+    "DailyConsolidationRequest",
     "ManifestRequest",
+    "ManifestSourceBackup",
     "LayeredBackupRequest",
     "SourceMetrics",
+    "COLLECTION_BACKUP_LAYERS",
+    "CONSOLIDATION_BACKUP_LAYERS",
+    "LAYERED_BACKUP_LAYERS",
     "RemotePublicationError",
     "RemotePublicationRequest",
     "RemotePublicationResult",
@@ -96,9 +115,12 @@ __all__ = [
     "record_backup_artifact",
     "record_layer_outcome",
     "record_onedrive_quota",
+    "record_reused_backup_artifact",
     "record_retention_removal",
     "record_upload_result",
     "restore_backup",
+    "run_collection_backup",
+    "run_daily_consolidation",
     "run_layered_backup",
     "validate_managed_remote_path",
     "validate_layer_remote_path",

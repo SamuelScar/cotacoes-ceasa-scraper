@@ -19,6 +19,7 @@ jobs:
     environment: Crawler
     timeout-minutes: 180
     env:
+      DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
       DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'latest-data' }}
       DATA_ASSET_NAME: ${{ vars.DATA_ASSET_NAME || 'cotacoes.sqlite.xz' }}
       DATA_ONEDRIVE_LATEST_ASSET_NAME: ceasa-data-latest.zip
@@ -26,12 +27,39 @@ jobs:
       DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
 
     steps:
+      - name: Liberar auditoria
+        id: janela
+        run: |
+          set -euo pipefail
+
+          case "${DATA_MIGRATION_LOCKED,,}" in
+            true)
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              {
+                echo "## Auditoria bloqueada"
+                echo
+                echo 'A variavel `DATA_MIGRATION_LOCKED` esta ativa.'
+                echo 'Nenhum checkout, download ou processamento foi executado.'
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            false)
+              echo "should_run=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "::error::DATA_MIGRATION_LOCKED deve ser true ou false."
+              exit 1
+              ;;
+          esac
+
       - name: Checkout do codigo
+        if: steps.janela.outputs.should_run == 'true'
         uses: actions/checkout@v4
         with:
           lfs: false
 
       - name: Criar configuracao do auditor
+        if: steps.janela.outputs.should_run == 'true'
         uses: ./.github/actions/prepare-scraper
         with:
           target-date: ""
@@ -42,10 +70,12 @@ jobs:
           complement-prohort: "false"
 
       - name: Build da imagem Docker
+        if: steps.janela.outputs.should_run == 'true'
         run: docker compose build
 
       - name: Restaurar pacote completo atual
         id: restaurar_data
+        if: steps.janela.outputs.should_run == 'true'
         uses: ./.github/actions/restore-release-data
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,6 +90,7 @@ jobs:
 
       - name: Exigir restauracao completa do OneDrive
         id: validar_origem
+        if: steps.janela.outputs.should_run == 'true'
         run: |
           set -euo pipefail
 
@@ -76,6 +107,7 @@ jobs:
 
       - name: Preparar diretorio e contexto da auditoria
         id: contexto
+        if: steps.janela.outputs.should_run == 'true'
         run: |
           set -euo pipefail
 
@@ -144,6 +176,7 @@ jobs:
 
       - name: Executar auditoria integral
         id: executar_auditoria
+        if: steps.janela.outputs.should_run == 'true'
         continue-on-error: true
         run: |
           set -o pipefail
@@ -228,7 +261,7 @@ jobs:
           retention-days: 90
 
       - name: Consolidar resultado do workflow
-        if: always()
+        if: always() && steps.janela.outputs.should_run == 'true'
         run: |
           if [ "${{ steps.restaurar_data.outcome }}" != "success" ]; then
             echo "::error::A restauracao dos dados falhou."

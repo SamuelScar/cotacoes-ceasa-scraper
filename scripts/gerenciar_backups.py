@@ -91,7 +91,7 @@ def main() -> int:
     publish_parser = subparsers.add_parser("publicar")
     publish_parser.add_argument(
         "--camada",
-        choices=("latest", "daily", "deep", "audit"),
+        choices=("staging", "latest", "daily", "deep", "audit"),
         required=True,
     )
     publish_parser.add_argument("--arquivo", type=Path, required=True)

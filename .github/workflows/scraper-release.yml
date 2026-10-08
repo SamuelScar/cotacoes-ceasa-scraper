@@ -33,9 +33,6 @@ jobs:
       DATA_ONEDRIVE_BACKUP_ENABLED: ${{ vars.DATA_ONEDRIVE_BACKUP_ENABLED || 'false' }}
       DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
       DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
-      DATA_ONEDRIVE_DAILY_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DAILY_RETENTION_DAYS || '7' }}
-      DATA_ONEDRIVE_DEEP_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DEEP_RETENTION_DAYS || '30' }}
-      DATA_ONEDRIVE_AUDIT_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_AUDIT_RETENTION_DAYS || '365' }}
       DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
       COTACOES_EXECUTION_RETENTION_DAYS: ${{ vars.COTACOES_EXECUTION_RETENTION_DAYS || '30' }}
       COTACOES_EXECUTION_RETENTION_COUNT: ${{ vars.COTACOES_EXECUTION_RETENTION_COUNT || '120' }}
@@ -511,7 +508,7 @@ jobs:
             --max-age-days "$COTACOES_EXECUTION_RETENTION_DAYS" \
             --max-count "$COTACOES_EXECUTION_RETENTION_COUNT"
 
-      - name: Executar backups em camadas no OneDrive
+      - name: Executar backup imediato no OneDrive
         id: backups_onedrive
         if: ${{ !cancelled() && steps.janela.outputs.should_run == 'true' && steps.gate_checkpoint.outcome == 'success' && steps.onedrive_config.outputs.enabled == 'true' }}
         continue-on-error: true
@@ -522,7 +519,7 @@ jobs:
 
           runtime_dir=".backup-work/${COTACOES_EXECUTION_ID}"
           config_path="${runtime_dir}/rclone.conf"
-          result_path="${COTACOES_EXECUTION_DIR}/etapas/backup-workflow.json"
+          result_path="${COTACOES_EXECUTION_DIR}/etapas/backup-coleta.json"
 
           cleanup() {
             case "$runtime_dir" in
@@ -547,12 +544,9 @@ jobs:
             -e COTACOES_EXECUTION_DIR \
             -e DATA_ONEDRIVE_REMOTE \
             -e DATA_ONEDRIVE_DIR \
-            -e DATA_ONEDRIVE_DAILY_RETENTION_DAYS \
-            -e DATA_ONEDRIVE_DEEP_RETENTION_DAYS \
-            -e DATA_ONEDRIVE_AUDIT_RETENTION_DAYS \
             -e RCLONE_CONFIG="/app/${config_path}" \
             --entrypoint python \
-            app scripts/executar_backups.py \
+            app scripts/executar_backup_coleta.py \
             --execution-id "$COTACOES_EXECUTION_ID" \
             --diretorio-execucao "$COTACOES_EXECUTION_DIR" \
             --origem data \
@@ -587,23 +581,15 @@ jobs:
               "status": result.get("status"),
               "result_path": result_path.as_posix(),
               "manifest_path": result.get("manifest_path"),
+              "staging_status": result.get("layers", {}).get("staging", {}).get("status"),
+              "staging_size_bytes": layer_value("staging", "package", "size_bytes"),
+              "staging_compression_seconds": layer_value("staging", "package", "compression_duration_seconds"),
+              "staging_upload_seconds": layer_value("staging", "publication", "duration_seconds"),
+              "staging_path": layer_value("staging", "publication", "final_path"),
               "latest_status": result.get("layers", {}).get("latest", {}).get("status"),
               "latest_size_bytes": layer_value("latest", "package", "size_bytes"),
-              "latest_compression_seconds": layer_value("latest", "package", "compression_duration_seconds"),
               "latest_upload_seconds": layer_value("latest", "publication", "duration_seconds"),
               "latest_path": layer_value("latest", "publication", "final_path"),
-              "daily_status": result.get("layers", {}).get("daily", {}).get("status"),
-              "daily_size_bytes": layer_value("daily", "package", "size_bytes"),
-              "daily_compression_seconds": layer_value("daily", "package", "compression_duration_seconds"),
-              "daily_upload_seconds": layer_value("daily", "publication", "duration_seconds"),
-              "daily_path": layer_value("daily", "publication", "final_path"),
-              "deep_status": result.get("layers", {}).get("deep", {}).get("status"),
-              "deep_size_bytes": layer_value("deep", "package", "size_bytes"),
-              "deep_compression_seconds": layer_value("deep", "package", "compression_duration_seconds"),
-              "deep_upload_seconds": layer_value("deep", "publication", "duration_seconds"),
-              "deep_path": layer_value("deep", "publication", "final_path"),
-              "retention_status": (result.get("retention") or {}).get("status"),
-              "removed_files": len((result.get("retention") or {}).get("removed_files", [])),
               "audit_status": (result.get("audit_publication") or {}).get("status"),
               "audit_path": (result.get("audit_publication") or {}).get("final_path"),
               "quota_before_used": (result.get("quota", {}).get("before") or {}).get("used"),
@@ -674,7 +660,7 @@ jobs:
               exit 1
             fi
             saved=true
-            echo "Camadas de backup salvas no OneDrive."
+            echo "Backup imediato salvo em staging e latest no OneDrive."
           fi
 
           if [ "$github_outcome" = "success" ]; then
@@ -760,12 +746,10 @@ jobs:
             echo "| Gate do checkpoint | ${{ steps.gate_checkpoint.outcome }} |"
             echo "| Gate de publicacao | ${{ steps.gate_publicacao.outputs.decision || 'nao executado' }} |"
             echo "| Excecao manual do gate | ${{ steps.gate_publicacao.outputs.bypassed || 'false' }} |"
-            echo "| Executar backups em camadas | ${{ steps.backups_onedrive.outcome }} |"
+            echo "| Executar backup imediato | ${{ steps.backups_onedrive.outcome }} |"
+            echo "| Publicar staging | ${{ steps.backups_onedrive.outputs.staging_status || 'nao executado' }} |"
             echo "| Publicar latest | ${{ steps.backups_onedrive.outputs.latest_status || 'nao executado' }} |"
-            echo "| Publicar daily | ${{ steps.backups_onedrive.outputs.daily_status || 'nao executado' }} |"
-            echo "| Publicar deep | ${{ steps.backups_onedrive.outputs.deep_status || 'nao executado' }} |"
             echo "| Publicar manifesto audit | ${{ steps.backups_onedrive.outputs.audit_status || 'nao executado' }} |"
-            echo "| Aplicar retencao | ${{ steps.backups_onedrive.outputs.retention_status || 'nao executado' }} |"
             echo "| Compactar banco GitHub | ${{ steps.banco_github.outcome }} |"
             echo "| Publicar release GitHub | ${{ steps.publicar_github.outcome }} |"
             echo "| Validar salvamento | ${{ steps.validar_salvamento.outcome }} |"
@@ -782,17 +766,12 @@ jobs:
             echo "| Tempo conferencia data (s) | ${{ steps.conferir_data.outputs.duration_seconds || 'nao medido' }} |"
             echo "| Tamanho data final | ${{ steps.conferir_data.outputs.data_size || 'nao medido' }} |"
             echo "| Arquivos em data final | ${{ steps.conferir_data.outputs.data_files || 'nao medido' }} |"
-            echo "| Compactacao latest (s) | ${{ steps.backups_onedrive.outputs.latest_compression_seconds || 'nao medido' }} |"
+            echo "| Compactacao unica do ZIP (s) | ${{ steps.backups_onedrive.outputs.staging_compression_seconds || 'nao medido' }} |"
+            echo "| Upload staging (s) | ${{ steps.backups_onedrive.outputs.staging_upload_seconds || 'nao medido' }} |"
+            echo "| Caminho staging | ${{ steps.backups_onedrive.outputs.staging_path || 'nao gerado' }} |"
             echo "| Upload latest (s) | ${{ steps.backups_onedrive.outputs.latest_upload_seconds || 'nao medido' }} |"
             echo "| Caminho latest | ${{ steps.backups_onedrive.outputs.latest_path || 'nao gerado' }} |"
-            echo "| Compactacao daily (s) | ${{ steps.backups_onedrive.outputs.daily_compression_seconds || 'nao medido' }} |"
-            echo "| Upload daily (s) | ${{ steps.backups_onedrive.outputs.daily_upload_seconds || 'nao medido' }} |"
-            echo "| Caminho daily | ${{ steps.backups_onedrive.outputs.daily_path || 'nao gerado' }} |"
-            echo "| Compactacao deep (s) | ${{ steps.backups_onedrive.outputs.deep_compression_seconds || 'nao medido' }} |"
-            echo "| Upload deep (s) | ${{ steps.backups_onedrive.outputs.deep_upload_seconds || 'nao medido' }} |"
-            echo "| Caminho deep | ${{ steps.backups_onedrive.outputs.deep_path || 'nao gerado' }} |"
             echo "| Caminho audit | ${{ steps.backups_onedrive.outputs.audit_path || 'nao gerado' }} |"
-            echo "| Arquivos removidos pela retencao | ${{ steps.backups_onedrive.outputs.removed_files || '0' }} |"
             echo "| OneDrive usado antes (bytes) | ${{ steps.backups_onedrive.outputs.quota_before_used || 'indisponivel' }} |"
             echo "| OneDrive livre antes (bytes) | ${{ steps.backups_onedrive.outputs.quota_before_free || 'indisponivel' }} |"
             echo "| OneDrive usado depois (bytes) | ${{ steps.backups_onedrive.outputs.quota_after_used || 'indisponivel' }} |"
@@ -823,12 +802,12 @@ jobs:
           COTACOES_RESULT_GATE_DECISION: ${{ steps.gate_publicacao.outputs.decision }}
           COTACOES_RESULT_GATE_BYPASSED: ${{ steps.gate_publicacao.outputs.bypassed }}
           COTACOES_RESULT_ONEDRIVE_PACKAGE_OUTCOME: ${{ steps.backups_onedrive.outcome }}
-          COTACOES_RESULT_ONEDRIVE_PACKAGE_DURATION: ${{ steps.backups_onedrive.outputs.latest_compression_seconds }}
-          COTACOES_RESULT_ONEDRIVE_PACKAGE_SIZE: ${{ steps.backups_onedrive.outputs.latest_size_bytes }}
+          COTACOES_RESULT_ONEDRIVE_PACKAGE_DURATION: ${{ steps.backups_onedrive.outputs.staging_compression_seconds }}
+          COTACOES_RESULT_ONEDRIVE_PACKAGE_SIZE: ${{ steps.backups_onedrive.outputs.staging_size_bytes }}
           COTACOES_RESULT_ONEDRIVE_UPLOAD_OUTCOME: ${{ steps.backups_onedrive.outputs.latest_status }}
           COTACOES_RESULT_ONEDRIVE_UPLOAD_DURATION: ${{ steps.backups_onedrive.outputs.latest_upload_seconds }}
           COTACOES_RESULT_ONEDRIVE_LATEST_PATH: ${{ steps.backups_onedrive.outputs.latest_path }}
-          COTACOES_RESULT_ONEDRIVE_HISTORY_PATH: ${{ steps.backups_onedrive.outputs.daily_path }}
+          COTACOES_RESULT_ONEDRIVE_HISTORY_PATH: ${{ steps.backups_onedrive.outputs.staging_path }}
           COTACOES_RESULT_ONEDRIVE_BACKUP_RESULT: ${{ steps.backups_onedrive.outputs.result_path }}
           COTACOES_RESULT_GITHUB_PACKAGE_OUTCOME: ${{ steps.banco_github.outcome }}
           COTACOES_RESULT_GITHUB_PACKAGE_DURATION: ${{ steps.banco_github.outputs.duration_seconds }}
