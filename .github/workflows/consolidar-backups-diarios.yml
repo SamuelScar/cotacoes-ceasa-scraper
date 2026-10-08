@@ -1,0 +1,285 @@
+name: Consolidar backups diarios do OneDrive
+
+on:
+  workflow_dispatch:
+    inputs:
+      consolidation_date:
+        description: Data local opcional no formato AAAA-MM-DD
+        required: false
+        default: ""
+        type: string
+  schedule:
+    - cron: "30 1 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: latest-data-release
+  cancel-in-progress: false
+
+jobs:
+  consolidar-backups:
+    name: Consolidar staging em daily e deep
+    runs-on: ubuntu-latest
+    environment: Crawler
+    timeout-minutes: 180
+    env:
+      DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
+      DATA_ONEDRIVE_BACKUP_ENABLED: ${{ vars.DATA_ONEDRIVE_BACKUP_ENABLED || 'false' }}
+      DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
+      DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
+      DATA_ONEDRIVE_STAGING_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_STAGING_RETENTION_DAYS || '2' }}
+      DATA_ONEDRIVE_DAILY_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DAILY_RETENTION_DAYS || '7' }}
+      DATA_ONEDRIVE_DEEP_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_DEEP_RETENTION_DAYS || '30' }}
+      DATA_ONEDRIVE_AUDIT_RETENTION_DAYS: ${{ vars.DATA_ONEDRIVE_AUDIT_RETENTION_DAYS || '365' }}
+
+    steps:
+      - name: Liberar consolidacao
+        id: janela
+        run: |
+          set -euo pipefail
+
+          migration_locked="${DATA_MIGRATION_LOCKED,,}"
+          backup_enabled="${DATA_ONEDRIVE_BACKUP_ENABLED,,}"
+
+          case "$migration_locked" in
+            true)
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              {
+                echo "## Consolidacao bloqueada"
+                echo
+                echo 'A variavel `DATA_MIGRATION_LOCKED` esta ativa.'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+              ;;
+            false) ;;
+            *)
+              echo "::error::DATA_MIGRATION_LOCKED deve ser true ou false."
+              exit 1
+              ;;
+          esac
+
+          case "$backup_enabled" in
+            true)
+              echo "should_run=true" >> "$GITHUB_OUTPUT"
+              ;;
+            false)
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              {
+                echo "## Consolidacao nao executada"
+                echo
+                echo 'A variavel `DATA_ONEDRIVE_BACKUP_ENABLED` esta desativada.'
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::DATA_ONEDRIVE_BACKUP_ENABLED deve ser true ou false."
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout do codigo
+        if: steps.janela.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Preparar contexto da consolidacao
+        id: contexto
+        if: steps.janela.outputs.should_run == 'true'
+        env:
+          REQUESTED_DATE: ${{ github.event.inputs.consolidation_date || '' }}
+        run: |
+          set -euo pipefail
+
+          consolidation_date="$REQUESTED_DATE"
+          if [ -z "$consolidation_date" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+              consolidation_date="$(date -u -d '1 day ago' +%F)"
+            else
+              consolidation_date="$(TZ=America/Sao_Paulo date +%F)"
+            fi
+          fi
+          python3 - "$consolidation_date" <<'PY'
+          from datetime import date
+          import sys
+
+          value = date.fromisoformat(sys.argv[1])
+          if value.isoformat() != sys.argv[1]:
+              raise SystemExit("Data de consolidacao invalida.")
+          PY
+
+          timestamp="$(TZ=America/Sao_Paulo date +%Y%m%d_%H%M%S)"
+          execution_id="${timestamp}_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          execution_dir="data/logs/execucao/${execution_id}"
+          runtime_dir=".backup-work/daily-${execution_id}"
+
+          {
+            echo "COTACOES_EXECUTION_ID=${execution_id}"
+            echo "COTACOES_EXECUTION_DIR=${execution_dir}"
+            echo "COTACOES_EXECUTION_MANAGED=true"
+            echo "CONSOLIDATION_DATE=${consolidation_date}"
+            echo "CONSOLIDATION_RUNTIME_DIR=${runtime_dir}"
+          } >> "$GITHUB_ENV"
+          {
+            echo "execution_id=${execution_id}"
+            echo "execution_dir=${execution_dir}"
+            echo "consolidation_date=${consolidation_date}"
+          } >> "$GITHUB_OUTPUT"
+
+          PYTHONPATH=src python -m cotacoes_ceasa.execution init \
+            --directory "$execution_dir" \
+            --execution-id "$execution_id"
+
+      - name: Build da imagem Docker
+        if: steps.janela.outputs.should_run == 'true'
+        run: docker compose build app
+
+      - name: Preparar acesso ao OneDrive
+        if: steps.janela.outputs.should_run == 'true'
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+            echo "::error::O secret RCLONE_CONFIG nao esta configurado."
+            exit 1
+          fi
+          mkdir -p "$CONSOLIDATION_RUNTIME_DIR"
+          chmod 700 "$CONSOLIDATION_RUNTIME_DIR"
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" \
+            > "${CONSOLIDATION_RUNTIME_DIR}/rclone.conf"
+          chmod 600 "${CONSOLIDATION_RUNTIME_DIR}/rclone.conf"
+
+      - name: Consolidar e aplicar retencoes
+        id: consolidacao
+        if: steps.janela.outputs.should_run == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          result_path="${COTACOES_EXECUTION_DIR}/etapas/consolidacao-diaria.json"
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e COTACOES_EXECUTION_ID \
+            -e COTACOES_EXECUTION_DIR \
+            -e DATA_ONEDRIVE_REMOTE \
+            -e DATA_ONEDRIVE_DIR \
+            -e DATA_ONEDRIVE_STAGING_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_DAILY_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_DEEP_RETENTION_DAYS \
+            -e DATA_ONEDRIVE_AUDIT_RETENTION_DAYS \
+            -e RCLONE_CONFIG="/app/${CONSOLIDATION_RUNTIME_DIR}/rclone.conf" \
+            --entrypoint python \
+            app scripts/consolidar_backups_diarios.py \
+            --execution-id "$COTACOES_EXECUTION_ID" \
+            --diretorio-execucao "$COTACOES_EXECUTION_DIR" \
+            --data "$CONSOLIDATION_DATE" \
+            --trabalho "/app/${CONSOLIDATION_RUNTIME_DIR}/work" \
+            --resultado "$result_path"
+
+          echo "result_path=${result_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Publicar resumo da consolidacao
+        if: always() && steps.contexto.outcome == 'success'
+        run: |
+          result_path="${COTACOES_EXECUTION_DIR}/etapas/consolidacao-diaria.json"
+          python3 - "$result_path" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          print("## Consolidacao diaria dos backups")
+          print()
+          if not path.is_file():
+              print("O resultado estruturado nao foi gerado.")
+              raise SystemExit(0)
+
+          result = json.loads(path.read_text(encoding="utf-8"))
+          layered = result.get("layered_backup") or {}
+          layers = layered.get("layers") or {}
+          retention = layered.get("retention") or {}
+          selected = result.get("selected_candidate") or {}
+          print("| Item | Valor |")
+          print("| --- | --- |")
+          print(f"| Status | {result.get('status', 'desconhecido')} |")
+          print(f"| Data local | {result.get('consolidation_date', '')} |")
+          print(f"| Staging escolhido | {selected.get('name', 'nenhum')} |")
+          print(f"| Execucao de origem | {selected.get('execution_id', 'nao identificada')} |")
+          print(f"| SHA-256 de origem | {selected.get('sha256', 'indisponivel')} |")
+          print(f"| Daily | {(layers.get('daily') or {}).get('status', 'nao executado')} |")
+          print(f"| Deep | {(layers.get('deep') or {}).get('status', 'nao executado')} |")
+          print(f"| Retencao | {retention.get('status', 'nao executada')} |")
+          print(f"| Arquivos removidos | {len(retention.get('removed_files') or [])} |")
+          print(f"| Manifesto | {(layered.get('audit_publication') or {}).get('final_path', 'nao publicado')} |")
+          quota = layered.get("quota") or {}
+          before = quota.get("before") or {}
+          after = quota.get("after") or {}
+          print(f"| OneDrive livre antes (bytes) | {before.get('free', 'indisponivel')} |")
+          print(f"| OneDrive livre depois (bytes) | {after.get('free', 'indisponivel')} |")
+          errors = result.get("errors") or []
+          if errors:
+              print()
+              print("### Erros")
+              for error in errors:
+                  print(f"- {error.get('message', 'Falha sem detalhe.')}")
+              print()
+              print("Os stagings foram preservados. Corrija a causa e execute novamente para a mesma data.")
+          PY
+
+      - name: Consolidar logs da execucao
+        if: always() && steps.contexto.outcome == 'success'
+        env:
+          CONSOLIDATION_OUTCOME: ${{ steps.consolidacao.outcome }}
+          COTACOES_RESULT_ONEDRIVE_BACKUP_RESULT: ${{ env.COTACOES_EXECUTION_DIR }}/etapas/consolidacao-diaria.json
+          COTACOES_RESULT_ONEDRIVE_PACKAGE_OUTCOME: ${{ steps.consolidacao.outcome }}
+          COTACOES_RESULT_ONEDRIVE_UPLOAD_OUTCOME: ${{ steps.consolidacao.outcome }}
+        run: |
+          set -euo pipefail
+
+          status=completed
+          exit_code=0
+          error=""
+          if [ "$CONSOLIDATION_OUTCOME" != "success" ]; then
+            status=failed
+            exit_code=1
+            error="A consolidacao diaria nao foi concluida."
+          fi
+          arguments=(
+            --directory "$COTACOES_EXECUTION_DIR"
+            --execution-id "$COTACOES_EXECUTION_ID"
+            --status "$status"
+            --exit-code "$exit_code"
+          )
+          if [ -n "$error" ]; then
+            arguments+=(--error "$error")
+          fi
+          PYTHONPATH=src python scripts/finalizar_execucao.py "${arguments[@]}"
+
+      - name: Preservar diagnosticos da consolidacao
+        if: always() && steps.contexto.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidacao-backups-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.COTACOES_EXECUTION_DIR }}/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Remover credencial e trabalho temporarios
+        if: always() && steps.contexto.outcome == 'success'
+        run: |
+          case "$CONSOLIDATION_RUNTIME_DIR" in
+            .backup-work/daily-*) rm -rf -- "$CONSOLIDATION_RUNTIME_DIR" ;;
+            *) echo "::warning::Diretorio temporario inesperado." ;;
+          esac
+
+      - name: Confirmar resultado da consolidacao
+        if: always() && steps.janela.outputs.should_run == 'true'
+        run: |
+          if [ "${{ steps.consolidacao.outcome }}" != "success" ]; then
+            echo "::error::A consolidacao diaria falhou. Os stagings foram preservados."
+            exit 1
+          fi
+          echo "Consolidacao diaria concluida."

@@ -1827,9 +1827,10 @@ def _validate_history_target(
         raise LegacyMigrationPlanError(
             "O destino historico possui uma camada invalida."
         ) from error
-    if layer is BackupLayer.LATEST:
+    if layer not in {BackupLayer.DAILY, BackupLayer.DEEP}:
         raise LegacyMigrationPlanError(
-            "A camada latest e proibida na importacao historica."
+            "Somente as camadas daily e deep sao permitidas na "
+            "importacao historica."
         )
     specification = BackupLayerSpec.for_layer(layer, operation_date)
     expected_relative = (

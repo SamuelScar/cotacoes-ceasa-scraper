@@ -52,7 +52,7 @@ def main() -> int:
     write_json_atomic(publication_path, publication)
     context.register_file(publication_path)
 
-    backup_result_path = args.directory / "etapas/backup-workflow.json"
+    backup_result_path = resolve_backup_result_path(args.directory)
     if backup_result_path.is_file():
         context.register_file(backup_result_path)
 
@@ -108,15 +108,13 @@ def build_publication_result(directory: Path) -> dict[str, Any]:
         if bypass_value
         else bool(previous_gate.get("bypassed", False))
     )
-    configured_backup_result = os.getenv(
-        "COTACOES_RESULT_ONEDRIVE_BACKUP_RESULT", ""
-    ).strip()
-    backup_result_path = (
-        Path(configured_backup_result)
-        if configured_backup_result
-        else directory / "etapas/backup-workflow.json"
-    )
-    layered_backup = load_json(backup_result_path)
+    backup_result_path = resolve_backup_result_path(directory)
+    backup_result = load_json(backup_result_path)
+    layered_backup = backup_result
+    if isinstance(backup_result, dict) and isinstance(
+        backup_result.get("layered_backup"), dict
+    ):
+        layered_backup = backup_result["layered_backup"]
     return {
         "schema_version": 1,
         "restore": {
@@ -375,14 +373,26 @@ def build_summary(
         audit = mapping(layered_backup.get("audit_publication"))
         lines.extend(
             [
-                "## Backups em camadas do OneDrive",
+                "## Backups do OneDrive",
                 "",
                 "| Item | Valor |",
                 "| --- | --- |",
                 f"| Resultado geral | {escape(layered_backup.get('status'))} |",
-                f"| Latest | {escape(mapping(layers.get('latest')).get('status'))} |",
-                f"| Daily | {escape(mapping(layers.get('daily')).get('status'))} |",
-                f"| Deep | {escape(mapping(layers.get('deep')).get('status'))} |",
+            ]
+        )
+        for layer_name, label in (
+            ("staging", "Staging"),
+            ("latest", "Latest"),
+            ("daily", "Daily"),
+            ("deep", "Deep"),
+        ):
+            if layer_name in layers:
+                lines.append(
+                    f"| {label} | "
+                    f"{escape(mapping(layers.get(layer_name)).get('status'))} |"
+                )
+        lines.extend(
+            [
                 f"| Manifesto audit | {escape(audit.get('status'))} |",
                 f"| Retencao | {escape(retention.get('status'))} |",
                 f"| Arquivos removidos | {len(retention.get('removed_files', [])) if isinstance(retention.get('removed_files'), list) else 0} |",
@@ -406,6 +416,20 @@ def load_json(path: Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def resolve_backup_result_path(directory: Path) -> Path:
+    configured = os.getenv(
+        "COTACOES_RESULT_ONEDRIVE_BACKUP_RESULT", ""
+    ).strip()
+    if configured:
+        return Path(configured)
+    candidates = (
+        directory / "etapas/backup-coleta.json",
+        directory / "etapas/consolidacao-diaria.json",
+        directory / "etapas/backup-workflow.json",
+    )
+    return next((path for path in candidates if path.is_file()), candidates[-1])
 
 
 def mapping(value: object) -> dict[str, Any]:

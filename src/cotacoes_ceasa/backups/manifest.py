@@ -6,8 +6,9 @@ import json
 import os
 import platform
 import re
+from copy import deepcopy
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +16,16 @@ from cotacoes_ceasa.backups.packaging import (
     BackupArtifact,
     BackupLayer,
     BackupLayerSpec,
+    COLLECTION_BACKUP_LAYERS,
+    CONSOLIDATION_BACKUP_LAYERS,
+    LAYERED_BACKUP_LAYERS,
     collect_source_metrics,
 )
-from cotacoes_ceasa.backups.policy import managed_remote_path
+from cotacoes_ceasa.backups.policy import (
+    layer_file_date,
+    managed_remote_path,
+    validate_layer_remote_path,
+)
 from cotacoes_ceasa.execution import (
     ExecutionContext,
     execution_now,
@@ -30,10 +38,26 @@ MANIFEST_SCHEMA_VERSION = 1
 FINAL_MANIFEST_STATUSES = {"completed", "failed"}
 LAYER_OUTCOMES = {"skipped", "failed"}
 UPLOAD_STATUSES = {"completed", "failed", "skipped"}
+MANIFEST_DOCUMENT_TYPES = {
+    "layered_backup",
+    "collection_backup",
+    "daily_consolidation",
+}
 
 
 class BackupManifestError(RuntimeError):
     """Indica um manifesto ausente, inconsistente ou encerrado."""
+
+
+@dataclass(frozen=True)
+class ManifestSourceBackup:
+    """Referencia imutavel ao backup usado por uma consolidacao."""
+
+    execution_id: str
+    manifest_remote_path: str
+    staging_remote_path: str
+    sha256: str
+    backup_date: date
 
 
 @dataclass(frozen=True)
@@ -43,6 +67,9 @@ class ManifestRequest:
     source_directory: Path
     backup_date: date | None = None
     required_layers: frozenset[BackupLayer] | None = None
+    document_type: str = "layered_backup"
+    source_backup: ManifestSourceBackup | None = None
+    started_at: datetime | None = None
 
 
 def create_backup_manifest(request: ManifestRequest) -> Path:
@@ -56,9 +83,17 @@ def create_backup_manifest(request: ManifestRequest) -> Path:
         raise BackupManifestError(
             f"A origem do manifesto nao e um diretorio: {source}."
         )
-    started_at = execution_now()
+    started_at = _normalize_started_at(request.started_at)
     backup_date = request.backup_date or started_at.date()
-    required_layers = _normalize_required_layers(request.required_layers)
+    document_type = _normalize_document_type(request.document_type)
+    required_layers = _normalize_required_layers(
+        request.required_layers,
+        document_type,
+    )
+    source_backup = _normalize_source_backup(
+        request.source_backup,
+        document_type,
+    )
     file_name = f"backup-{started_at.strftime('%Y%m%d-%H%M%S')}.json"
     manifest_path = request.execution_directory / "etapas" / file_name
     if manifest_path.exists():
@@ -74,8 +109,12 @@ def create_backup_manifest(request: ManifestRequest) -> Path:
     _validate_execution_id(context.state_path, execution_id)
 
     layers: dict[str, dict[str, Any]] = {}
-    for layer in BackupLayer:
-        specification = BackupLayerSpec.for_layer(layer, backup_date)
+    for layer in _manifest_layers(document_type):
+        specification = BackupLayerSpec.for_layer(
+            layer,
+            backup_date,
+            backup_datetime=started_at,
+        )
         final_remote_path = managed_remote_path(
             specification.remote_directory.as_posix(),
             specification.file_name,
@@ -113,6 +152,7 @@ def create_backup_manifest(request: ManifestRequest) -> Path:
 
     payload: dict[str, Any] = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
+        "document_type": document_type,
         "execution_id": execution_id,
         "status": "running",
         "timezone": "America/Sao_Paulo",
@@ -129,6 +169,11 @@ def create_backup_manifest(request: ManifestRequest) -> Path:
             "bytes": 0,
         },
         "required_layers": sorted(layer.value for layer in required_layers),
+        "relationships": {
+            "staging_path": _layer_final_path(layers, "staging"),
+            "latest_path": _layer_final_path(layers, "latest"),
+            "consolidation_source": source_backup,
+        },
         "layers": layers,
         "onedrive": {
             "quota_before": None,
@@ -214,6 +259,48 @@ def record_backup_artifact(
     )
     layer["validation"] = {"status": "passed", "detail": None}
     _append_history(payload, "package_completed", layer_name)
+    _write_manifest(manifest_path, payload)
+
+
+def record_reused_backup_artifact(
+    manifest_path: Path,
+    source_layer_name: str,
+    target_layer_name: str,
+) -> None:
+    """Registra que duas publicacoes reutilizam o mesmo pacote validado."""
+    if source_layer_name == target_layer_name:
+        raise BackupManifestError(
+            "As camadas de origem e destino da reutilizacao devem diferir."
+        )
+    payload = _load_running_manifest(manifest_path)
+    source_layer = _manifest_layer(payload, source_layer_name)
+    target_layer = _manifest_layer(payload, target_layer_name)
+    if (
+        source_layer.get("status") != "packaged"
+        or source_layer.get("package", {}).get("status") != "completed"
+        or source_layer.get("validation", {}).get("status") != "passed"
+    ):
+        raise BackupManifestError(
+            "A reutilizacao exige um pacote de origem validado."
+        )
+    for field in ("format", "algorithm", "parameters"):
+        _require_equal(
+            field,
+            source_layer.get(field),
+            target_layer.get(field),
+        )
+    target_layer["status"] = "packaged"
+    target_layer["package"] = deepcopy(source_layer["package"])
+    target_layer["validation"] = {
+        "status": "passed",
+        "detail": f"Pacote reutilizado da camada {source_layer_name}.",
+    }
+    _append_history(
+        payload,
+        "package_reused",
+        target_layer_name,
+        f"Origem: {source_layer_name}.",
+    )
     _write_manifest(manifest_path, payload)
 
 
@@ -537,6 +624,7 @@ def _validate_completed_manifest(payload: dict[str, Any]) -> None:
             + "."
         )
     required_layers = _manifest_required_layers(payload)
+    document_type = _manifest_document_type(payload)
     latest = layers.get(BackupLayer.LATEST.value)
     if (
         BackupLayer.LATEST in required_layers
@@ -548,6 +636,23 @@ def _validate_completed_manifest(payload: dict[str, Any]) -> None:
         raise BackupManifestError(
             "O manifesto nao pode ser concluido sem publicar a camada latest."
         )
+    if document_type == "collection_backup":
+        not_uploaded = [
+            layer.value
+            for layer in COLLECTION_BACKUP_LAYERS
+            if not isinstance(layers.get(layer.value), dict)
+            or layers[layer.value].get("status") != "uploaded"
+        ]
+        if not_uploaded:
+            raise BackupManifestError(
+                "O manifesto da coleta exige staging e latest publicados: "
+                + ", ".join(sorted(not_uploaded))
+                + "."
+            )
+    _normalize_source_backup(
+        _source_backup_from_payload(payload),
+        document_type,
+    )
     if payload.get("errors"):
         raise BackupManifestError(
             "Um manifesto com erros deve ser finalizado com status failed."
@@ -564,8 +669,14 @@ def _validate_completed_manifest(payload: dict[str, Any]) -> None:
 
 def _normalize_required_layers(
     value: frozenset[BackupLayer] | None,
+    document_type: str,
 ) -> frozenset[BackupLayer]:
-    required = frozenset(BackupLayer) if value is None else value
+    defaults = {
+        "layered_backup": LAYERED_BACKUP_LAYERS,
+        "collection_backup": COLLECTION_BACKUP_LAYERS,
+        "daily_consolidation": CONSOLIDATION_BACKUP_LAYERS,
+    }
+    required = defaults[document_type] if value is None else value
     if not required:
         raise BackupManifestError(
             "O manifesto exige ao menos uma camada de backup."
@@ -575,15 +686,29 @@ def _normalize_required_layers(
         raise BackupManifestError(
             "O manifesto recebeu uma camada de backup desconhecida."
         )
+    allowed = defaults[document_type]
+    if not required.issubset(allowed):
+        raise BackupManifestError(
+            f"Camadas invalidas para o manifesto {document_type}: "
+            + ", ".join(
+                sorted(layer.value for layer in required.difference(allowed))
+            )
+            + "."
+        )
+    if document_type == "collection_backup" and required != allowed:
+        raise BackupManifestError(
+            "O manifesto da coleta exige as camadas staging e latest."
+        )
     return required
 
 
 def _manifest_required_layers(
     payload: dict[str, Any],
 ) -> frozenset[BackupLayer]:
+    document_type = _manifest_document_type(payload)
     raw_layers = payload.get("required_layers")
     if raw_layers is None:
-        return frozenset(BackupLayer)
+        return _normalize_required_layers(None, document_type)
     if not isinstance(raw_layers, list) or not raw_layers:
         raise BackupManifestError(
             "As camadas obrigatorias do manifesto sao invalidas."
@@ -598,7 +723,141 @@ def _manifest_required_layers(
         raise BackupManifestError(
             "As camadas obrigatorias do manifesto estao duplicadas."
         )
-    return required
+    return _normalize_required_layers(required, document_type)
+
+
+def _normalize_document_type(value: object) -> str:
+    document_type = str(value).strip()
+    if document_type not in MANIFEST_DOCUMENT_TYPES:
+        raise BackupManifestError(
+            f"Tipo de manifesto desconhecido: {document_type}."
+        )
+    return document_type
+
+
+def _manifest_document_type(payload: dict[str, Any]) -> str:
+    return _normalize_document_type(
+        payload.get("document_type", "layered_backup")
+    )
+
+
+def _manifest_layers(document_type: str) -> tuple[BackupLayer, ...]:
+    if document_type == "collection_backup":
+        return (BackupLayer.STAGING, BackupLayer.LATEST)
+    if document_type == "daily_consolidation":
+        return (BackupLayer.DAILY, BackupLayer.DEEP)
+    return (
+        BackupLayer.LATEST,
+        BackupLayer.DAILY,
+        BackupLayer.DEEP,
+    )
+
+
+def _normalize_started_at(value: datetime | None) -> datetime:
+    started_at = value or execution_now()
+    if started_at.tzinfo is None or started_at.utcoffset() is None:
+        raise BackupManifestError(
+            "A data de inicio do manifesto deve possuir fuso horario."
+        )
+    return started_at.astimezone(execution_now().tzinfo)
+
+
+def _normalize_source_backup(
+    value: ManifestSourceBackup | dict[str, Any] | None,
+    document_type: str,
+) -> dict[str, Any] | None:
+    if value is None:
+        if document_type == "daily_consolidation":
+            raise BackupManifestError(
+                "O manifesto da consolidacao exige o backup de origem."
+            )
+        return None
+    if document_type != "daily_consolidation":
+        raise BackupManifestError(
+            "Somente a consolidacao diaria aceita um backup de origem."
+        )
+    source = (
+        {
+            "execution_id": value.execution_id,
+            "manifest_remote_path": value.manifest_remote_path,
+            "staging_remote_path": value.staging_remote_path,
+            "sha256": value.sha256,
+            "backup_date": value.backup_date.isoformat(),
+        }
+        if isinstance(value, ManifestSourceBackup)
+        else value
+    )
+    if not isinstance(source, dict):
+        raise BackupManifestError(
+            "A referencia ao backup de origem deve ser um objeto."
+        )
+    execution_id = sanitize_log_text(str(source.get("execution_id", "")).strip())
+    if not re.fullmatch(
+        r"[0-9A-Za-z][0-9A-Za-z_-]{0,127}",
+        execution_id,
+    ):
+        raise BackupManifestError(
+            "A referencia de origem exige um identificador de execucao "
+            "valido."
+        )
+    manifest_path = validate_layer_remote_path(
+        "audit",
+        str(source.get("manifest_remote_path", "")),
+    )
+    staging_path = validate_layer_remote_path(
+        "staging",
+        str(source.get("staging_remote_path", "")),
+    )
+    sha256 = str(source.get("sha256", "")).strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise BackupManifestError(
+            "A referencia de origem exige um SHA-256 valido."
+        )
+    try:
+        backup_date = date.fromisoformat(str(source.get("backup_date", "")))
+    except ValueError as error:
+        raise BackupManifestError(
+            "A referencia de origem possui uma data invalida."
+        ) from error
+    if layer_file_date("staging", staging_path.name) != backup_date:
+        raise BackupManifestError(
+            "A data do staging diverge da referencia de origem."
+        )
+    if layer_file_date("audit", manifest_path.name) != backup_date:
+        raise BackupManifestError(
+            "A data do manifesto diverge da referencia de origem."
+        )
+    return {
+        "execution_id": execution_id,
+        "manifest_remote_path": manifest_path.as_posix(),
+        "staging_remote_path": staging_path.as_posix(),
+        "sha256": sha256,
+        "backup_date": backup_date.isoformat(),
+    }
+
+
+def _source_backup_from_payload(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    relationships = payload.get("relationships")
+    if not isinstance(relationships, dict):
+        return None
+    source = relationships.get("consolidation_source")
+    return source if isinstance(source, dict) else None
+
+
+def _layer_final_path(
+    layers: dict[str, dict[str, Any]],
+    layer_name: str,
+) -> str | None:
+    layer = layers.get(layer_name)
+    if not isinstance(layer, dict):
+        return None
+    upload = layer.get("upload")
+    if not isinstance(upload, dict):
+        return None
+    final_path = upload.get("final_path")
+    return str(final_path) if final_path is not None else None
 
 
 def _append_error(payload: dict[str, Any], error: str) -> None:
