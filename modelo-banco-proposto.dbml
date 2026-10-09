@@ -1,0 +1,139 @@
+Enum coleta_status {
+  pendente
+  processada
+  descartada_duplicada
+  erro_download
+  erro_processamento
+}
+
+Enum backfill_status {
+  complete
+  partial
+  paused_for_recheck
+  exhausted
+  failed
+}
+
+Table fontes {
+  id integer [pk, increment]
+  slug varchar [not null, unique]
+  nome varchar [not null]
+  url_base varchar [not null]
+  uf char(2)
+}
+
+Table entrepostos {
+  id integer [pk, increment]
+  fonte_id integer [not null, ref: > fontes.id]
+  slug varchar [not null]
+  nome varchar [not null]
+  cidade varchar
+  uf char(2) [not null]
+
+  indexes {
+    (fonte_id, slug) [unique]
+  }
+}
+
+Table categorias {
+  id integer [pk, increment]
+  slug varchar [not null, unique]
+  nome varchar [not null]
+}
+
+Table produtos {
+  id integer [pk, increment]
+  categoria_id integer [ref: > categorias.id]
+  nome varchar [not null, unique]
+}
+
+Table produto_aliases {
+  id integer [pk, increment]
+  produto_id integer [not null, ref: > produtos.id]
+  texto_original varchar [not null, unique]
+}
+
+Table apresentacoes {
+  id integer [pk, increment]
+  texto_original varchar [not null, unique]
+  unidade_normalizada varchar
+  embalagem varchar
+  quantidade_minima decimal
+  quantidade_maxima decimal
+  detalhe varchar
+}
+
+Table coletas {
+  id integer [pk, increment]
+  fonte_id integer [not null, ref: > fontes.id]
+  duplicada_de_id integer [ref: > coletas.id]
+  url_origem varchar [not null]
+  caminho_relativo_raw varchar
+  sha256 char(64)
+  iniciada_em datetime [not null]
+  baixado_em datetime
+  processado_em datetime
+  status coleta_status [not null]
+  mensagem_erro text
+
+  indexes {
+    (fonte_id, sha256)
+  }
+
+  Note: 'Toda tentativa gera uma linha. Coletas processadas e erros de processamento possuem raw, SHA-256 e data de download. Coletas duplicadas mantêm o SHA-256 e apontam para a coleta original, mas não mantêm outra cópia do arquivo.'
+}
+
+Table cotacoes {
+  id integer [pk, increment]
+  coleta_id integer [not null, ref: > coletas.id]
+  entreposto_id integer [ref: > entrepostos.id]
+  produto_alias_id integer [not null, ref: > produto_aliases.id]
+  apresentacao_id integer [ref: > apresentacoes.id]
+  data_cotacao date [not null]
+  variedade varchar
+  classificacao varchar
+  procedencia varchar
+  preco_minimo decimal
+  preco_comum decimal
+  preco_maximo decimal
+  situacao_mercado varchar
+
+  Note: 'Pelo menos um preço deve existir e nenhum preço pode ser negativo. Documentos diferentes mantêm cotações próprias mesmo quando os valores coincidem.'
+}
+
+Table cotacao_complementos {
+  id integer [pk, increment]
+  cotacao_id integer [not null, ref: > cotacoes.id]
+  coleta_id integer [not null, ref: > coletas.id]
+  campo varchar [not null]
+  valor_anterior text
+  valor_novo text [not null]
+  complementado_em datetime [not null]
+
+  indexes {
+    (cotacao_id, campo) [unique]
+  }
+
+  Note: 'Registra o preenchimento de um campo vazio pelo PROHORT. O mesmo campo não pode ser complementado duas vezes.'
+}
+
+Table controle_backfill {
+  id integer [pk, increment]
+  fonte_id integer [not null, ref: > fontes.id]
+  categoria_id integer [ref: > categorias.id]
+  status backfill_status [not null]
+  data_cursor date
+  tentativas_sem_progresso integer [not null, default: 0]
+  proxima_verificacao_em datetime
+  ultimo_erro text
+  atualizado_em datetime [not null]
+
+  Note: 'No SQLite, índices únicos parciais garantem um registro geral por fonte quando categoria_id é nulo e um registro por fonte/categoria nos demais casos.'
+}
+
+Table schema_migrations {
+  chave varchar [pk]
+  aplicada_em datetime [not null]
+  checkpoint text
+  detalhes text
+}

@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.cli.progress import ProgressReporter
 from cotacoes_ceasa.core.contracts import SourceParser
-from cotacoes_ceasa.core.models import Cotacao
+from cotacoes_ceasa.core.models import ColetaStatus, Cotacao
 from cotacoes_ceasa.parsers.pdf import (
     configure_pdf_text_cache,
     get_pdf_text_cache_stats,
@@ -16,6 +16,7 @@ from cotacoes_ceasa.parsers.pdf import (
 )
 from cotacoes_ceasa.storage.raw_html import build_raw_hash
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
+from cotacoes_ceasa.storage.sqlite_v4 import SQLiteV4Storage, StoredRaw
 
 
 RAW_FILE_PATTERN = re.compile(
@@ -58,6 +59,7 @@ def process_raw_and_report(
     raw_detail_report: bool = False,
     output: TerminalOutput | None = None,
     raw_files: list[Path] | None = None,
+    collection_storage: SQLiteV4Storage | None = None,
 ) -> list[Cotacao]:
     """Processa arquivos brutos salvos em disco e retorna cotacoes normalizadas."""
     output = output or TerminalOutput()
@@ -83,11 +85,17 @@ def process_raw_and_report(
             f"{len(selected_raw_files)} arquivo(s) selecionado(s) nesta coleta."
         )
 
+    if force_reprocess and collection_storage is not None:
+        output.warning(
+            "--force-reprocess nao recria cotacoes no esquema v4; "
+            "documentos ja processados continuam sendo ignorados."
+        )
+
     stats = RawProcessingStats(selected_files=len(selected_raw_files))
     lookup_started_at = perf_counter()
     processed_raws = (
         set()
-        if force_reprocess
+        if force_reprocess or collection_storage is not None
         else SQLiteStorage(database_path).find_processed_raw_hashes(selected_raw_files)
     )
     stats.skip_lookup_seconds += perf_counter() - lookup_started_at
@@ -103,8 +111,25 @@ def process_raw_and_report(
 
         for file_path in selected_raw_files:
             progress_task.update(current=file_path.name)
+            coleta_id: int | None = None
+            pending_collection: StoredRaw | None = None
+            relative_path: str | None = None
 
             try:
+                if collection_storage is not None:
+                    relative_path = _relative_raw_path(file_path, raw_dir)
+                    pending_collection = (
+                        collection_storage.find_pending_collection_for_path(
+                            source_slug,
+                            relative_path,
+                        )
+                    )
+                    coleta_id = (
+                        pending_collection.coleta_id
+                        if pending_collection is not None
+                        else None
+                    )
+
                 metadata_started_at = perf_counter()
                 metadata = parse_raw_document_metadata(file_path)
                 stats.metadata_seconds += perf_counter() - metadata_started_at
@@ -122,10 +147,96 @@ def process_raw_and_report(
                 stats.hash_seconds += perf_counter() - hash_started_at
 
                 lookup_started_at = perf_counter()
-                already_processed = (
-                    file_path.as_posix(),
-                    raw_hash,
-                ) in processed_raws
+                already_processed = False
+
+                if collection_storage is None:
+                    already_processed = (
+                        file_path.as_posix(),
+                        raw_hash,
+                    ) in processed_raws
+                else:
+                    if relative_path is None:
+                        raise RuntimeError("Caminho relativo do raw nao calculado.")
+
+                    collection = collection_storage.find_collection_for_raw(
+                        source_slug,
+                        raw_hash,
+                        relative_path,
+                    )
+
+                    if (
+                        collection is not None
+                        and collection.status is ColetaStatus.PROCESSADA
+                    ):
+                        already_processed = True
+                    elif (
+                        collection is not None
+                        and collection.status is ColetaStatus.PENDENTE
+                    ):
+                        coleta_id = collection.coleta_id
+                    else:
+                        if coleta_id is not None:
+                            collection_storage.mark_coleta_error(
+                                coleta_id,
+                                ColetaStatus.ERRO_PROCESSAMENTO,
+                                "O conteudo do raw mudou depois do download.",
+                            )
+                            coleta_id = None
+
+                        duplicate = collection_storage.find_duplicate(
+                            source_slug,
+                            raw_hash,
+                        )
+
+                        if duplicate is not None:
+                            original_exists = _stored_raw_exists(
+                                duplicate,
+                                raw_dir,
+                            )
+
+                            if not original_exists:
+                                collection_storage.replace_missing_raw(
+                                    duplicate.coleta_id,
+                                    relative_path,
+                                )
+
+                            duplicate_id = collection_storage.create_coleta(
+                                source_slug,
+                                url_origem,
+                                metadata.downloaded_at,
+                            )
+                            collection_storage.mark_coleta_duplicate(
+                                duplicate_id,
+                                duplicate.coleta_id,
+                                raw_hash,
+                                metadata.downloaded_at,
+                            )
+
+                            if duplicate.status is ColetaStatus.PENDENTE:
+                                coleta_id = duplicate.coleta_id
+
+                            if original_exists:
+                                _discard_duplicate_raw(
+                                    file_path,
+                                    duplicate,
+                                    raw_dir,
+                                )
+
+                            if duplicate.status is ColetaStatus.PROCESSADA:
+                                already_processed = True
+                        else:
+                            coleta_id = collection_storage.create_coleta(
+                                source_slug,
+                                url_origem,
+                                metadata.downloaded_at,
+                            )
+                            collection_storage.mark_coleta_downloaded(
+                                coleta_id,
+                                raw_hash,
+                                relative_path,
+                                metadata.downloaded_at,
+                            )
+
                 stats.skip_lookup_seconds += perf_counter() - lookup_started_at
 
                 if already_processed:
@@ -155,6 +266,7 @@ def process_raw_and_report(
                             source_slug,
                             metadata.target_date,
                         ),
+                        coleta_id=coleta_id,
                         arquivo_raw=file_path.as_posix(),
                         hash_raw=raw_hash,
                         baixado_em=metadata.downloaded_at,
@@ -162,12 +274,26 @@ def process_raw_and_report(
                     for cotacao in parsed_cotacoes
                 ]
             except Exception as error:
+                if collection_storage is not None and coleta_id is not None:
+                    collection_storage.mark_coleta_error(
+                        coleta_id,
+                        ColetaStatus.ERRO_PROCESSAMENTO,
+                        str(error),
+                    )
                 stats.failed_files += 1
                 output.warning(f"{file_path.name} | {error}")
                 progress_task.advance(current=file_path.name)
                 continue
 
             cotacoes.extend(parsed_cotacoes)
+
+            if (
+                collection_storage is not None
+                and coleta_id is not None
+                and not parsed_cotacoes
+            ):
+                collection_storage.mark_coleta_processed(coleta_id)
+
             stats.processed_files += 1
             if parsed_cotacoes:
                 stats.quoted_files += 1
@@ -210,6 +336,31 @@ def process_raw_and_report(
     )
 
     return cotacoes
+
+
+def _relative_raw_path(file_path: Path, raw_dir: Path) -> str:
+    return file_path.resolve().relative_to(raw_dir.parent.resolve()).as_posix()
+
+
+def _stored_raw_exists(duplicate: StoredRaw, raw_dir: Path) -> bool:
+    if duplicate.caminho_relativo_raw is None:
+        return False
+
+    return (raw_dir.parent / duplicate.caminho_relativo_raw).is_file()
+
+
+def _discard_duplicate_raw(
+    file_path: Path,
+    duplicate: StoredRaw,
+    raw_dir: Path,
+) -> None:
+    if duplicate.caminho_relativo_raw is None:
+        return
+
+    original_path = raw_dir.parent / duplicate.caminho_relativo_raw
+
+    if file_path.resolve() != original_path.resolve() and file_path.exists():
+        file_path.unlink()
 
 
 def fill_missing_quote_date(

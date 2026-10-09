@@ -10,6 +10,7 @@ from cotacoes_ceasa.storage.sqlite import (
     SQLITE_SCHEMA_VERSION,
     SQLiteStorage,
 )
+from cotacoes_ceasa.storage.sqlite_v4 import require_legacy_sqlite_schema
 
 
 PROVENANCE_REPORT_SCHEMA_VERSION = 2
@@ -141,6 +142,8 @@ class ProvenanceCandidateResult:
 def analyze_provenance(database_path: Path) -> ProvenanceAnalysis:
     if not database_path.is_file():
         raise FileNotFoundError(f"SQLite nao encontrado: {database_path}")
+
+    require_legacy_sqlite_schema(database_path, "A auditoria de proveniencia")
 
     database_uri = f"{database_path.resolve().as_uri()}?mode=ro"
     with sqlite3.connect(database_uri, uri=True) as connection:
@@ -332,6 +335,8 @@ def analyze_provenance(database_path: Path) -> ProvenanceAnalysis:
 def validate_historical_provenance(database_path: Path) -> int:
     if not database_path.is_file():
         raise FileNotFoundError(f"SQLite nao encontrado: {database_path}")
+
+    require_legacy_sqlite_schema(database_path, "A validacao de proveniencia")
 
     database_uri = f"{database_path.resolve().as_uri()}?mode=ro"
     with sqlite3.connect(database_uri, uri=True) as connection:
@@ -556,6 +561,7 @@ def write_duplicate_provenance_manifest(
 
 def apply_historical_provenance_migration(database_path: Path) -> bool:
     """Aplica a proveniencia historica uma unica vez e valida o checkpoint."""
+    require_legacy_sqlite_schema(database_path, "A migracao de proveniencia")
     registered_at = datetime.now().astimezone().isoformat(timespec="seconds")
 
     with sqlite3.connect(database_path) as connection:

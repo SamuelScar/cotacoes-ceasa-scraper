@@ -3,6 +3,7 @@ from pathlib import Path
 from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.config import AppConfig
 from cotacoes_ceasa.storage.raw_html import RawArchiveResult, RawHtmlStorage
+from cotacoes_ceasa.storage.sqlite_v4 import detect_sqlite_schema
 from cotacoes_ceasa.storage.supabase import SupabaseSynchronizer
 from cotacoes_ceasa.workflows.prohort import (
     ProhortComplementer,
@@ -37,6 +38,12 @@ def run_supabase_sync_command(
 ) -> None:
     if not config.supabase_database_url:
         raise ValueError("COTACOES_SUPABASE_DATABASE_URL nao configurada no .env.")
+
+    if detect_sqlite_schema(Path(args.database_path)) == "v4":
+        raise ValueError(
+            "A sincronizacao com Supabase pertence ao esquema legado e nao "
+            "aceita o SQLite v4."
+        )
 
     output.header(
         (
@@ -109,6 +116,7 @@ def complement_prohort_and_report(
         database_path=Path(args.database_path),
         prohort_url=prohort_url,
         timeout_seconds=args.http_timeout_seconds,
+        raw_dir=Path(args.raw_dir),
     ).complement()
 
     if not result.database_found:

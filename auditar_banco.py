@@ -5476,10 +5476,38 @@ def default_output_directory() -> Path:
     return AUDIT_LOG_ROOT / f"{timestamp}{suffix}"
 
 
+def uses_v4_schema(database_path: Path) -> bool:
+    if not database_path.is_file():
+        return False
+
+    database_uri = f"{database_path.resolve().as_uri()}?mode=ro"
+
+    with sqlite3.connect(database_uri, uri=True) as connection:
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(coletas)")
+        }
+
+    return "fonte_id" in columns
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     output_directory = args.output or default_output_directory()
+
+    try:
+        if uses_v4_schema(args.database):
+            print(
+                "Erro: a auditoria integral atual pertence ao esquema legado; "
+                "a auditoria do SQLite v4 ainda precisa ser implementada.",
+                file=sys.stderr,
+            )
+            return 1
+    except sqlite3.Error as error:
+        print(f"Erro: {error}", file=sys.stderr)
+        return 1
+
     auditor = DatabaseAuditor(
         database_path=args.database,
         output_directory=output_directory,

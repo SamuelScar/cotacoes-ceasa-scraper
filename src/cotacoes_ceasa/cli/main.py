@@ -35,6 +35,7 @@ from cotacoes_ceasa.execution import (
     write_text_atomic,
 )
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
+from cotacoes_ceasa.storage.sqlite_v4 import SQLiteV4Storage, detect_sqlite_schema
 from cotacoes_ceasa.workflows.collection import PartialDownloadError
 from cotacoes_ceasa.workflows.backfill import (
     BackfillBaseline,
@@ -339,9 +340,13 @@ def run_backfill_state_reset(args, output: TerminalOutput) -> None:
             ("Banco", args.database_path),
         ),
     )
-    removed_count = SQLiteStorage(
-        Path(args.database_path)
-    ).reset_backfill_state(args.source)
+    database_path = Path(args.database_path)
+    storage = (
+        SQLiteV4Storage(database_path)
+        if detect_sqlite_schema(database_path) == "v4"
+        else SQLiteStorage(database_path)
+    )
+    removed_count = storage.reset_backfill_state(args.source)
     output.success(f"{removed_count} estado(s) removido(s).")
     output.summary(
         (
@@ -447,7 +452,12 @@ def report_deferred_backfill(
     if not deferred_sources:
         return False
 
-    storage = SQLiteStorage(Path(args.database_path))
+    database_path = Path(args.database_path)
+    storage = (
+        SQLiteV4Storage(database_path)
+        if detect_sqlite_schema(database_path) == "v4"
+        else SQLiteStorage(database_path)
+    )
     rows: list[tuple[str, object]] = []
 
     for source_slug in deferred_sources:
@@ -764,8 +774,13 @@ def build_report_configuration(
         return tuple(rows)
 
     all_sources = args.source is None
-    saves_database = args.save or args.process_raw or args.download_and_process
-    automatic_prohort = config.complement_prohort and saves_database
+    saves_quotes = args.save or args.process_raw or args.download_and_process
+    tracks_v4_download = (
+        args.download_only
+        and detect_sqlite_schema(Path(args.database_path)) == "v4"
+    )
+    saves_database = saves_quotes or tracks_v4_download
+    automatic_prohort = config.complement_prohort and saves_quotes
     accesses_source_http = not args.process_raw
     accesses_http = accesses_source_http or automatic_prohort
     source_slugs = ", ".join(config.sources) if all_sources else args.source
@@ -785,6 +800,8 @@ def build_report_configuration(
 
     if saves_database:
         rows.append(("COTACOES_DATABASE_PATH", args.database_path))
+
+    if saves_quotes:
         rows.append(("COTACOES_PDF_TEXT_CACHE_DIR", args.pdf_text_cache_dir))
         rows.append(("Reprocessamento forcado", "sim" if args.force_reprocess else "nao"))
         rows.append(

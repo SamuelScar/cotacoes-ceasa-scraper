@@ -13,13 +13,17 @@ from cotacoes_ceasa.cli.parser import (
     parse_target_date,
 )
 from cotacoes_ceasa.config import AppConfig, SourceConfig
-from cotacoes_ceasa.core.models import Cotacao
+from cotacoes_ceasa.core.models import ColetaStatus, Cotacao
 from cotacoes_ceasa.sources.registry import (
     build_registered_collector,
     build_source_parser,
 )
 from cotacoes_ceasa.parsers.pdf import configure_pdf_text_cache
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
+from cotacoes_ceasa.storage.sqlite_v4 import (
+    SQLiteV4Storage,
+    detect_sqlite_schema,
+)
 from cotacoes_ceasa.workflows.collection import (
     PartialDownloadError,
     collect_and_report,
@@ -72,6 +76,11 @@ def run_source(
             requested_quotes_back,
         ),
     )
+    collection_storage = build_collection_storage(
+        args,
+        source_config,
+        database_path,
+    )
     collector = build_collector(
         args=args,
         config=config,
@@ -96,6 +105,10 @@ def run_source(
         )
         return
 
+    if args.save and collection_storage is not None:
+        run_source_download_and_process(args, config, output)
+        return None
+
     if args.process_raw:
         cotacoes = process_raw_and_report(
             parser=source_parser,
@@ -108,6 +121,7 @@ def run_source(
             raw_detail_report=args.raw_detail_report,
             output=output,
             raw_files=raw_files,
+            collection_storage=collection_storage,
         )
         output.section("Persistencia")
         output.info(f"Salvando cotacoes em {args.database_path}.")
@@ -192,6 +206,8 @@ def run_source(
             limited_history=limited_history,
             database_path=database_path,
             strict_history_errors=strict_history_errors,
+            collection_storage=collection_storage,
+            source_url=args.base_url or source_config.base_url,
         )
         complete_source_operation(
             output,
@@ -315,17 +331,100 @@ def save_valid_cotacoes(
             f"{args.source} | {rejected_count} cotacao(oes) rejeitada(s) "
             f"antes da persistencia: {format_rejection_counts(rejection_counts)}."
         )
+        mark_rejected_collections(
+            args,
+            cotacoes,
+            valid_cotacoes,
+        )
 
     if not valid_cotacoes:
         return 0, rejected_count
 
-    inserted_count = save_cotacoes(
-        args=args,
-        cotacoes=valid_cotacoes,
-        source_config=source_config,
-    )
+    try:
+        inserted_count = save_cotacoes(
+            args=args,
+            cotacoes=valid_cotacoes,
+            source_config=source_config,
+        )
+    except Exception as error:
+        try:
+            mark_collections_processing_error(
+                args,
+                valid_cotacoes,
+                f"Falha ao persistir cotacoes: {error}",
+            )
+        except Exception as status_error:
+            output.warning(
+                "Nao foi possivel registrar o erro de processamento das "
+                f"coletas: {status_error}"
+            )
+        raise
 
     return inserted_count, rejected_count
+
+
+def mark_rejected_collections(
+    args,
+    cotacoes: list[Cotacao],
+    valid_cotacoes: list[Cotacao],
+) -> None:
+    database_path = Path(args.database_path)
+
+    if detect_sqlite_schema(database_path) != "v4":
+        return
+
+    valid_collection_ids = {
+        cotacao.coleta_id
+        for cotacao in valid_cotacoes
+        if cotacao.coleta_id is not None
+    }
+    rejection_counts_by_collection: dict[int, dict[str, int]] = {}
+
+    for cotacao in cotacoes:
+        coleta_id = cotacao.coleta_id
+        reason = reject_cotacao_reason(cotacao)
+
+        if coleta_id is None or coleta_id in valid_collection_ids or reason is None:
+            continue
+
+        rejection_counts = rejection_counts_by_collection.setdefault(coleta_id, {})
+        rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+
+    storage = SQLiteV4Storage(database_path)
+
+    for coleta_id, rejection_counts in sorted(rejection_counts_by_collection.items()):
+        storage.mark_coleta_error(
+            coleta_id,
+            ColetaStatus.ERRO_PROCESSAMENTO,
+            f"Cotacoes rejeitadas: {format_rejection_counts(rejection_counts)}.",
+        )
+
+
+def mark_collections_processing_error(
+    args,
+    cotacoes: list[Cotacao],
+    message: str,
+) -> None:
+    database_path = Path(args.database_path)
+
+    if detect_sqlite_schema(database_path) != "v4":
+        return
+
+    collection_ids = sorted(
+        {
+            cotacao.coleta_id
+            for cotacao in cotacoes
+            if cotacao.coleta_id is not None
+        }
+    )
+    storage = SQLiteV4Storage(database_path)
+
+    for coleta_id in collection_ids:
+        storage.mark_coleta_error(
+            coleta_id,
+            ColetaStatus.ERRO_PROCESSAMENTO,
+            message,
+        )
 
 
 def split_valid_cotacoes(
@@ -369,7 +468,25 @@ def format_rejection_counts(rejection_counts: dict[str, int]) -> str:
 
 
 def save_cotacoes(args, cotacoes: list[Cotacao], source_config: SourceConfig) -> int:
-    storage = SQLiteStorage(Path(args.database_path))
+    database_path = Path(args.database_path)
+
+    if detect_sqlite_schema(database_path) == "v4":
+        storage = SQLiteV4Storage(database_path)
+        storage.register_source(
+            slug=args.source,
+            name=source_config.name,
+            base_url=args.base_url or source_config.base_url,
+            uf=source_config.uf,
+        )
+
+        return storage.save_cotacoes(
+            cotacoes=cotacoes,
+            source_slug=args.source,
+            default_market=source_config.city,
+            uf=source_config.uf,
+        )
+
+    storage = SQLiteStorage(database_path)
 
     return storage.save_cotacoes(
         cotacoes=cotacoes,
@@ -380,6 +497,31 @@ def save_cotacoes(args, cotacoes: list[Cotacao], source_config: SourceConfig) ->
         city=source_config.city,
         source_url=source_config.base_url,
     )
+
+
+def build_collection_storage(
+    args,
+    source_config: SourceConfig,
+    database_path: Path | None,
+) -> SQLiteV4Storage | None:
+    persists_data = args.process_raw or args.download_only or args.save
+
+    if (
+        not persists_data
+        or database_path is None
+        or detect_sqlite_schema(database_path) == "legacy"
+    ):
+        return None
+
+    storage = SQLiteV4Storage(database_path)
+    storage.register_source(
+        slug=args.source,
+        name=source_config.name,
+        base_url=args.base_url or source_config.base_url,
+        uf=source_config.uf,
+    )
+
+    return storage
 
 
 def resolve_source_operation(args) -> str:

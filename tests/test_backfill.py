@@ -21,6 +21,7 @@ class BackfillStateTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_dir = TemporaryDirectory()
         self.database_path = Path(self.temporary_dir.name) / "cotacoes.sqlite"
+        SQLiteStorage(self.database_path).ensure_schema()
 
     def tearDown(self) -> None:
         self.temporary_dir.cleanup()

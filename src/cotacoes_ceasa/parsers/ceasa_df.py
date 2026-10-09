@@ -129,7 +129,11 @@ class CeasaDfParser:
                     classification=cotacao.classificacao,
                     current_variety=current_variety,
                 )
-                cotacao = replace(cotacao, classificacao=classification)
+                cotacao = replace(
+                    cotacao,
+                    classificacao=classification,
+                    variedade=current_variety,
+                )
                 cotacoes.append(cotacao)
 
         return cotacoes

@@ -6,6 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from cotacoes_ceasa.storage.sqlite import SQLITE_SCHEMA_VERSION
+from cotacoes_ceasa.storage.sqlite_v4 import require_legacy_sqlite_schema
 from cotacoes_ceasa.workflows.provenance import (
     analyze_provenance,
     validate_historical_provenance,
@@ -208,6 +209,8 @@ def analyze_duplicate_content(database_path: Path) -> DuplicateAnalysis:
     if not database_path.is_file():
         raise FileNotFoundError(f"SQLite nao encontrado: {database_path}")
 
+    require_legacy_sqlite_schema(database_path, "A analise de deduplicacao")
+
     database_uri = f"{database_path.resolve().as_uri()}?mode=ro"
 
     with sqlite3.connect(database_uri, uri=True) as connection:
@@ -310,6 +313,10 @@ def create_candidate_baseline(
 
     if not source_database_path.is_file():
         raise FileNotFoundError(f"SQLite nao encontrado: {source_database_path}")
+    require_legacy_sqlite_schema(
+        source_database_path,
+        "A consolidacao da baseline",
+    )
     if source_database_path == candidate_database_path:
         raise ValueError("A baseline candidata deve usar outro arquivo SQLite.")
     if candidate_database_path.exists():
@@ -450,6 +457,8 @@ def analyze_baseline_provenance(
 ) -> BaselineProvenanceSummary:
     if not database_path.is_file():
         raise FileNotFoundError(f"SQLite nao encontrado: {database_path}")
+
+    require_legacy_sqlite_schema(database_path, "A analise da baseline")
 
     database_uri = f"{database_path.resolve().as_uri()}?mode=ro"
     with sqlite3.connect(database_uri, uri=True) as connection:

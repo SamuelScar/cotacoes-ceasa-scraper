@@ -5,9 +5,18 @@ from cotacoes_ceasa.cli.output import TerminalOutput
 from cotacoes_ceasa.cli.progress import ProgressReporter
 from cotacoes_ceasa.core.contracts import SourceCollector
 from cotacoes_ceasa.core.errors import QuotationNotFoundError
-from cotacoes_ceasa.core.models import Category, Cotacao
+from cotacoes_ceasa.core.models import Category, ColetaStatus, Cotacao
 from cotacoes_ceasa.http.client import HttpRequestError, HttpSourceBlockedError
-from cotacoes_ceasa.workflows.raw_processing import find_oldest_raw_target_date
+from cotacoes_ceasa.storage.raw_html import build_raw_hash
+from cotacoes_ceasa.storage.sqlite_v4 import (
+    SQLiteV4Storage,
+    StoredRaw,
+    detect_sqlite_schema,
+)
+from cotacoes_ceasa.workflows.raw_processing import (
+    build_raw_source_url,
+    find_oldest_raw_target_date,
+)
 
 
 INFINITE_HISTORY_EMPTY_ATTEMPTS = 366
@@ -120,10 +129,12 @@ def download_and_report(
     limited_history: bool = False,
     database_path: Path | None = None,
     strict_history_errors: bool = False,
+    collection_storage: SQLiteV4Storage | None = None,
+    source_url: str | None = None,
 ) -> list[Path]:
     """Baixa arquivos brutos para a janela de datas configurada."""
     output = output or TerminalOutput()
-    downloaded_files: dict[tuple[str, date | None], Path] = {}
+    downloaded_files: dict[tuple[str, date | None], Path | None] = {}
     saved_files: list[Path] = []
 
     try:
@@ -145,8 +156,14 @@ def download_and_report(
             limited_history=limited_history,
             database_path=database_path,
             strict_history_errors=strict_history_errors,
+            collection_storage=collection_storage,
+            source_url=source_url,
         )
-        saved_files = list(downloaded_files.values())
+        saved_files = [
+            file_path
+            for file_path in downloaded_files.values()
+            if file_path is not None
+        ]
 
         with ProgressReporter(output) as progress:
             progress_task = progress.task(
@@ -163,15 +180,21 @@ def download_and_report(
                 )
 
                 for target_date in target_dates:
-                    downloaded_file = downloaded_files.get((category.slug, target_date))
+                    download_key = (category.slug, target_date)
 
-                    if downloaded_file is not None:
+                    if download_key in downloaded_files:
                         continue
 
                     try:
-                        file_path = collector.download_category(
-                            category.slug,
-                            target_date,
+                        file_path = _download_category(
+                            collector=collector,
+                            category_slug=category.slug,
+                            target_date=target_date,
+                            raw_dir=raw_dir,
+                            source_slug=source_slug,
+                            source_url=source_url,
+                            collection_storage=collection_storage,
+                            output=output,
                         )
                     except (HttpRequestError, HttpSourceBlockedError):
                         raise
@@ -185,6 +208,11 @@ def download_and_report(
                         )
                         continue
 
+                    downloaded_files[download_key] = file_path
+
+                    if file_path is None:
+                        continue
+
                     saved_files.append(file_path)
                     output.success(f"{category.slug} | disponivel em {file_path}")
 
@@ -192,7 +220,18 @@ def download_and_report(
 
             progress_task.finish()
     except Exception as error:
-        partial_files = list(dict.fromkeys([*downloaded_files.values(), *saved_files]))
+        partial_files = list(
+            dict.fromkeys(
+                [
+                    *(
+                        file_path
+                        for file_path in downloaded_files.values()
+                        if file_path is not None
+                    ),
+                    *saved_files,
+                ]
+            )
+        )
         if not partial_files:
             raise
 
@@ -207,10 +246,14 @@ def resolve_quotation_dates(
     target_date: date | None,
     quotes_back: int | None,
     allow_empty_history: bool = False,
-    downloaded_files: dict[tuple[str, date | None], Path] | None = None,
+    downloaded_files: dict[tuple[str, date | None], Path | None] | None = None,
     output: TerminalOutput | None = None,
     limited_history: bool = False,
     strict_history_errors: bool = False,
+    raw_dir: Path | None = None,
+    source_slug: str | None = None,
+    source_url: str | None = None,
+    collection_storage: SQLiteV4Storage | None = None,
 ) -> list[date | None]:
     """Descobre datas de cotacao disponiveis voltando a partir da data limite."""
     if quotes_back is not None and quotes_back < 0:
@@ -320,13 +363,19 @@ def resolve_quotation_dates(
                     continue
 
                 try:
-                    downloaded_file = collector.download_category(
-                        probe_category_slug,
-                        quotation_date,
+                    downloaded_file = _download_category(
+                        collector=collector,
+                        category_slug=probe_category_slug,
+                        target_date=quotation_date,
+                        raw_dir=raw_dir,
+                        source_slug=source_slug,
+                        source_url=source_url,
+                        collection_storage=collection_storage,
+                        output=output,
                     )
                     downloaded_files[download_key] = downloaded_file
 
-                    if output is not None:
+                    if output is not None and downloaded_file is not None:
                         output.success(
                             f"{probe_category_slug} | salvo em {downloaded_file}"
                         )
@@ -429,10 +478,12 @@ def resolve_category_target_dates(
     source_slug: str,
     incremental_history: bool,
     output: TerminalOutput | None = None,
-    downloaded_files: dict[tuple[str, date | None], Path] | None = None,
+    downloaded_files: dict[tuple[str, date | None], Path | None] | None = None,
     limited_history: bool = False,
     database_path: Path | None = None,
     strict_history_errors: bool = False,
+    collection_storage: SQLiteV4Storage | None = None,
+    source_url: str | None = None,
 ) -> dict[str, list[date | None]]:
     """Resolve as datas que devem ser consultadas para cada categoria."""
     if getattr(collector, "category_specific_dates", False):
@@ -465,6 +516,10 @@ def resolve_category_target_dates(
                 output=output,
                 limited_history=limited_history,
                 strict_history_errors=strict_history_errors,
+                raw_dir=raw_dir,
+                source_slug=source_slug,
+                source_url=source_url,
+                collection_storage=collection_storage,
             )
 
         return target_dates_by_category
@@ -489,6 +544,10 @@ def resolve_category_target_dates(
         output=output,
         limited_history=limited_history,
         strict_history_errors=strict_history_errors,
+        raw_dir=raw_dir,
+        source_slug=source_slug,
+        source_url=source_url,
+        collection_storage=collection_storage,
     )
 
     if collector.supports_target_dates:
@@ -497,6 +556,107 @@ def resolve_category_target_dates(
         )
 
     return {category.slug: target_dates for category in categories}
+
+
+def _download_category(
+    collector: SourceCollector,
+    category_slug: str,
+    target_date: date | None,
+    raw_dir: Path | None,
+    source_slug: str | None,
+    source_url: str | None,
+    collection_storage: SQLiteV4Storage | None,
+    output: TerminalOutput | None,
+) -> Path | None:
+    if collection_storage is None:
+        return collector.download_category(category_slug, target_date)
+
+    if raw_dir is None or source_slug is None or source_url is None:
+        raise ValueError("Metadados ausentes para registrar a coleta.")
+
+    url_origem = build_raw_source_url(
+        source_slug,
+        source_url,
+        category_slug,
+        target_date,
+    )
+    coleta_id = collection_storage.create_coleta(source_slug, url_origem)
+
+    try:
+        file_path = collector.download_category(category_slug, target_date)
+        raw_hash = build_raw_hash(file_path.read_bytes())
+        relative_path = _relative_raw_path(file_path, raw_dir)
+        duplicate = collection_storage.find_duplicate(
+            source_slug,
+            raw_hash,
+            exclude_coleta_id=coleta_id,
+        )
+
+        if duplicate is not None:
+            original_exists = _stored_raw_exists(duplicate, raw_dir)
+
+            if not original_exists:
+                collection_storage.replace_missing_raw(
+                    duplicate.coleta_id,
+                    relative_path,
+                )
+
+            collection_storage.mark_coleta_duplicate(
+                coleta_id,
+                duplicate.coleta_id,
+                raw_hash,
+            )
+
+            if original_exists:
+                _discard_duplicate_file(file_path, duplicate, raw_dir)
+
+            if output is not None:
+                output.info(
+                    f"{category_slug} | documento repetido; "
+                    f"coleta {coleta_id} encerrada sem nova copia."
+                )
+
+            return None
+
+        collection_storage.mark_coleta_downloaded(
+            coleta_id,
+            raw_hash,
+            relative_path,
+        )
+
+        return file_path
+    except Exception as error:
+        collection_storage.mark_coleta_error(
+            coleta_id,
+            ColetaStatus.ERRO_DOWNLOAD,
+            str(error),
+        )
+        raise
+
+
+def _relative_raw_path(file_path: Path, raw_dir: Path) -> str:
+    return file_path.resolve().relative_to(raw_dir.parent.resolve()).as_posix()
+
+
+def _discard_duplicate_file(
+    file_path: Path,
+    duplicate: StoredRaw,
+    raw_dir: Path,
+) -> None:
+    if duplicate.caminho_relativo_raw is None:
+        return
+
+    original_path = raw_dir.parent / duplicate.caminho_relativo_raw
+
+    if file_path.resolve() != original_path.resolve() and file_path.exists():
+        file_path.unlink()
+
+
+def _stored_raw_exists(duplicate: StoredRaw, raw_dir: Path) -> bool:
+    if duplicate.caminho_relativo_raw is None:
+        return False
+
+    return (raw_dir.parent / duplicate.caminho_relativo_raw).is_file()
 
 
 def resolve_incremental_target_date(
@@ -516,8 +676,12 @@ def resolve_incremental_target_date(
     oldest_db_date = None
     if database_path is not None and database_path.exists():
         try:
-            from cotacoes_ceasa.storage.sqlite import SQLiteStorage
-            storage = SQLiteStorage(database_path)
+            if detect_sqlite_schema(database_path) == "v4":
+                storage = SQLiteV4Storage(database_path)
+            else:
+                from cotacoes_ceasa.storage.sqlite import SQLiteStorage
+
+                storage = SQLiteStorage(database_path)
             oldest_db_date = storage.find_oldest_cotacao_date(source_slug, category_slug)
         except Exception as error:
             if output is not None:

@@ -10,6 +10,7 @@ from cotacoes_ceasa.storage.sqlite import (
     HISTORICAL_PROVENANCE_MIGRATION,
     SQLITE_SCHEMA_VERSION,
 )
+from cotacoes_ceasa.storage.sqlite_v4 import require_legacy_sqlite_schema
 from cotacoes_ceasa.workflows.ceasa_df_recovery import (
     CEASA_DF_RECOVERY_MIGRATION,
     CEASA_DF_RECOVERY_PLAN_SCHEMA_VERSION,
@@ -152,6 +153,10 @@ def create_ceasa_df_recovery_candidate(
         raise FileNotFoundError(
             f"SQLite de proveniencia nao encontrado: {source_database_path}"
         )
+    require_legacy_sqlite_schema(
+        source_database_path,
+        "A correcao historica da CEASA-DF",
+    )
     if not plan_path.is_file():
         raise FileNotFoundError(f"Plano de recuperacao nao encontrado: {plan_path}")
     if source_database_path == candidate_database_path:
