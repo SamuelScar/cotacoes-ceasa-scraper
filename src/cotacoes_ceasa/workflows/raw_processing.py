@@ -221,8 +221,8 @@ def process_raw_and_report(
                                     duplicate,
                                     raw_dir,
                                 )
-
-                            if duplicate.status is ColetaStatus.PROCESSADA:
+                                already_processed = True
+                            elif duplicate.status is ColetaStatus.PROCESSADA:
                                 already_processed = True
                         else:
                             coleta_id = collection_storage.create_coleta(

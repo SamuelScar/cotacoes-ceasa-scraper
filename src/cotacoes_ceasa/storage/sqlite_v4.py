@@ -24,6 +24,45 @@ MISSING_CATEGORY_VALUES = {
 }
 
 
+def deduplicate_cotacoes_by_collection(
+    cotacoes: list[Cotacao],
+) -> tuple[list[Cotacao], int]:
+    """Remove repeticoes exatas emitidas para a mesma coleta."""
+    unique_cotacoes: list[Cotacao] = []
+    seen_keys: set[tuple[object, ...]] = set()
+    duplicate_count = 0
+
+    for cotacao in cotacoes:
+        if cotacao.coleta_id is None:
+            unique_cotacoes.append(cotacao)
+            continue
+
+        key = (
+            cotacao.coleta_id,
+            cotacao.categoria,
+            cotacao.produto,
+            cotacao.unidade,
+            cotacao.entreposto,
+            cotacao.data_cotacao,
+            cotacao.variedade,
+            cotacao.classificacao,
+            cotacao.procedencia,
+            cotacao.preco_minimo,
+            cotacao.preco_comum,
+            cotacao.preco_maximo,
+            cotacao.situacao_mercado,
+        )
+
+        if key in seen_keys:
+            duplicate_count += 1
+            continue
+
+        seen_keys.add(key)
+        unique_cotacoes.append(cotacao)
+
+    return unique_cotacoes, duplicate_count
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS fontes (
     id INTEGER PRIMARY KEY,
@@ -623,6 +662,8 @@ class SQLiteV4Storage:
     ) -> int:
         if not cotacoes:
             return 0
+
+        cotacoes, _ = deduplicate_cotacoes_by_collection(cotacoes)
 
         with sqlite3.connect(self.database_path) as connection:
             connection.execute("PRAGMA foreign_keys = ON")

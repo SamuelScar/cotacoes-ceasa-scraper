@@ -22,6 +22,7 @@ from cotacoes_ceasa.parsers.pdf import configure_pdf_text_cache
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
 from cotacoes_ceasa.storage.sqlite_v4 import (
     SQLiteV4Storage,
+    deduplicate_cotacoes_by_collection,
     detect_sqlite_schema,
 )
 from cotacoes_ceasa.workflows.collection import (
@@ -325,6 +326,18 @@ def save_valid_cotacoes(
 ) -> tuple[int, int]:
     valid_cotacoes, rejection_counts = split_valid_cotacoes(cotacoes)
     rejected_count = sum(rejection_counts.values())
+    database_path = Path(args.database_path)
+
+    if detect_sqlite_schema(database_path) == "v4":
+        valid_cotacoes, duplicate_count = deduplicate_cotacoes_by_collection(
+            valid_cotacoes
+        )
+
+        if duplicate_count:
+            output.warning(
+                f"{args.source} | {duplicate_count} repeticao(oes) identica(s) "
+                "na mesma coleta ignorada(s) antes da persistencia."
+            )
 
     if rejected_count:
         output.warning(

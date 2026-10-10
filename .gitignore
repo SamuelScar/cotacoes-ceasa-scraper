@@ -11,6 +11,9 @@ ceasa-data-latest.tar.gz.tmp
 .cotacoes-data.lock
 .backup-work/
 .migration-work/
+/artefatos-v4/
+/comparacao/
+/restauracao-backup*.json
 
 
 cotacoes.sqlite.xz
