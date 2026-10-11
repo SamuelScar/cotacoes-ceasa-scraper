@@ -271,7 +271,7 @@ jobs:
         if: steps.janela.outputs.should_run == 'true'
         continue-on-error: true
         run: |
-          set -uo pipefail
+          set -euo pipefail
           started_at="$(date +%s)"
 
           finish() {
@@ -282,7 +282,9 @@ jobs:
           }
 
           trap finish EXIT
+          set +e
           docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
             -e COTACOES_EXECUTION_ID \
             -e COTACOES_EXECUTION_DIR \
             -e COTACOES_EXECUTION_MANAGED \
@@ -292,7 +294,15 @@ jobs:
             --collection-mode current \
             --health-report-path "$COTACOES_EXECUTION_DIR/etapas/saude.json" \
             2>&1 | tee -a "$COTACOES_EXECUTION_DIR/console.log"
-          scraper_status="${PIPESTATUS[0]}"
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+
+          scraper_status="${pipeline_status[0]}"
+          tee_status="${pipeline_status[1]}"
+          if [ "$tee_status" -ne 0 ]; then
+            echo "::error::Falha ao registrar a saida do scraper no console.log."
+            exit "$tee_status"
+          fi
           exit "$scraper_status"
 
       - name: Conferir pasta data gerada
@@ -327,7 +337,7 @@ jobs:
           echo "Resumo de data/:"
           du -sh data
           echo "Arquivos principais:"
-          find data -maxdepth 2 -type f | sort | head -n 50
+          find data -maxdepth 2 -type f | sort | sed -n '1,50p'
           echo "Logs da execucao atual:"
           find "$COTACOES_EXECUTION_DIR" -maxdepth 2 -type f | sort || true
 
@@ -335,8 +345,10 @@ jobs:
         id: gate_checkpoint
         if: steps.janela.outputs.should_run == 'true'
         run: |
-          set -uo pipefail
+          set -euo pipefail
+          set +e
           docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
             -e COTACOES_EXECUTION_ID \
             -e COTACOES_EXECUTION_DIR \
             -e COTACOES_EXECUTION_MANAGED \
@@ -346,7 +358,15 @@ jobs:
             --health-report-path "$COTACOES_EXECUTION_DIR/etapas/saude.json" \
             --publication-gate-report-path "$COTACOES_EXECUTION_DIR/etapas/gate-checkpoint.json" \
             2>&1 | tee -a "$COTACOES_EXECUTION_DIR/console.log"
-          gate_status="${PIPESTATUS[0]}"
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+
+          gate_status="${pipeline_status[0]}"
+          tee_status="${pipeline_status[1]}"
+          if [ "$tee_status" -ne 0 ]; then
+            echo "::error::Falha ao registrar a validacao do checkpoint no console.log."
+            exit "$tee_status"
+          fi
           exit "$gate_status"
 
       - name: Validar gate de publicacao
@@ -359,6 +379,7 @@ jobs:
 
           set +e
           docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
             -e COTACOES_EXECUTION_ID \
             -e COTACOES_EXECUTION_DIR \
             -e COTACOES_EXECUTION_MANAGED \
@@ -368,8 +389,15 @@ jobs:
             --health-report-path "$COTACOES_EXECUTION_DIR/etapas/saude.json" \
             --publication-gate-report-path "$COTACOES_EXECUTION_DIR/etapas/gate-publicacao.json" \
             2>&1 | tee -a "$COTACOES_EXECUTION_DIR/console.log"
-          gate_exit_code="${PIPESTATUS[0]}"
+          pipeline_status=("${PIPESTATUS[@]}")
           set -e
+
+          gate_exit_code="${pipeline_status[0]}"
+          tee_exit_code="${pipeline_status[1]}"
+          if [ "$tee_exit_code" -ne 0 ]; then
+            echo "::error::Falha ao registrar o gate de publicacao no console.log."
+            exit "$tee_exit_code"
+          fi
 
           if [ "$gate_exit_code" -eq 0 ]; then
             echo "Gate de publicacao aprovado."

@@ -243,7 +243,10 @@ runs:
                 restore_args+=(--preservar "$COTACOES_EXECUTION_DIR")
               fi
 
-              if docker compose run --rm --entrypoint python app "${restore_args[@]}"; then
+              if docker compose run --rm \
+                --user "$(id -u):$(id -g)" \
+                --entrypoint python \
+                app "${restore_args[@]}"; then
                 restored=true
                 restored_source="onedrive"
                 restored_asset="$INPUT_BACKUP_ASSET_NAME"
@@ -276,7 +279,9 @@ runs:
           echo "Release $INPUT_RELEASE_TAG encontrada. Tentando baixar banco $INPUT_ASSET_NAME."
           if gh release download "$INPUT_RELEASE_TAG" --pattern "$INPUT_ASSET_NAME" --clobber; then
             echo "Banco atual baixado."
-            if docker compose run --rm --entrypoint python app \
+            if docker compose run --rm \
+              --user "$(id -u):$(id -g)" \
+              --entrypoint python app \
               scripts/cotacoes.py descompactar-banco --arquivo "$INPUT_ASSET_NAME"; then
               restored=true
               restored_source="github-release-database"
