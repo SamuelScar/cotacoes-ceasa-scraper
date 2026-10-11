@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   auditar-dados:
-    name: Validar banco, raws e proveniencia
+    name: Validar banco v4, documentos e relacionamentos
     runs-on: ubuntu-latest
     environment: Crawler
     timeout-minutes: 180

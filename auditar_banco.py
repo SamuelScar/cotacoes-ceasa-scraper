@@ -5424,8 +5424,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--verify-raw",
         action="store_true",
         help=(
-            "Localiza arquivos brutos, inclusive dentro dos ZIPs de old, e "
-            "confere o SHA-256 registrado nas coletas. Tambem reprocessa os "
+            "Localiza arquivos brutos, inclusive em old, e confere o SHA-256 "
+            "registrado nas coletas. No esquema legado, tambem reprocessa os "
             "brutos envolvidos em duplicatas exatas com os parsers atuais."
         ),
     )
@@ -5497,26 +5497,37 @@ def main() -> int:
     output_directory = args.output or default_output_directory()
 
     try:
-        if uses_v4_schema(args.database):
-            print(
-                "Erro: a auditoria integral atual pertence ao esquema legado; "
-                "a auditoria do SQLite v4 ainda precisa ser implementada.",
-                file=sys.stderr,
-            )
-            return 1
+        is_v4 = uses_v4_schema(args.database)
     except sqlite3.Error as error:
         print(f"Erro: {error}", file=sys.stderr)
         return 1
 
-    auditor = DatabaseAuditor(
-        database_path=args.database,
-        output_directory=output_directory,
-        sample_limit=args.sample_limit,
-        gap_days=args.gap_days,
-        verify_raw=args.verify_raw,
-        full_integrity_check=args.full_integrity_check,
-        skip_semantic=args.skip_semantic,
-    )
+    if is_v4:
+        from cotacoes_ceasa.audit_v4 import V4DatabaseAuditor
+
+        auditor = V4DatabaseAuditor(
+            database_path=args.database,
+            output_directory=output_directory,
+            sample_limit=args.sample_limit,
+            gap_days=args.gap_days,
+            verify_raw=args.verify_raw,
+            full_integrity_check=args.full_integrity_check,
+            skip_semantic=args.skip_semantic,
+            execution_context=build_execution_context(
+                args.database.resolve(), output_directory.resolve()
+            ),
+            auditor_path=Path(__file__),
+        )
+    else:
+        auditor = DatabaseAuditor(
+            database_path=args.database,
+            output_directory=output_directory,
+            sample_limit=args.sample_limit,
+            gap_days=args.gap_days,
+            verify_raw=args.verify_raw,
+            full_integrity_check=args.full_integrity_check,
+            skip_semantic=args.skip_semantic,
+        )
 
     try:
         result = auditor.run()

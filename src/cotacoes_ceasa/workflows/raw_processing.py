@@ -140,10 +140,11 @@ def process_raw_and_report(
                     metadata.target_date,
                 )
                 read_started_at = perf_counter()
-                raw_content = read_raw_file(file_path)
+                raw_bytes = file_path.read_bytes()
+                raw_content = _decode_raw_content(file_path, raw_bytes)
                 stats.read_seconds += perf_counter() - read_started_at
                 hash_started_at = perf_counter()
-                raw_hash = build_raw_hash(raw_content)
+                raw_hash = build_raw_hash(raw_bytes)
                 stats.hash_seconds += perf_counter() - hash_started_at
 
                 lookup_started_at = perf_counter()
@@ -379,10 +380,17 @@ def fill_missing_quote_date(
 
 def read_raw_file(file_path: Path) -> bytes | str:
     """Le arquivo bruto em texto ou bytes conforme a extensao."""
-    if file_path.suffix.lower() == ".pdf":
-        return file_path.read_bytes()
+    raw_bytes = file_path.read_bytes()
 
-    return file_path.read_text(encoding="utf-8")
+    return _decode_raw_content(file_path, raw_bytes)
+
+
+def _decode_raw_content(file_path: Path, raw_bytes: bytes) -> bytes | str:
+    """Prepara o conteudo para o parser sem alterar os bytes usados no hash."""
+    if file_path.suffix.lower() == ".pdf":
+        return raw_bytes
+
+    return raw_bytes.decode("utf-8")
 
 
 def list_raw_files(raw_dir: Path, source_slug: str) -> list[Path]:
