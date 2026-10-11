@@ -22,6 +22,7 @@ from cotacoes_ceasa.storage.sqlite import (
     SQLITE_SCHEMA_VERSION,
     SQLiteStorage,
 )
+from cotacoes_ceasa.storage.sqlite_v4 import require_legacy_sqlite_schema
 
 
 CEASA_DF_RECOVERY_PLAN_SCHEMA_VERSION = 2
@@ -143,6 +144,10 @@ def create_ceasa_df_recovery_plan(
 
     if not database_path.is_file():
         raise FileNotFoundError(f"SQLite candidato nao encontrado: {database_path}")
+    require_legacy_sqlite_schema(
+        database_path,
+        "O planejamento da recuperacao da CEASA-DF",
+    )
     if not raw_directory.is_dir():
         raise FileNotFoundError(f"Diretorio de raws nao encontrado: {raw_directory}")
     if not pdf_cache_directory.is_dir():

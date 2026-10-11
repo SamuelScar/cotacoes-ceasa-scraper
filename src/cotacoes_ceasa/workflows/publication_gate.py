@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from cotacoes_ceasa.config import SourceConfig
 from cotacoes_ceasa.storage.sqlite import SQLiteStorage
+from cotacoes_ceasa.storage.sqlite_v4 import SQLiteV4Storage, detect_sqlite_schema
 
 
 PUBLICATION_GATE_SCHEMA_VERSION = 1
@@ -447,7 +448,12 @@ def _append_baseline_reasons(
         return
 
     try:
-        current_dates = SQLiteStorage(database_path).find_latest_cotacao_dates(
+        storage = (
+            SQLiteV4Storage(database_path)
+            if detect_sqlite_schema(database_path) == "v4"
+            else SQLiteStorage(database_path)
+        )
+        current_dates = storage.find_latest_cotacao_dates(
             tuple(str(source_slug) for source_slug in previous_dates)
         )
     except (OSError, sqlite3.Error, ValueError) as error:

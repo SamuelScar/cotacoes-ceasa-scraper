@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from cotacoes_ceasa.config import SourceConfig
 from cotacoes_ceasa.storage.sqlite import LogicalCotacaoDelta, SQLiteStorage
+from cotacoes_ceasa.storage.sqlite_v4 import SQLiteV4Storage, detect_sqlite_schema
 
 
 HEALTH_SCHEMA_VERSION = 2
@@ -220,7 +221,7 @@ def capture_health_baseline(
         )
 
     try:
-        storage = SQLiteStorage(database_path)
+        storage = _build_storage(database_path)
         previous_max_id = storage.find_latest_cotacao_id()
         previous_total_quotes = storage.count_cotacoes()
         previous_latest_dates = storage.find_latest_cotacao_dates(source_slugs)
@@ -375,7 +376,7 @@ def _load_latest_dates(
         return empty_dates, "unavailable", "database_missing_after_run"
 
     try:
-        latest_dates = SQLiteStorage(database_path).find_latest_cotacao_dates(
+        latest_dates = _build_storage(database_path).find_latest_cotacao_dates(
             source_slugs
         )
     except (OSError, sqlite3.Error, ValueError) as error:
@@ -395,7 +396,7 @@ def _load_logical_delta(
         )
 
     try:
-        delta = SQLiteStorage(database_path).summarize_logical_cotacao_delta(
+        delta = _build_storage(database_path).summarize_logical_cotacao_delta(
             baseline.previous_max_id
         )
     except (OSError, sqlite3.Error, ValueError) as error:
@@ -425,6 +426,13 @@ def _build_logical_delta_observation(
         logical_new=delta.logical_new,
         repeated_observations=delta.repeated_observations,
     )
+
+
+def _build_storage(database_path: Path):
+    if detect_sqlite_schema(database_path) == "v4":
+        return SQLiteV4Storage(database_path)
+
+    return SQLiteStorage(database_path)
 
 
 def _build_source_health(

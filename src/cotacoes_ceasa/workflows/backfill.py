@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Iterable
 
 from cotacoes_ceasa.storage.sqlite import BackfillState, SQLiteStorage
+from cotacoes_ceasa.storage.sqlite_v4 import SQLiteV4Storage, detect_sqlite_schema
 
 
 BACKFILL_RECHECK_DAYS = 30
@@ -19,7 +20,7 @@ def capture_backfill_baselines(
     database_path: Path,
     source_slugs: Iterable[str],
 ) -> dict[str, BackfillBaseline]:
-    storage = SQLiteStorage(database_path)
+    storage = _build_storage(database_path)
 
     return {
         source_slug: BackfillBaseline(
@@ -35,7 +36,7 @@ def find_deferred_backfill_states(
     source_slugs: Iterable[str],
     reference_date: date | None = None,
 ) -> dict[str, BackfillState]:
-    storage = SQLiteStorage(database_path)
+    storage = _build_storage(database_path)
     effective_date = reference_date or date.today()
     deferred_states: dict[str, BackfillState] = {}
 
@@ -56,7 +57,7 @@ def finalize_backfill_state(
     error: str | None = None,
     reference_date: date | None = None,
 ) -> BackfillState:
-    storage = SQLiteStorage(database_path)
+    storage = _build_storage(database_path)
     previous_state = storage.find_backfill_state(baseline.source_slug)
     oldest_date = storage.find_oldest_cotacao_date(baseline.source_slug)
     cursor_date = oldest_date or baseline.oldest_date
@@ -118,3 +119,10 @@ def _cursor_advanced(previous: date | None, current: date | None) -> bool:
 
 def _no_progress_count(state: BackfillState | None) -> int:
     return state.consecutive_no_progress if state is not None else 0
+
+
+def _build_storage(database_path: Path):
+    if detect_sqlite_schema(database_path) == "v4":
+        return SQLiteV4Storage(database_path)
+
+    return SQLiteStorage(database_path)

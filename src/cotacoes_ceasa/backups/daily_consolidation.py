@@ -797,11 +797,25 @@ def _rclone_list(
     remote: str,
     directory: PurePosixPath,
 ) -> list[dict[str, Any]]:
-    completed = _run_rclone(
-        "lsjson",
-        f"{remote}:{directory.as_posix()}",
-        "--files-only",
-    )
+    try:
+        completed = _run_rclone(
+            "lsjson",
+            f"{remote}:{directory.as_posix()}",
+            "--files-only",
+        )
+    except DailyConsolidationError as error:
+        detail = str(error).lower()
+        missing_markers = (
+            "directory not found",
+            "path not found",
+            "item not found",
+            "itemnotfound",
+            "couldn't find directory",
+            "object not found",
+        )
+        if any(marker in detail for marker in missing_markers):
+            return []
+        raise
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as error:

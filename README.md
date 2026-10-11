@@ -160,9 +160,12 @@ migracao, mas o workflow nao os utiliza para escolher resumo, email ou artifact.
 
 ## Auditoria dos dados
 
-A auditoria integral valida o SQLite, a proveniencia, os arquivos brutos, os
-hashes registrados e o reprocessamento dos parsers sem alterar o banco. Os
-logs de cada rodada ficam isolados em `data/logs/auditoria/`.
+A auditoria integral reconhece automaticamente o modelo do SQLite. No banco v4,
+ela valida o esquema e os relacionamentos, a deduplicacao documental por
+`fonte_id + sha256`, as repeticoes dentro da mesma coleta, os complementos do
+PROHORT e os arquivos brutos sem alterar o banco. Cotacoes iguais de documentos
+diferentes sao preservadas conforme a regra da issue 9. Os logs de cada rodada
+ficam isolados em `data/logs/auditoria/`.
 
 Execucao local completa:
 
