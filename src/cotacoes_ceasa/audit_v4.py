@@ -751,9 +751,29 @@ class V4DatabaseAuditor:
         checked = 0
         direct_files = 0
         archived_files = 0
-        missing: list[tuple[object, ...]] = []
-        mismatches: list[tuple[object, ...]] = []
         unsafe: list[tuple[object, ...]] = []
+        status_counts = {
+            "exact_match": 0,
+            "relocated_match": 0,
+            "ambiguous_candidates": 0,
+            "missing": 0,
+            "hash_mismatch": 0,
+            "unreadable": 0,
+        }
+        samples: dict[str, list[tuple[object, ...]]] = {
+            status: [] for status in status_counts
+        }
+        sample_headers = (
+            "coleta_id",
+            "fonte",
+            "caminho_relativo_raw",
+            "local_encontrado",
+            "classificacao",
+            "sha256_registrado",
+            "sha256_calculado",
+            "quantidade_candidatos",
+            "candidatos",
+        )
         data_root = self.database_path.parent.resolve()
         rows = connection.execute(
             """
@@ -778,12 +798,29 @@ class V4DatabaseAuditor:
                 unsafe.append((coleta_id, source_slug, relative_text, status))
                 continue
 
+            classification: str
             actual_hash: str | None = None
             location: str | None = None
+            candidate_details: list[str] = []
+            candidate_count = 0
             if candidate.is_file():
-                actual_hash = self._hash_file(candidate)
                 location = candidate.as_posix()
                 direct_files += 1
+                candidate_count = 1
+                try:
+                    actual_hash = self._hash_file(candidate)
+                except OSError as error:
+                    classification = "unreadable"
+                    candidate_details.append(
+                        f"{location} [{type(error).__name__}: {error}]"
+                    )
+                else:
+                    classification = (
+                        "exact_match"
+                        if actual_hash == expected_hash
+                        else "hash_mismatch"
+                    )
+                    candidate_details.append(f"{location} [{actual_hash}]")
             else:
                 old_file = (
                     self.database_path.parent
@@ -792,35 +829,89 @@ class V4DatabaseAuditor:
                     / "old"
                     / candidate.name
                 )
+                alternatives: list[tuple[Path, str | None]] = []
                 if old_file.is_file():
-                    actual_hash = self._hash_file(old_file)
-                    location = old_file.as_posix()
+                    alternatives.append((old_file, None))
+                alternatives.extend(
+                    self._find_archived_raw(candidate, str(source_slug))
+                )
+                candidate_count = len(alternatives)
+                if alternatives:
                     archived_files += 1
-                matches = self._find_archived_raw(candidate, str(source_slug))
-                for archive, member in matches if actual_hash is None else ():
-                    candidate_hash = self._hash_zip_member(archive, member)
-                    if candidate_hash == expected_hash:
-                        actual_hash = candidate_hash
-                        location = f"{archive.as_posix()}::{member}"
-                        archived_files += 1
-                        break
-                if actual_hash is None and matches:
-                    archive, member = matches[0]
-                    actual_hash = self._hash_zip_member(archive, member)
-                    location = f"{archive.as_posix()}::{member}"
-                    archived_files += 1
+                    readable_hashes: list[str] = []
+                    matching_location: str | None = None
+                    unreadable_candidates = 0
+                    for alternative_path, member in alternatives:
+                        display_path = (
+                            alternative_path.as_posix()
+                            if member is None
+                            else f"{alternative_path.as_posix()}::{member}"
+                        )
+                        try:
+                            candidate_hash = (
+                                self._hash_file(alternative_path)
+                                if member is None
+                                else self._hash_zip_member(
+                                    alternative_path,
+                                    member,
+                                )
+                            )
+                        except (
+                            OSError,
+                            zipfile.BadZipFile,
+                            KeyError,
+                            RuntimeError,
+                        ) as error:
+                            unreadable_candidates += 1
+                            candidate_details.append(
+                                f"{display_path} "
+                                f"[{type(error).__name__}: {error}]"
+                            )
+                            continue
+                        readable_hashes.append(candidate_hash)
+                        candidate_details.append(
+                            f"{display_path} [{candidate_hash}]"
+                        )
+                        if (
+                            matching_location is None
+                            and candidate_hash == expected_hash
+                        ):
+                            matching_location = display_path
 
-            if actual_hash is None:
-                missing.append((coleta_id, source_slug, relative_text, status))
-            elif actual_hash != expected_hash:
-                mismatches.append(
+                    if matching_location is not None:
+                        classification = "relocated_match"
+                        location = matching_location
+                        actual_hash = str(expected_hash)
+                    elif unreadable_candidates:
+                        classification = "unreadable"
+                        location = self._raw_candidate_location(alternatives[0])
+                        if readable_hashes:
+                            actual_hash = " | ".join(
+                                sorted(set(readable_hashes))
+                            )
+                    elif readable_hashes:
+                        classification = "ambiguous_candidates"
+                        location = self._raw_candidate_location(alternatives[0])
+                        actual_hash = " | ".join(sorted(set(readable_hashes)))
+                    else:
+                        classification = "unreadable"
+                        location = self._raw_candidate_location(alternatives[0])
+                else:
+                    classification = "missing"
+
+            status_counts[classification] += 1
+            if len(samples[classification]) < self.sample_limit:
+                samples[classification].append(
                     (
                         coleta_id,
                         source_slug,
                         relative_text,
                         location,
+                        classification,
                         expected_hash,
                         actual_hash,
+                        candidate_count,
+                        " | ".join(candidate_details),
                     )
                 )
             if checked % 1000 == 0:
@@ -834,34 +925,86 @@ class V4DatabaseAuditor:
             "raws_caminhos_invalidos.csv",
             "O caminho deve ser relativo à pasta data e não pode escapar dela.",
         )
-        self._raw_finding(
-            "raw_files_missing",
-            "Arquivos raw canônicos ausentes",
-            missing,
-            ("coleta_id", "fonte", "caminho_relativo_raw", "status"),
-            "raws_ausentes.csv",
-            "O documento canônico não foi encontrado nem diretamente nem nos ZIPs de old.",
-        )
-        self._raw_finding(
-            "raw_hash_mismatch",
-            "SHA-256 do raw difere do valor registrado",
-            mismatches,
-            (
-                "coleta_id", "fonte", "caminho_relativo_raw", "local_encontrado",
-                "sha256_registrado", "sha256_calculado",
+        report_specs = {
+            "exact_match": "raws_caminho_exato.csv",
+            "relocated_match": "raws_realocados.csv",
+            "ambiguous_candidates": "raws_candidatos_ambiguos.csv",
+            "missing": "raws_ausentes.csv",
+            "hash_mismatch": "raws_hash_divergentes.csv",
+            "unreadable": "raws_ilegíveis.csv",
+        }
+        report_files: dict[str, str] = {}
+        for classification, report_file in report_specs.items():
+            if status_counts[classification] == 0:
+                continue
+            self._write_csv(
+                report_file,
+                sample_headers,
+                samples[classification],
+            )
+            report_files[classification] = report_file
+
+        finding_specs = {
+            "ambiguous_candidates": (
+                "raw_candidates_ambiguous",
+                "Candidatos raw semelhantes sem confirmação por SHA-256",
+                "Os caminhos semelhantes são apenas candidatos; nenhum possui "
+                "o SHA-256 registrado.",
             ),
-            "raws_hash_divergentes.csv",
-            "O hash é calculado sobre os bytes exatos do documento.",
-        )
+            "missing": (
+                "raw_files_missing",
+                "Arquivos raw canônicos ausentes",
+                "O documento canônico não foi encontrado no caminho exato nem "
+                "entre os candidatos arquivados.",
+            ),
+            "hash_mismatch": (
+                "raw_hash_mismatch",
+                "SHA-256 do raw no caminho exato difere do valor registrado",
+                "A divergência só é confirmada quando o arquivo existe no "
+                "caminho registrado.",
+            ),
+            "unreadable": (
+                "raw_file_unreadable",
+                "Arquivos raw encontrados, mas ilegíveis",
+                "A rastreabilidade não pode ser concluída sem ler o conteúdo.",
+            ),
+        }
+        for classification, (code, title, explanation) in finding_specs.items():
+            occurrences = status_counts[classification]
+            if occurrences == 0:
+                continue
+            self._add_finding(
+                code,
+                title,
+                "erro",
+                occurrences,
+                occurrences,
+                report_files[classification],
+                explanation,
+            )
         return {
             "status": "checked",
             "canonical_raws_checked": checked,
             "direct_files": direct_files,
             "archived_files": archived_files,
-            "missing_files": len(missing),
+            "exact_matches": status_counts["exact_match"],
+            "relocated_matches": status_counts["relocated_match"],
+            "ambiguous_candidates": status_counts["ambiguous_candidates"],
+            "missing_files": status_counts["missing"],
             "unsafe_paths": len(unsafe),
-            "hash_mismatches": len(mismatches),
+            "hash_mismatches": status_counts["hash_mismatch"],
+            "unreadable_files": status_counts["unreadable"],
+            "report_files": report_files,
         }
+
+    @staticmethod
+    def _raw_candidate_location(candidate: tuple[Path, str | None]) -> str:
+        path, member = candidate
+        return (
+            path.as_posix()
+            if member is None
+            else f"{path.as_posix()}::{member}"
+        )
 
     def _find_archived_raw(
         self, expected_path: Path, source_slug: str
@@ -983,7 +1126,7 @@ class V4DatabaseAuditor:
             {*self.generated_files, "execucao.json", "resultado.json", "resumo.md"}
         )
         return {
-            "schema_version": 5,
+            "schema_version": 6,
             "database_model": "sqlite_v4_issue9",
             "execution_status": "completed",
             "started_at": started_at.isoformat(timespec="seconds"),
@@ -1042,6 +1185,8 @@ class V4DatabaseAuditor:
     def _write_markdown(self, result: dict[str, object]) -> None:
         verdict = result["verdict"]
         assert isinstance(verdict, dict)
+        raw_summary = result["raw_traceability"]
+        assert isinstance(raw_summary, dict)
         lines = [
             "# Auditoria do SQLite v4",
             "",
@@ -1055,6 +1200,23 @@ class V4DatabaseAuditor:
             "A auditoria respeita a issue 9: cotações iguais em documentos "
             "diferentes são preservadas; somente repetições na mesma coleta e "
             "documentos repetidos por fonte + SHA-256 são tratados como erro.",
+            "",
+            "## Rastreabilidade dos raws",
+            "",
+            f"- Verificados: `{raw_summary.get('canonical_raws_checked', 0)}`",
+            f"- No caminho exato: `{raw_summary.get('exact_matches', 0)}`",
+            f"- Realocados: `{raw_summary.get('relocated_matches', 0)}`",
+            (
+                "- Candidatos ambíguos: "
+                f"`{raw_summary.get('ambiguous_candidates', 0)}`"
+            ),
+            f"- Ausentes: `{raw_summary.get('missing_files', 0)}`",
+            (
+                "- Divergências confirmadas no caminho exato: "
+                f"`{raw_summary.get('hash_mismatches', 0)}`"
+            ),
+            f"- Ilegíveis: `{raw_summary.get('unreadable_files', 0)}`",
+            f"- Caminhos inseguros: `{raw_summary.get('unsafe_paths', 0)}`",
             "",
             "## Achados",
             "",

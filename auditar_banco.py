@@ -4350,55 +4350,103 @@ class DatabaseAuditor:
         zip_cache = self.raw_zip_index_cache
         file_cache = self.raw_file_index_cache
         hash_cache: dict[tuple[str, Path, str | None], str] = {}
-        issue_rows: list[tuple[object, ...]] = []
         status_counts = {
             "checked": 0,
-            "ok": 0,
+            "exact_match": 0,
+            "relocated_match": 0,
+            "ambiguous_candidates": 0,
             "missing": 0,
             "hash_mismatch": 0,
             "missing_hash": 0,
             "unreadable": 0,
         }
+        samples: dict[str, list[tuple[object, ...]]] = {
+            status: [] for status in status_counts if status != "checked"
+        }
+        sample_headers = (
+            "coleta_id",
+            "fonte",
+            "arquivo_registrado",
+            "arquivo_encontrado",
+            "classificacao",
+            "hash_esperado",
+            "hash_encontrado",
+            "quantidade_candidatos",
+            "candidatos",
+        )
 
         for row in raw_rows:
             status_counts["checked"] += 1
             expected_hash = str(row["hash_raw"]) if row["hash_raw"] else None
+            resolved_path: str | None = None
+            actual_hash: str | None = None
+            candidate_count = 0
+            candidate_details: tuple[str, ...] = ()
 
             if expected_hash is None:
                 status = "missing_hash"
-                resolved_path = None
-                actual_hash = None
             else:
                 try:
-                    candidates = self._find_raw_candidates(
-                        str(row["arquivo_raw"]),
-                        zip_cache,
-                        file_cache,
+                    exact_candidate = self._exact_raw_candidate(
+                        str(row["arquivo_raw"])
                     )
-                    if not candidates:
-                        status = "missing"
-                        resolved_path = None
-                        actual_hash = None
-                    else:
-                        status, resolved_path, actual_hash = self._match_raw_hash(
-                            candidates,
-                            expected_hash,
-                            hash_cache,
+                    if exact_candidate is not None:
+                        resolved_path = self._raw_candidate_location(
+                            exact_candidate
                         )
+                        candidate_count = 1
+                        _, actual_hash = self._read_raw_candidate(exact_candidate)
+                        hash_cache[exact_candidate] = actual_hash
+                        status = (
+                            "exact_match"
+                            if actual_hash == expected_hash
+                            else "hash_mismatch"
+                        )
+                        candidate_details = (
+                            f"{resolved_path} [{actual_hash}]",
+                        )
+                    else:
+                        candidates = self._find_raw_candidates(
+                            str(row["arquivo_raw"]),
+                            zip_cache,
+                            file_cache,
+                        )
+                        candidate_count = len(candidates)
+                        if candidates:
+                            resolved_path = self._raw_candidate_location(
+                                candidates[0]
+                            )
+                        if not candidates:
+                            status = "missing"
+                        else:
+                            (
+                                status,
+                                resolved_path,
+                                actual_hash,
+                                candidate_details,
+                            ) = self._match_raw_hash(
+                                candidates,
+                                expected_hash,
+                                hash_cache,
+                            )
                 except (
                     OSError,
                     UnicodeDecodeError,
                     zipfile.BadZipFile,
                     RuntimeError,
-                ):
+                ) as error:
                     status = "unreadable"
-                    resolved_path = None
-                    actual_hash = None
+                    detail = f"{type(error).__name__}: {error}"
+                    candidate_details = (
+                        f"{resolved_path} [{detail}]"
+                        if resolved_path is not None
+                        else detail,
+                    )
 
             status_counts[status] += 1
 
-            if status != "ok" and len(issue_rows) < self.sample_limit:
-                issue_rows.append(
+            if len(samples[status]) < self.sample_limit:
+                samples[status].append(
                     (
                         row["id"],
                         row["fonte"],
@@ -4407,6 +4455,8 @@ class DatabaseAuditor:
                         status,
                         expected_hash,
                         actual_hash,
+                        candidate_count,
+                        " | ".join(candidate_details),
                     )
                 )
 
@@ -4417,29 +4467,37 @@ class DatabaseAuditor:
                     f"{checked:,}/{raw_total:,} coletas verificadas"
                 )
 
-        if issue_rows:
-            report = self._write_rows(
-                "problemas_arquivos_brutos.csv",
-                (
-                    "coleta_id",
-                    "fonte",
-                    "arquivo_registrado",
-                    "arquivo_encontrado",
-                    "problema",
-                    "hash_esperado",
-                    "hash_encontrado",
-                ),
-                issue_rows,
+        report_specs = {
+            "exact_match": "raws_caminho_exato.csv",
+            "relocated_match": "raws_realocados.csv",
+            "ambiguous_candidates": "raws_candidatos_ambiguos.csv",
+            "missing": "raws_ausentes.csv",
+            "hash_mismatch": "raws_hash_divergentes.csv",
+            "missing_hash": "raws_sem_hash.csv",
+            "unreadable": "raws_ilegíveis.csv",
+        }
+        report_files: dict[str, str] = {}
+        for status_key, report_name in report_specs.items():
+            if status_counts[status_key] == 0:
+                continue
+            report_files[status_key] = self._write_rows(
+                report_name,
+                sample_headers,
+                samples[status_key],
             )
-        else:
-            report = None
 
         raw_findings = (
             (
                 "raw_hash_mismatch",
-                "Arquivos brutos com hash divergente",
+                "Arquivos brutos no caminho exato com hash divergente",
                 "erro",
                 "hash_mismatch",
+            ),
+            (
+                "raw_candidates_ambiguous",
+                "Candidatos semelhantes sem confirmacao por hash",
+                "erro",
+                "ambiguous_candidates",
             ),
             (
                 "raw_missing",
@@ -4472,11 +4530,11 @@ class DatabaseAuditor:
                     severity=severity,
                     groups=occurrences,
                     occurrences=occurrences,
-                    report_file=report,
+                    report_file=report_files[status_key],
                     explanation=(
-                        "A verificacao usa a mesma representacao do crawler: "
-                        "bytes para PDF e texto UTF-8 com quebras de linha "
-                        "normalizadas para HTML."
+                        "A divergencia de hash so e confirmada no caminho exato. "
+                        "Candidatos alternativos precisam corresponder ao hash "
+                        "registrado para serem classificados como realocados."
                     ),
                 )
             )
@@ -4504,7 +4562,10 @@ class DatabaseAuditor:
                 )
             )
 
-        registered_complete = status_counts["checked"] == status_counts["ok"]
+        matched_files = (
+            status_counts["exact_match"] + status_counts["relocated_match"]
+        )
+        registered_complete = status_counts["checked"] == matched_files
         status = (
             "all_registered_local_hashes_match"
             if registered_complete and without_local_collections == 0
@@ -4517,13 +4578,29 @@ class DatabaseAuditor:
         return {
             "status": status,
             **status_counts,
+            "ok": matched_files,
             "without_local_file": without_local_collections,
             "quotes_without_local_file": without_local_quotes,
             "without_local_report": without_local_report,
-            "report_file": report,
+            "report_file": report_files.get("hash_mismatch"),
+            "report_files": report_files,
             "unreadable_archives": len(self.raw_archive_errors),
             "archive_error_report": archive_error_report,
         }
+
+    def _exact_raw_candidate(
+        self,
+        stored_path: str,
+    ) -> tuple[str, Path, str | None] | None:
+        raw_path = Path(stored_path)
+        direct_path = (
+            raw_path
+            if raw_path.is_absolute()
+            else self.project_root / raw_path
+        )
+        if not direct_path.is_file():
+            return None
+        return ("file", direct_path, None)
 
     def _find_raw_candidates(
         self,
@@ -4646,30 +4723,69 @@ class DatabaseAuditor:
         candidates: Sequence[tuple[str, Path, str | None]],
         expected_hash: str,
         hash_cache: dict[tuple[str, Path, str | None], str],
-    ) -> tuple[str, str | None, str | None]:
+    ) -> tuple[str, str | None, str | None, tuple[str, ...]]:
         first_path: str | None = None
         first_hash: str | None = None
+        candidate_details: list[str] = []
+        unreadable_candidates = 0
 
         for candidate in candidates:
-            candidate_type, path, member = candidate
             actual_hash = hash_cache.get(candidate)
+            display_path = self._raw_candidate_location(candidate)
+            first_path = first_path or display_path
 
             if actual_hash is None:
-                _, actual_hash = self._read_raw_candidate(candidate)
+                try:
+                    _, actual_hash = self._read_raw_candidate(candidate)
+                except (
+                    OSError,
+                    UnicodeDecodeError,
+                    zipfile.BadZipFile,
+                    RuntimeError,
+                ) as error:
+                    unreadable_candidates += 1
+                    candidate_details.append(
+                        f"{display_path} [{type(error).__name__}: {error}]"
+                    )
+                    continue
                 hash_cache[candidate] = actual_hash
 
-            display_path = (
-                path.as_posix()
-                if member is None
-                else f"{path.as_posix()}::{member}"
-            )
-            first_path = first_path or display_path
             first_hash = first_hash or actual_hash
+            candidate_details.append(f"{display_path} [{actual_hash}]")
 
             if actual_hash == expected_hash:
-                return "ok", display_path, actual_hash
+                return (
+                    "relocated_match",
+                    display_path,
+                    actual_hash,
+                    tuple(candidate_details),
+                )
 
-        return "hash_mismatch", first_path, first_hash
+        if unreadable_candidates:
+            return (
+                "unreadable",
+                first_path,
+                first_hash,
+                tuple(candidate_details),
+            )
+
+        return (
+            "ambiguous_candidates",
+            first_path,
+            first_hash,
+            tuple(candidate_details),
+        )
+
+    @staticmethod
+    def _raw_candidate_location(
+        candidate: tuple[str, Path, str | None],
+    ) -> str:
+        _, path, member = candidate
+        return (
+            path.as_posix()
+            if member is None
+            else f"{path.as_posix()}::{member}"
+        )
 
     def _add_group_finding(
         self,
@@ -4927,6 +5043,34 @@ class DatabaseAuditor:
                 f"{raw_summary.get('ok', 0):,}/{raw_summary.get('checked', 0):,}"
             ),
             (
+                "- Raws no caminho exato: "
+                f"{raw_summary.get('exact_match', 0):,}"
+            ),
+            (
+                "- Raws realocados com hash confirmado: "
+                f"{raw_summary.get('relocated_match', 0):,}"
+            ),
+            (
+                "- Candidatos ambiguos: "
+                f"{raw_summary.get('ambiguous_candidates', 0):,}"
+            ),
+            (
+                "- Raws ausentes: "
+                f"{raw_summary.get('missing', 0):,}"
+            ),
+            (
+                "- Divergencias confirmadas no caminho exato: "
+                f"{raw_summary.get('hash_mismatch', 0):,}"
+            ),
+            (
+                "- Raws sem hash registrado: "
+                f"{raw_summary.get('missing_hash', 0):,}"
+            ),
+            (
+                "- Raws ilegíveis: "
+                f"{raw_summary.get('unreadable', 0):,}"
+            ),
+            (
                 "- Coletas sem bruto local: "
                 f"{raw_summary.get('without_local_file', 0):,} "
                 f"({raw_summary.get('quotes_without_local_file', 0):,} cotacoes)"
@@ -5140,7 +5284,7 @@ class DatabaseAuditor:
         )
 
         return {
-            "schema_version": 4,
+            "schema_version": 5,
             "execution_status": "completed",
             "started_at": started_at.isoformat(timespec="seconds"),
             "finished_at": finished_at.isoformat(timespec="seconds"),
