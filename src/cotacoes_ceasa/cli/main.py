@@ -45,12 +45,14 @@ from cotacoes_ceasa.workflows.backfill import (
 )
 from cotacoes_ceasa.workflows.health import (
     BatchRunResult,
+    ComplementRunObservation,
     HealthBaseline,
     build_unavailable_run_health,
     capture_health_baseline,
     evaluate_run_health,
     write_health_assessment,
 )
+from cotacoes_ceasa.workflows.prohort import ProhortUnavailableError
 from cotacoes_ceasa.workflows.publication_gate import (
     evaluate_checkpoint_gate,
     evaluate_publication_gate,
@@ -246,13 +248,14 @@ def run(output: TerminalOutput, execution: ExecutionContext) -> None:
             else None
         )
         batch_result = None
+        prohort_observation = None
         run_error = None
         run_interrupted = False
         backfill_baselines = capture_run_backfill_baselines(args, config)
 
         try:
             batch_result = run_all_sources(args, config, output)
-            run_automatic_prohort(args, config, output)
+            prohort_observation = run_automatic_prohort(args, config, output)
         except KeyboardInterrupt as error:
             run_error = f"{type(error).__name__}: {error}"
             run_interrupted = True
@@ -276,6 +279,7 @@ def run(output: TerminalOutput, execution: ExecutionContext) -> None:
                 health_baseline,
                 run_error,
                 run_interrupted,
+                prohort_observation,
             )
         return
 
@@ -590,14 +594,58 @@ def _source_observation_error(source) -> str | None:
     )
 
 
-def run_automatic_prohort(args, config: AppConfig, output: TerminalOutput) -> None:
+def run_automatic_prohort(
+    args,
+    config: AppConfig,
+    output: TerminalOutput,
+) -> ComplementRunObservation | None:
     """Executa o complemento automatico depois de fluxos que salvam no SQLite."""
     saves_database = args.save or args.process_raw or args.download_and_process
 
-    if not config.complement_prohort or not saves_database:
-        return
+    if not saves_database:
+        return None
 
-    run_prohort_command(args, config, output)
+    if not config.complement_prohort:
+        return ComplementRunObservation(
+            complement_slug="prohort",
+            enabled=False,
+            status="disabled",
+            applied=False,
+            url=config.prohort_url,
+        )
+
+    try:
+        result = run_prohort_command(args, config, output)
+    except ProhortUnavailableError as error:
+        output.warning(
+            "Complemento PROHORT indisponivel; a coleta principal continuara: "
+            f"{error.error_type}: {error.error_message}"
+        )
+        output.summary(
+            (
+                ("Status PROHORT", "indisponivel"),
+                ("Complemento aplicado", "nao"),
+            )
+        )
+        return ComplementRunObservation(
+            complement_slug="prohort",
+            enabled=True,
+            status="unavailable",
+            applied=False,
+            url=error.url,
+            error_type=error.error_type,
+            error_message=error.error_message,
+        )
+
+    return ComplementRunObservation(
+        complement_slug="prohort",
+        enabled=True,
+        status="completed" if result.database_found else "not_applied",
+        applied=bool(result.updated_count or result.inserted_count),
+        url=config.prohort_url,
+        updated_count=result.updated_count,
+        inserted_count=result.inserted_count,
+    )
 
 
 def record_run_health(
@@ -608,11 +656,15 @@ def record_run_health(
     baseline: HealthBaseline | None,
     run_error: str | None,
     run_interrupted: bool,
+    prohort_observation: ComplementRunObservation | None,
 ) -> None:
     if baseline is None:
         return
 
     effective_batch_result = batch_result or BatchRunResult(sources=())
+    complements = (
+        (prohort_observation,) if prohort_observation is not None else ()
+    )
 
     if run_interrupted:
         assessment = build_unavailable_run_health(
@@ -622,6 +674,7 @@ def record_run_health(
             error="assessment_skipped_after_interruption",
             run_error=run_error,
             collection_mode=args.effective_collection_mode,
+            complements=complements,
         )
     else:
         try:
@@ -632,6 +685,7 @@ def record_run_health(
                 baseline=baseline,
                 run_error=run_error,
                 collection_mode=args.effective_collection_mode,
+                complements=complements,
             )
         except Exception as error:
             assessment_error = f"{type(error).__name__}: {error}"
@@ -646,6 +700,7 @@ def record_run_health(
                 error=assessment_error,
                 run_error=run_error,
                 collection_mode=args.effective_collection_mode,
+                complements=complements,
             )
 
     json_error = None
