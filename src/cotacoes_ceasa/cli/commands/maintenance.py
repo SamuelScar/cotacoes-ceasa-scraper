@@ -19,7 +19,11 @@ def run_archive_command(args, output: TerminalOutput) -> None:
     archive_raw_old_and_report(RawHtmlStorage(Path(args.raw_dir)), output)
 
 
-def run_prohort_command(args, config: AppConfig, output: TerminalOutput) -> None:
+def run_prohort_command(
+    args,
+    config: AppConfig,
+    output: TerminalOutput,
+) -> ProhortComplementResult:
     output.header(
         "Complementar cotacoes com PROHORT",
         (
@@ -27,7 +31,7 @@ def run_prohort_command(args, config: AppConfig, output: TerminalOutput) -> None
             ("Configuracao", config.prohort_file),
         ),
     )
-    complement_prohort_and_report(args, config.prohort_url, output)
+    return complement_prohort_and_report(args, config.prohort_url, output)
 
 
 def run_supabase_sync_command(
@@ -108,7 +112,7 @@ def complement_prohort_and_report(
     args,
     prohort_url: str,
     output: TerminalOutput | None = None,
-) -> None:
+) -> ProhortComplementResult:
     output = output or TerminalOutput()
     output.section("Complemento PROHORT")
     output.info("Lendo cotacoes salvas e buscando correspondencias confiaveis.")
@@ -135,6 +139,7 @@ def complement_prohort_and_report(
             ("Ambiguas", result.ambiguous_count),
         )
     )
+    return result
 
 
 def format_prohort_complement_result(

@@ -88,6 +88,55 @@ class PublicationGateTest(unittest.TestCase):
         self.assertEqual("approved", result.status)
         self.assertEqual(0, result.blocking_reasons)
 
+    def test_checkpoint_approves_prohort_unavailability(self) -> None:
+        payload = self._health_payload()
+        payload["status"] = "partial"
+        payload["reasons"] = [
+            {
+                "code": "prohort_unavailable",
+                "message": "O complemento PROHORT nao foi aplicado.",
+            }
+        ]
+        payload["complements"] = [
+            {
+                "complement_slug": "prohort",
+                "enabled": True,
+                "status": "unavailable",
+                "applied": False,
+                "url": "https://example.com/ProhortDiario.txt",
+                "error_type": "TimeoutError",
+                "error_message": "timed out",
+            }
+        ]
+        self._write_health(payload)
+
+        result = evaluate_checkpoint_gate(
+            database_path=self.database_path,
+            health_report_path=self.health_report_path,
+        )
+
+        self.assertEqual("approved", result.status)
+        self.assertEqual(0, result.blocking_reasons)
+
+    def test_checkpoint_keeps_run_failure_blocking(self) -> None:
+        payload = self._health_payload()
+        payload["status"] = "inadequate"
+        payload["reasons"] = [
+            {
+                "code": "run_failed",
+                "message": "A execucao principal falhou.",
+            }
+        ]
+        self._write_health(payload)
+
+        result = evaluate_checkpoint_gate(
+            database_path=self.database_path,
+            health_report_path=self.health_report_path,
+        )
+
+        self.assertEqual("rejected", result.status)
+        self.assertIn("health_run_failed", self._reason_codes(result))
+
     def test_checkpoint_rejects_structural_regression(self) -> None:
         payload = self._health_payload()
         payload["baseline"]["previous_total_quotes"] = 3

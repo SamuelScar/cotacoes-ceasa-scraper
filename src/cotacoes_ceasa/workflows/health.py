@@ -32,6 +32,32 @@ class BatchRunResult:
 
 
 @dataclass(frozen=True)
+class ComplementRunObservation:
+    complement_slug: str
+    enabled: bool
+    status: str
+    applied: bool
+    url: str
+    updated_count: int = 0
+    inserted_count: int = 0
+    error_type: str | None = None
+    error_message: str | None = None
+
+    def to_dict(self) -> dict[str, bool | int | str | None]:
+        return {
+            "complement_slug": self.complement_slug,
+            "enabled": self.enabled,
+            "status": self.status,
+            "applied": self.applied,
+            "url": self.url,
+            "updated_count": self.updated_count,
+            "inserted_count": self.inserted_count,
+            "error_type": self.error_type,
+            "error_message": self.error_message,
+        }
+
+
+@dataclass(frozen=True)
 class HealthBaseline:
     previous_max_id: int | None
     previous_total_quotes: int | None = None
@@ -126,6 +152,7 @@ class RunHealthAssessment:
     baseline: HealthBaseline
     reasons: tuple[HealthReason, ...]
     collection_mode: str = "legacy"
+    complements: tuple[ComplementRunObservation, ...] = ()
 
     @property
     def download_completed(self) -> int:
@@ -201,6 +228,9 @@ class RunHealthAssessment:
                 "persistence_completed_does_not_guarantee_every_raw_succeeded",
                 "logical_delta_assumes_a_single_sqlite_writer",
             ],
+            "complements": [
+                complement.to_dict() for complement in self.complements
+            ],
             "sources": [source.to_dict() for source in self.sources],
         }
 
@@ -246,6 +276,7 @@ def evaluate_run_health(
     assessed_at: datetime | None = None,
     run_error: str | None = None,
     collection_mode: str = "legacy",
+    complements: tuple[ComplementRunObservation, ...] = (),
 ) -> RunHealthAssessment:
     assessment_time = assessed_at or datetime.now(HEALTH_TIMEZONE)
     latest_dates, database_status, database_error = _load_latest_dates(
@@ -270,6 +301,7 @@ def evaluate_run_health(
         database_status,
         logical_delta,
         run_error,
+        complements,
     )
 
     return RunHealthAssessment(
@@ -283,6 +315,7 @@ def evaluate_run_health(
         baseline=baseline,
         reasons=reasons,
         collection_mode=collection_mode,
+        complements=complements,
     )
 
 
@@ -294,6 +327,7 @@ def build_unavailable_run_health(
     run_error: str | None = None,
     collection_mode: str = "legacy",
     assessed_at: datetime | None = None,
+    complements: tuple[ComplementRunObservation, ...] = (),
 ) -> RunHealthAssessment:
     assessment_time = assessed_at or datetime.now(HEALTH_TIMEZONE)
     run_sources = {source.source_slug: source for source in batch_result.sources}
@@ -340,6 +374,7 @@ def build_unavailable_run_health(
         ),
         reasons=tuple(reasons),
         collection_mode=collection_mode,
+        complements=complements,
     )
 
 
@@ -497,6 +532,7 @@ def _classify_health(
     database_status: str,
     logical_delta: LogicalDeltaObservation,
     run_error: str | None,
+    complements: tuple[ComplementRunObservation, ...],
 ) -> tuple[str, tuple[HealthReason, ...]]:
     reasons: list[HealthReason] = []
     configured_count = len(sources)
@@ -516,6 +552,24 @@ def _classify_health(
             HealthReason(
                 "run_failed",
                 f"A execucao principal falhou: {run_error}",
+            )
+        )
+
+    for complement in complements:
+        if complement.status != "unavailable":
+            continue
+
+        detail = ": ".join(
+            part
+            for part in (complement.error_type, complement.error_message)
+            if part
+        )
+        reasons.append(
+            HealthReason(
+                f"{complement.complement_slug}_unavailable",
+                f"O complemento {complement.complement_slug.upper()} nao foi "
+                "aplicado por indisponibilidade externa"
+                + (f": {detail}." if detail else "."),
             )
         )
 

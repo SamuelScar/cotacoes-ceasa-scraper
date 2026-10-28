@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from cotacoes_ceasa.config import SourceConfig
 from cotacoes_ceasa.workflows.health import (
     BatchRunResult,
+    ComplementRunObservation,
     HealthBaseline,
     SourceRunObservation,
     capture_health_baseline,
@@ -69,6 +70,33 @@ class RunHealthAssessmentTest(unittest.TestCase):
             "insufficient_completed_sources",
             self._reason_codes(assessment),
         )
+
+    def test_classifies_prohort_unavailability_as_partial(self) -> None:
+        complement = ComplementRunObservation(
+            complement_slug="prohort",
+            enabled=True,
+            status="unavailable",
+            applied=False,
+            url="https://example.com/ProhortDiario.txt",
+            error_type="TimeoutError",
+            error_message="timed out",
+        )
+
+        assessment = evaluate_run_health(
+            batch_result=self._batch(("completed", "completed", "completed")),
+            source_configs=self.sources,
+            database_path=self.database_path,
+            baseline=HealthBaseline(previous_max_id=3),
+            assessed_at=ASSESSMENT_TIME,
+            complements=(complement,),
+        )
+
+        payload = assessment.to_dict()
+        self.assertEqual("partial", assessment.status)
+        self.assertNotIn("run_failed", self._reason_codes(assessment))
+        self.assertIn("prohort_unavailable", self._reason_codes(assessment))
+        self.assertEqual("unavailable", payload["complements"][0]["status"])
+        self.assertFalse(payload["complements"][0]["applied"])
 
     def test_observes_freshness_and_logical_delta(self) -> None:
         baseline = HealthBaseline(previous_max_id=3)

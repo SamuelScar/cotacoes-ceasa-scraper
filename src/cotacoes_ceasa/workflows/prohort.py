@@ -1,13 +1,16 @@
 import csv
+from http.client import HTTPException
 import io
 import re
 import sqlite3
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from cotacoes_ceasa.core.models import ColetaStatus, Cotacao
@@ -33,6 +36,34 @@ CEASA_MG_PROCEDENCIAS = {
     "grande bh": "CEASAMINAS - BELO HORIZONTE",
     "barbacena": "CEASAMINAS - BARBACENA",
 }
+
+PROHORT_REQUIRED_FIELDS = {
+    "data_preco",
+    "dsc_ceasa",
+    "dsc_produto",
+    "preco_diario",
+    "sig_unidade_medida",
+}
+
+
+class ProhortUnavailableError(RuntimeError):
+    """Indica indisponibilidade externa durante o download do PROHORT."""
+
+    def __init__(self, url: str, cause: Exception) -> None:
+        detail = (
+            cause.reason
+            if isinstance(cause, URLError)
+            and not isinstance(cause, HTTPError)
+            and isinstance(cause.reason, Exception)
+            else cause
+        )
+        self.url = url
+        self.error_type = type(detail).__name__
+        self.error_message = str(detail)
+        super().__init__(
+            f"PROHORT indisponivel em {url}: "
+            f"{self.error_type}: {self.error_message}"
+        )
 
 
 @dataclass(frozen=True)
@@ -308,13 +339,39 @@ class ProhortComplementer:
             raise
 
     def _download_prohort_content(self) -> bytes:
+        with self._open_prohort_response() as response:
+            return response.read()
+
+    @contextmanager
+    def _open_prohort_response(self) -> Iterator[object]:
         request = Request(
             self.prohort_url,
             headers={"User-Agent": "cotacoes-ceasa-scraper/0.1"},
         )
 
-        with urlopen(request, timeout=self.timeout_seconds) as response:
-            return response.read()
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                yield response
+        except (HTTPError, URLError, HTTPException, OSError) as error:
+            raise ProhortUnavailableError(self.prohort_url, error) from error
+
+    @staticmethod
+    def _read_prohort_rows(content: bytes) -> csv.DictReader:
+        stream = io.StringIO(content.decode("latin-1", errors="replace"))
+        reader = csv.DictReader(stream, delimiter=";")
+        ProhortComplementer._validate_prohort_reader(reader)
+        return reader
+
+    @staticmethod
+    def _validate_prohort_reader(reader: csv.DictReader) -> None:
+        fields = set(reader.fieldnames or ())
+        missing_fields = sorted(PROHORT_REQUIRED_FIELDS - fields)
+
+        if missing_fields:
+            raise ValueError(
+                "Conteudo do PROHORT nao possui as colunas obrigatorias: "
+                + ", ".join(missing_fields)
+            )
 
     def _fetch_saved_cotacoes_v4(
         self,
@@ -421,8 +478,7 @@ class ProhortComplementer:
         updated_count = 0
         inserted_count = 0
         updated_ids: set[int] = set()
-        stream = io.StringIO(content.decode("latin-1", errors="replace"))
-        reader = csv.DictReader(stream, delimiter=";")
+        reader = self._read_prohort_rows(content)
 
         for row in reader:
             scanned_rows += 1
@@ -703,12 +759,7 @@ class ProhortComplementer:
         inserted_count = 0
         updated_ids: set[int] = set()
 
-        request = Request(
-            self.prohort_url,
-            headers={"User-Agent": "cotacoes-ceasa-scraper/0.1"},
-        )
-
-        with urlopen(request, timeout=self.timeout_seconds) as response:
+        with self._open_prohort_response() as response:
             stream = io.TextIOWrapper(
                 response,
                 encoding="latin-1",
@@ -716,6 +767,7 @@ class ProhortComplementer:
                 newline="",
             )
             reader = csv.DictReader(stream, delimiter=";")
+            self._validate_prohort_reader(reader)
 
             for row in reader:
                 scanned_rows += 1
