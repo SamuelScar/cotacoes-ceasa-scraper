@@ -587,18 +587,34 @@ def _list_remote_backups(
     remote: str,
     remote_root: PurePosixPath,
 ) -> list[dict[str, object]]:
-    backups_path = join_remote_root(remote_root, "backups")
-    output = _run_rclone(
-        "lsjson",
-        _remote_spec(remote, backups_path),
-        "--recursive",
-        "--files-only",
-        capture_output=True,
-    )
-    payload = json.loads(output)
-    if not isinstance(payload, list):
-        raise RuntimeError("O inventario remoto do rclone nao e uma lista.")
-    return [item for item in payload if isinstance(item, dict)]
+    inventory: list[dict[str, object]] = []
+    backups_root = PurePosixPath("backups")
+    for layer in RECOVERY_LAYERS:
+        managed_directory = LAYER_DIRECTORIES[layer]
+        remote_directory = join_remote_root(remote_root, managed_directory)
+        output = _run_rclone(
+            "lsjson",
+            _remote_spec(remote, remote_directory),
+            "--files-only",
+            capture_output=True,
+        )
+        payload = json.loads(output)
+        if not isinstance(payload, list):
+            raise RuntimeError(
+                f"O inventario remoto da camada {layer} nao e uma lista."
+            )
+
+        relative_directory = managed_directory.relative_to(backups_root)
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            normalized_item = dict(item)
+            item_path = str(item.get("Path", "")).replace("\\", "/")
+            normalized_item["Path"] = (
+                relative_directory / PurePosixPath(item_path)
+            ).as_posix()
+            inventory.append(normalized_item)
+    return inventory
 
 
 def _select_candidates(

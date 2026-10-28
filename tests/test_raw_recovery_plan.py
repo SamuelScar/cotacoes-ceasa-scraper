@@ -167,6 +167,50 @@ class RawRecoveryPlanTest(unittest.TestCase):
             candidates[0].remote_path,
         )
 
+    def test_lists_only_authorized_backup_layers(self) -> None:
+        responses = {
+            "onedrive:cotacoes-ceasa/backups/history/deep": [
+                {"Path": "ceasa-data-20261028.zpaq", "Size": 30}
+            ],
+            "onedrive:cotacoes-ceasa/backups/history/daily": [
+                {"Path": "ceasa-data-20261028.tar.xz", "Size": 20}
+            ],
+            "onedrive:cotacoes-ceasa/backups/staging": [
+                {
+                    "Path": "ceasa-data-20261028-120000.zip",
+                    "Size": 10,
+                }
+            ],
+        }
+        calls: list[tuple[str, ...]] = []
+
+        def run_rclone(
+            *arguments: str,
+            capture_output: bool = False,
+        ) -> str:
+            self.assertTrue(capture_output)
+            self.assertEqual("lsjson", arguments[0])
+            self.assertEqual("--files-only", arguments[2])
+            self.assertEqual(3, len(arguments))
+            calls.append(arguments)
+            return json.dumps(responses[arguments[1]])
+
+        with patch.object(planner, "_run_rclone", side_effect=run_rclone):
+            inventory = planner._list_remote_backups(
+                "onedrive",
+                PurePosixPath("cotacoes-ceasa"),
+            )
+
+        self.assertEqual(set(responses), {call[1] for call in calls})
+        self.assertEqual(
+            {
+                "history/deep/ceasa-data-20261028.zpaq",
+                "history/daily/ceasa-data-20261028.tar.xz",
+                "staging/ceasa-data-20261028-120000.zip",
+            },
+            {str(item["Path"]) for item in inventory},
+        )
+
     def test_refuses_remote_modification_commands(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "nao autorizada"):
             planner._run_rclone(
