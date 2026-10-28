@@ -1,0 +1,213 @@
+name: Planejar recuperacao dos raws historicos
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: latest-data-release
+  cancel-in-progress: false
+
+jobs:
+  planejar-recuperacao:
+    name: Localizar raws ausentes nos backups
+    runs-on: ubuntu-latest
+    environment: Crawler
+    timeout-minutes: 360
+    env:
+      DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
+      DATA_ONEDRIVE_BACKUP_ENABLED: ${{ vars.DATA_ONEDRIVE_BACKUP_ENABLED || 'false' }}
+      DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
+      DATA_ONEDRIVE_DIR: ${{ vars.DATA_ONEDRIVE_DIR || 'cotacoes-ceasa' }}
+      DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'latest-data' }}
+      DATA_ASSET_NAME: ${{ vars.DATA_ASSET_NAME || 'cotacoes.sqlite.xz' }}
+      DATA_ONEDRIVE_LATEST_ASSET_NAME: ceasa-data-latest.zip
+
+    steps:
+      - name: Liberar planejamento
+        id: janela
+        run: |
+          set -euo pipefail
+
+          case "${DATA_MIGRATION_LOCKED,,}" in
+            true)
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              {
+                echo "## Planejamento bloqueado"
+                echo
+                echo 'A variavel `DATA_MIGRATION_LOCKED` esta ativa.'
+                echo 'Nenhum checkout, download ou processamento foi executado.'
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            false) ;;
+            *)
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "::error::DATA_MIGRATION_LOCKED deve ser true ou false."
+              exit 1
+              ;;
+          esac
+
+          if [ "${DATA_MIGRATION_LOCKED,,}" = "true" ]; then
+            exit 0
+          fi
+
+          case "${DATA_ONEDRIVE_BACKUP_ENABLED,,}" in
+            true)
+              echo "should_run=true" >> "$GITHUB_OUTPUT"
+              ;;
+            false)
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "::error::DATA_ONEDRIVE_BACKUP_ENABLED precisa estar ativa."
+              exit 1
+              ;;
+            *)
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "::error::DATA_ONEDRIVE_BACKUP_ENABLED deve ser true ou false."
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout do codigo
+        if: steps.janela.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Build da imagem Docker
+        if: steps.janela.outputs.should_run == 'true'
+        run: docker compose build app
+
+      - name: Restaurar pacote completo atual
+        id: restaurar_data
+        if: steps.janela.outputs.should_run == 'true'
+        uses: ./.github/actions/restore-release-data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          release-tag: ${{ env.DATA_RELEASE_TAG }}
+          asset-name: ${{ env.DATA_ASSET_NAME }}
+          backup-asset-name: ${{ env.DATA_ONEDRIVE_LATEST_ASSET_NAME }}
+          backup-enabled: "true"
+          rclone-config: ${{ secrets.RCLONE_CONFIG }}
+          rclone-remote: ${{ env.DATA_ONEDRIVE_REMOTE }}
+          backup-dir: ${{ env.DATA_ONEDRIVE_DIR }}
+
+      - name: Exigir pacote completo validado
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.restaurar_data.outputs.restored_source }}" != "onedrive" ]; then
+            echo "::error::O planejamento exige o pacote completo do OneDrive."
+            exit 1
+          fi
+          if [ "${{ steps.restaurar_data.outputs.validation_status }}" != "passed" ] \
+            || [ "${{ steps.restaurar_data.outputs.checksum_validation }}" != "passed" ]; then
+            echo "::error::O pacote latest nao passou pela validacao integral."
+            exit 1
+          fi
+
+      - name: Preparar contexto somente leitura
+        id: contexto
+        if: steps.janela.outputs.should_run == 'true'
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+            echo "::error::O secret RCLONE_CONFIG nao esta configurado."
+            exit 1
+          fi
+
+          runtime_dir=".raw-recovery-work/${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          output_dir="${runtime_dir}/results"
+          work_dir="${runtime_dir}/work"
+          config_path="${runtime_dir}/rclone.conf"
+          mkdir -p "$runtime_dir"
+          chmod 700 "$runtime_dir"
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "$config_path"
+          chmod 600 "$config_path"
+
+          {
+            echo "RAW_RECOVERY_RUNTIME_DIR=${runtime_dir}"
+            echo "RAW_RECOVERY_OUTPUT_DIR=${output_dir}"
+            echo "RAW_RECOVERY_WORK_DIR=${work_dir}"
+            echo "RAW_RECOVERY_RCLONE_CONFIG=${config_path}"
+          } >> "$GITHUB_ENV"
+          {
+            echo "output_dir=${output_dir}"
+            echo "work_dir=${work_dir}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Gerar plano de recuperacao
+        id: plano
+        if: steps.janela.outputs.should_run == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e RCLONE_CONFIG="/app/${RAW_RECOVERY_RCLONE_CONFIG}" \
+            -e DATA_ONEDRIVE_REMOTE \
+            -e DATA_ONEDRIVE_DIR \
+            -e GITHUB_REPOSITORY \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_RUN_ATTEMPT \
+            -e GITHUB_SHA \
+            -e GITHUB_REF \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python \
+            app scripts/planejar_recuperacao_raws.py \
+            --database /app/data/cotacoes.sqlite \
+            --output "/app/${RAW_RECOVERY_OUTPUT_DIR}" \
+            --work "/app/${RAW_RECOVERY_WORK_DIR}"
+
+      - name: Publicar resumo do planejamento
+        if: always() && steps.contexto.outcome == 'success'
+        run: |
+          report_path="${RAW_RECOVERY_OUTPUT_DIR}/resumo.md"
+          if [ -f "$report_path" ]; then
+            cat "$report_path" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "# Plano de recuperacao dos arquivos raw"
+              echo
+              echo "O planejamento nao gerou o relatorio esperado."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Remover credencial temporaria
+        if: always() && steps.contexto.outcome == 'success'
+        run: rm -f -- "$RAW_RECOVERY_RCLONE_CONFIG"
+
+      - name: Publicar artefato do planejamento
+        if: always() && steps.contexto.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: plano-recuperacao-raws-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.contexto.outputs.output_dir }}/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Consolidar resultado
+        if: always() && steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.restaurar_data.outcome }}" != "success" ]; then
+            echo "::error::A restauracao do pacote atual falhou."
+            exit 1
+          fi
+          if [ "${{ steps.contexto.outcome }}" != "success" ]; then
+            echo "::error::A preparacao do planejamento falhou."
+            exit 1
+          fi
+          if [ "${{ steps.plano.outcome }}" != "success" ]; then
+            echo "::error::O planejamento terminou com falha ou backups invalidos."
+            exit 1
+          fi
+          echo "Plano somente leitura concluido e publicado como artefato."

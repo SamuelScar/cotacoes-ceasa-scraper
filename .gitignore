@@ -11,6 +11,7 @@ ceasa-data-latest.tar.gz.tmp
 .cotacoes-data.lock
 .backup-work/
 .migration-work/
+.raw-recovery-work/
 
 
 cotacoes.sqlite.xz
