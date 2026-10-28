@@ -170,10 +170,6 @@ class RawAuditHarness:
         return (Path("data") / relative).as_posix()
 
     def _hash(self, content: bytes) -> str:
-        if self.model == "legacy" and not content.startswith(b"%PDF"):
-            text = content.decode("utf-8")
-            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-            content = normalized.encode("utf-8")
         return hashlib.sha256(content).hexdigest()
 
 
@@ -233,6 +229,32 @@ class RawTraceabilityAuditTest(unittest.TestCase):
                 mismatch = harness.report_rows("raws_hash_divergentes.csv")[0]
                 self.assertEqual("2", mismatch["coleta_id"])
                 self.assertEqual("1", mismatch["quantidade_candidatos"])
+
+    def test_legacy_hashes_original_html_bytes_with_crlf(self) -> None:
+        harness = RawAuditHarness(self.root, "legacy", sample_limit=10)
+        html_with_crlf = b"<html>\r\n<body>conteudo</body>\r\n</html>\r\n"
+
+        harness.add_collection(1, "exact.html", html_with_crlf)
+        exact_path = harness.write_exact("exact.html", html_with_crlf)
+
+        harness.add_collection(2, "relocated.html", html_with_crlf)
+        harness.write_alternative("relocated.html", html_with_crlf)
+
+        summary = harness.audit()
+
+        self.assertEqual(1, summary["exact_match"])
+        self.assertEqual(1, summary["relocated_match"])
+        self.assertEqual(0, summary["hash_mismatch"])
+        self.assertEqual(0, summary["ambiguous_candidates"])
+
+        normalized, digest = harness.auditor._read_raw_candidate(
+            ("file", exact_path, None)
+        )
+        self.assertEqual(
+            "<html>\n<body>conteudo</body>\n</html>\n",
+            normalized,
+        )
+        self.assertEqual(hashlib.sha256(html_with_crlf).hexdigest(), digest)
 
     def test_applies_sample_limit_independently_to_each_status(self) -> None:
         for model in ("legacy", "v4"):

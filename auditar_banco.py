@@ -4715,7 +4715,7 @@ class DatabaseAuditor:
 
         content = raw_bytes.decode("utf-8")
         normalized = content.replace("\r\n", "\n").replace("\r", "\n")
-        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(raw_bytes).hexdigest()
         return normalized, digest
 
     def _match_raw_hash(
