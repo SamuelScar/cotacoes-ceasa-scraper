@@ -4,6 +4,11 @@ __pycache__/
 .env
 .backup-work/
 .migration-work/
+.raw-recovery-work/
+.raw-recovery-prepare/
+.raw-recovery-context/
+.raw-recovery-shard/
+.raw-recovery-consolidate/
 data/
 data.tar.gz
 data.tar.gz.tmp

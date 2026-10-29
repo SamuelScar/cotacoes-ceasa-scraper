@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -100,6 +101,13 @@ class RawEvidence:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] in {
+        "prepare",
+        "process",
+        "consolidate",
+    }:
+        return _run_phase(sys.argv[1], sys.argv[2:])
+
     parser = argparse.ArgumentParser(
         description=(
             "Localiza raws ausentes em backups historicos e gera um plano "
@@ -145,6 +153,83 @@ def main() -> int:
             output_directory.mkdir(parents=True, exist_ok=True)
             write_json_atomic(output_directory / "resultado.json", failure)
             _write_failure_report(output_directory / "resumo.md", failure)
+        print(json.dumps(failure, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 1
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return exit_code
+
+
+def _run_phase(phase: str, arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="Executa uma fase do planejamento paralelo dos raws."
+    )
+    if phase == "prepare":
+        parser.add_argument(
+            "--database",
+            type=Path,
+            default=Path("data/cotacoes.sqlite"),
+        )
+        parser.add_argument("--output", type=Path, required=True)
+        parser.add_argument("--work", type=Path, required=True)
+        parser.add_argument(
+            "--remote",
+            default=os.getenv("DATA_ONEDRIVE_REMOTE", "onedrive"),
+        )
+        parser.add_argument(
+            "--root",
+            default=os.getenv("DATA_ONEDRIVE_DIR", "cotacoes-ceasa"),
+        )
+    elif phase == "process":
+        parser.add_argument("--context", type=Path, required=True)
+        parser.add_argument("--candidate-position", type=int, required=True)
+        parser.add_argument("--output", type=Path, required=True)
+        parser.add_argument("--work", type=Path, required=True)
+        parser.add_argument(
+            "--remote",
+            default=os.getenv("DATA_ONEDRIVE_REMOTE", "onedrive"),
+        )
+    else:
+        parser.add_argument("--context", type=Path, required=True)
+        parser.add_argument("--evidence", type=Path, required=True)
+        parser.add_argument("--output", type=Path, required=True)
+
+    args = parser.parse_args(arguments)
+    try:
+        if phase == "prepare":
+            result, exit_code = prepare_parallel_context(
+                database_path=args.database,
+                output_directory=args.output,
+                work_directory=args.work,
+                remote=args.remote,
+                remote_root=args.root,
+            )
+        elif phase == "process":
+            result, exit_code = process_parallel_candidate(
+                context_path=args.context,
+                candidate_position=args.candidate_position,
+                output_directory=args.output,
+                work_directory=args.work,
+                remote=args.remote,
+            )
+        else:
+            result, exit_code = consolidate_parallel_results(
+                context_path=args.context,
+                evidence_directory=args.evidence,
+                output_directory=args.output,
+            )
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
+        failure = {
+            "schema_version": 1,
+            "status": "failed",
+            "operation": f"raw_recovery_{phase}",
+            "error": sanitize_log_text(error),
+            "safety": _safety_summary(),
+        }
+        output_directory = args.output.resolve()
+        output_directory.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(output_directory / "resultado.json", failure)
+        _write_failure_report(output_directory / "resumo.md", failure)
         print(json.dumps(failure, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1
 
@@ -309,6 +394,657 @@ def build_plan(
     write_json_atomic(output / "resultado.json", result)
     _write_report(output / "resumo.md", result)
     return result, 2 if backup_errors else 0
+
+
+def prepare_parallel_context(
+    *,
+    database_path: Path,
+    output_directory: Path,
+    work_directory: Path,
+    remote: str,
+    remote_root: str,
+) -> tuple[dict[str, object], int]:
+    started_at = execution_now()
+    started_monotonic = time.monotonic()
+    database = database_path.resolve(strict=True)
+    if not database.is_file() or database.is_symlink():
+        raise RuntimeError(f"SQLite invalido: {database}.")
+
+    output = output_directory.resolve()
+    if output.exists():
+        raise RuntimeError(f"O diretorio de saida ja existe: {output}.")
+    output.mkdir(parents=True)
+
+    work = work_directory.resolve()
+    if work.exists():
+        raise RuntimeError(f"O diretorio de trabalho ja existe: {work}.")
+    work.mkdir(parents=True)
+
+    safe_remote = validate_remote_name(remote)
+    safe_root = normalize_remote_root(remote_root)
+    database_sha256_before = calculate_sha256(database)
+
+    print("[recuperacao] Classificando raws registrados no SQLite.", flush=True)
+    model, traceability, missing_raws = _classify_missing_raws(
+        database,
+        output / "classificacao-atual",
+    )
+    missing_hashes = sorted(
+        {
+            item.expected_sha256
+            for item in missing_raws
+            if item.target_path is not None
+        }
+    )
+
+    candidates: list[BackupCandidate] = []
+    skipped_backups: list[dict[str, object]] = []
+    manifests_directory = work / "manifests"
+    manifests_directory.mkdir()
+    if missing_hashes:
+        print("[recuperacao] Baixando manifestos de auditoria.", flush=True)
+        _download_manifests(safe_remote, safe_root, manifests_directory)
+        manifest_index, manifest_warnings = _index_manifests(
+            manifests_directory
+        )
+        skipped_backups.extend(manifest_warnings)
+
+        print("[recuperacao] Listando backups disponiveis.", flush=True)
+        remote_inventory = _list_remote_backups(safe_remote, safe_root)
+        candidates, candidate_warnings = _select_candidates(
+            remote_inventory,
+            manifest_index,
+            safe_root,
+        )
+        skipped_backups.extend(candidate_warnings)
+        if not candidates:
+            raise RuntimeError(
+                "Nenhum backup historico validado por manifesto foi encontrado."
+            )
+
+    database_sha256_after = calculate_sha256(database)
+    if database_sha256_after != database_sha256_before:
+        raise RuntimeError(
+            "O SHA-256 do SQLite mudou durante a preparacao; contexto recusado."
+        )
+
+    context_manifests = output / "manifests"
+    context_manifests.mkdir()
+    candidate_payloads: list[dict[str, object]] = []
+    for position, candidate in enumerate(candidates, start=1):
+        source_manifest = candidate.evidence.manifest_path
+        destination_manifest = context_manifests / source_manifest.name
+        if destination_manifest.exists():
+            if calculate_sha256(destination_manifest) != calculate_sha256(
+                source_manifest
+            ):
+                raise RuntimeError(
+                    f"Manifestos com mesmo nome divergem: {source_manifest.name}."
+                )
+        else:
+            shutil.copy2(source_manifest, destination_manifest)
+        candidate_payloads.append(
+            _candidate_to_payload(
+                candidate,
+                position=position,
+                manifest_path=PurePosixPath("manifests") / source_manifest.name,
+                manifest_sha256=calculate_sha256(destination_manifest),
+            )
+        )
+
+    context = {
+        "schema_version": 1,
+        "status": "completed",
+        "operation": "raw_recovery_context",
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "finished_at": execution_now().isoformat(timespec="seconds"),
+        "duration_seconds": round(time.monotonic() - started_monotonic, 3),
+        "database": {
+            "path": database.as_posix(),
+            "model": model,
+            "sha256_before": database_sha256_before,
+            "sha256_after": database_sha256_after,
+            "unchanged": True,
+        },
+        "current_traceability": traceability,
+        "missing_raws": [_missing_raw_to_payload(item) for item in missing_raws],
+        "missing_hashes": missing_hashes,
+        "candidates": candidate_payloads,
+        "skipped_backups": skipped_backups,
+        "safety": _safety_summary(),
+    }
+    context_path = output / "contexto.json"
+    write_json_atomic(context_path, context)
+    matrix_positions = [
+        {"position": position}
+        for position in range(1, len(candidates) + 1)
+    ]
+    if not matrix_positions:
+        matrix_positions.append({"position": 0})
+    write_json_atomic(output / "matriz.json", {"include": matrix_positions})
+
+    result = {
+        "schema_version": 1,
+        "status": "completed",
+        "operation": "raw_recovery_prepare",
+        "missing_records": len(missing_raws),
+        "missing_unique_hashes": len(missing_hashes),
+        "validated_candidates": len(candidates),
+        "skipped_backups": len(skipped_backups),
+        "database_unchanged": True,
+        "files": {
+            "context": context_path.name,
+            "matrix": "matriz.json",
+            "classification_directory": "classificacao-atual",
+            "manifests_directory": "manifests",
+        },
+        "safety": _safety_summary(),
+    }
+    write_json_atomic(output / "resultado-preparacao.json", result)
+    return result, 0
+
+
+def process_parallel_candidate(
+    *,
+    context_path: Path,
+    candidate_position: int,
+    output_directory: Path,
+    work_directory: Path,
+    remote: str,
+) -> tuple[dict[str, object], int]:
+    context_file = context_path.resolve(strict=True)
+    context = _load_parallel_context(context_file)
+    context_sha256 = calculate_sha256(context_file)
+    candidates = context["candidates"]
+    assert isinstance(candidates, list)
+
+    output = output_directory.resolve()
+    if output.exists():
+        raise RuntimeError(f"O diretorio de saida ja existe: {output}.")
+    output.mkdir(parents=True)
+    work = work_directory.resolve()
+    if work.exists():
+        raise RuntimeError(f"O diretorio de trabalho ja existe: {work}.")
+    work.mkdir(parents=True)
+
+    if candidate_position == 0:
+        if candidates:
+            raise RuntimeError(
+                "A posicao sentinela so e valida quando nao ha candidatos."
+            )
+        result = {
+            "schema_version": 1,
+            "status": "skipped_no_candidates",
+            "operation": "raw_recovery_candidate",
+            "context_sha256": context_sha256,
+            "candidate_position": 0,
+            "candidate_count": 0,
+            "found": [],
+            "processed_backups": [],
+            "backup_errors": [],
+            "safety": _safety_summary(),
+        }
+        write_json_atomic(output / "evidencia-0000.json", result)
+        return result, 0
+
+    if candidate_position < 1 or candidate_position > len(candidates):
+        raise RuntimeError(
+            f"Posicao de candidato invalida: {candidate_position}."
+        )
+    candidate_payload = candidates[candidate_position - 1]
+    if not isinstance(candidate_payload, dict):
+        raise RuntimeError("Candidato invalido no contexto.")
+    if candidate_payload.get("position") != candidate_position:
+        raise RuntimeError("A posicao do candidato diverge do contexto.")
+
+    candidate = _candidate_from_payload(
+        candidate_payload,
+        context_directory=context_file.parent,
+    )
+    expected_hashes_payload = context["missing_hashes"]
+    assert isinstance(expected_hashes_payload, list)
+    expected_hashes = {str(item) for item in expected_hashes_payload}
+    safe_remote = validate_remote_name(remote)
+
+    found, processed, errors = _search_backups(
+        [candidate],
+        expected_hashes,
+        safe_remote,
+        work,
+    )
+    result = {
+        "schema_version": 1,
+        "status": "completed_with_backup_errors" if errors else "completed",
+        "operation": "raw_recovery_candidate",
+        "context_sha256": context_sha256,
+        "candidate_position": candidate_position,
+        "candidate_count": len(candidates),
+        "candidate_remote_path": candidate.remote_path,
+        "candidate_sha256": candidate.evidence.sha256,
+        "found": [
+            _raw_evidence_to_payload(found[digest])
+            for digest in sorted(found)
+        ],
+        "processed_backups": processed,
+        "backup_errors": errors,
+        "safety": _safety_summary(),
+    }
+    write_json_atomic(
+        output / f"evidencia-{candidate_position:04d}.json",
+        result,
+    )
+    return result, 2 if errors else 0
+
+
+def consolidate_parallel_results(
+    *,
+    context_path: Path,
+    evidence_directory: Path,
+    output_directory: Path,
+) -> tuple[dict[str, object], int]:
+    context_file = context_path.resolve(strict=True)
+    context = _load_parallel_context(context_file)
+    context_sha256 = calculate_sha256(context_file)
+    candidates = context["candidates"]
+    assert isinstance(candidates, list)
+
+    evidence_root = evidence_directory.resolve(strict=True)
+    evidence_paths = sorted(evidence_root.rglob("evidencia-*.json"))
+    expected_positions = set(range(1, len(candidates) + 1)) or {0}
+    evidence_by_position: dict[int, dict[str, object]] = {}
+    for evidence_path in evidence_paths:
+        payload = _read_json_object(evidence_path)
+        if payload.get("schema_version") != 1:
+            raise RuntimeError(
+                f"Versao invalida na evidencia {evidence_path.name}."
+            )
+        if payload.get("operation") != "raw_recovery_candidate":
+            raise RuntimeError(
+                f"Operacao invalida na evidencia {evidence_path.name}."
+            )
+        if payload.get("context_sha256") != context_sha256:
+            raise RuntimeError(
+                f"Contexto divergente na evidencia {evidence_path.name}."
+            )
+        position = payload.get("candidate_position")
+        if isinstance(position, bool) or not isinstance(position, int):
+            raise RuntimeError(
+                f"Posicao invalida na evidencia {evidence_path.name}."
+            )
+        if position in evidence_by_position:
+            raise RuntimeError(f"Evidencia duplicada para a posicao {position}.")
+        evidence_by_position[position] = payload
+
+    received_positions = set(evidence_by_position)
+    if received_positions != expected_positions:
+        missing = sorted(expected_positions - received_positions)
+        unexpected = sorted(received_positions - expected_positions)
+        raise RuntimeError(
+            "Conjunto de evidencias incompleto ou inesperado: "
+            f"ausentes={missing}, inesperadas={unexpected}."
+        )
+
+    found_by_hash: dict[str, RawEvidence] = {}
+    processed_backups: list[dict[str, object]] = []
+    backup_errors: list[dict[str, object]] = []
+    for position in sorted(evidence_by_position):
+        payload = evidence_by_position[position]
+        if position == 0:
+            if payload.get("status") != "skipped_no_candidates":
+                raise RuntimeError("A evidencia sentinela possui status invalido.")
+            continue
+
+        candidate_payload = candidates[position - 1]
+        if not isinstance(candidate_payload, dict):
+            raise RuntimeError("Candidato invalido no contexto.")
+        if (
+            payload.get("candidate_remote_path")
+            != candidate_payload.get("remote_path")
+            or payload.get("candidate_sha256")
+            != candidate_payload.get("sha256")
+        ):
+            raise RuntimeError(
+                f"A evidencia da posicao {position} diverge do candidato."
+            )
+
+        processed = payload.get("processed_backups")
+        errors = payload.get("backup_errors")
+        found = payload.get("found")
+        if not all(isinstance(item, list) for item in (processed, errors, found)):
+            raise RuntimeError(f"Evidencia invalida na posicao {position}.")
+        assert isinstance(processed, list)
+        assert isinstance(errors, list)
+        assert isinstance(found, list)
+        if len(processed) + len(errors) != 1:
+            raise RuntimeError(
+                f"A posicao {position} nao possui resultado unico de backup."
+            )
+        processed_backups.extend(processed)
+        backup_errors.extend(errors)
+        for raw_payload in found:
+            if not isinstance(raw_payload, dict):
+                raise RuntimeError(
+                    f"Raw invalido na evidencia da posicao {position}."
+                )
+            raw_evidence = _raw_evidence_from_payload(raw_payload)
+            found_by_hash.setdefault(
+                raw_evidence.expected_sha256,
+                raw_evidence,
+            )
+
+    missing_hashes_payload = context["missing_hashes"]
+    assert isinstance(missing_hashes_payload, list)
+    expected_hashes = {str(item) for item in missing_hashes_payload}
+    unexpected_hashes = set(found_by_hash) - expected_hashes
+    if unexpected_hashes:
+        raise RuntimeError("As evidencias contem hashes nao solicitados.")
+
+    missing_raws_payload = context["missing_raws"]
+    assert isinstance(missing_raws_payload, list)
+    missing_raws = [
+        _missing_raw_from_payload(item)
+        for item in missing_raws_payload
+        if isinstance(item, dict)
+    ]
+    if len(missing_raws) != len(missing_raws_payload):
+        raise RuntimeError("O contexto contem raws ausentes invalidos.")
+
+    output = output_directory.resolve()
+    if output.exists():
+        raise RuntimeError(f"O diretorio de saida ja existe: {output}.")
+    output.mkdir(parents=True)
+    classification_source = context_file.parent / "classificacao-atual"
+    if not classification_source.is_dir():
+        raise RuntimeError("A classificacao atual nao acompanha o contexto.")
+    shutil.copytree(
+        classification_source,
+        output / "classificacao-atual",
+    )
+
+    plan_rows = _build_plan_rows(missing_raws, found_by_hash)
+    plan_path = output / "plano-recuperacao-raws.csv"
+    _write_csv(
+        plan_path,
+        (
+            "coleta_id",
+            "fonte",
+            "caminho_registrado",
+            "destino_em_data",
+            "sha256_esperado",
+            "status",
+            "acao_proposta",
+            "backup_remoto",
+            "sha256_backup",
+            "data_backup",
+            "manifesto",
+            "conteudo_no_backup",
+            "tipo_conteudo",
+            "tamanho_conteudo",
+        ),
+        plan_rows,
+    )
+
+    found_records = sum(1 for row in plan_rows if row[5] == "encontrado")
+    invalid_targets = sum(
+        1 for row in plan_rows if row[5] == "destino_invalido"
+    )
+    not_found_records = len(plan_rows) - found_records - invalid_targets
+    database = context["database"]
+    traceability = context["current_traceability"]
+    skipped_backups = context["skipped_backups"]
+    assert isinstance(database, dict)
+    assert isinstance(traceability, dict)
+    assert isinstance(skipped_backups, list)
+    status = "completed_with_backup_errors" if backup_errors else "completed"
+    result: dict[str, object] = {
+        "schema_version": 1,
+        "status": status,
+        "operation": "raw_recovery_plan",
+        "started_at": context["started_at"],
+        "finished_at": execution_now().isoformat(timespec="seconds"),
+        "duration_seconds": round(
+            float(context["duration_seconds"])
+            + sum(
+                float(item.get("duration_seconds", 0))
+                for item in processed_backups
+                if isinstance(item, dict)
+            ),
+            3,
+        ),
+        "database": database,
+        "current_traceability": traceability,
+        "recovery_coverage": {
+            "missing_records": len(missing_raws),
+            "missing_unique_hashes": len(expected_hashes),
+            "records_found_in_backups": found_records,
+            "unique_hashes_found_in_backups": len(found_by_hash),
+            "records_not_found": not_found_records,
+            "records_with_invalid_target": invalid_targets,
+        },
+        "backup_inventory": {
+            "validated_candidates": len(candidates),
+            "processed": len(processed_backups),
+            "skipped": len(skipped_backups),
+            "errors": len(backup_errors),
+        },
+        "processed_backups": processed_backups,
+        "skipped_backups": skipped_backups,
+        "backup_errors": backup_errors,
+        "parallel_execution": {
+            "candidate_jobs": len(candidates),
+            "evidences_received": len(evidence_by_position),
+            "context_sha256": context_sha256,
+        },
+        "files": {
+            "recovery_plan": plan_path.name,
+            "classification_directory": "classificacao-atual",
+            "report": "resumo.md",
+        },
+        "safety": _safety_summary(),
+    }
+    write_json_atomic(output / "resultado.json", result)
+    _write_report(output / "resumo.md", result)
+    return result, 2 if backup_errors else 0
+
+
+def _candidate_to_payload(
+    candidate: BackupCandidate,
+    *,
+    position: int,
+    manifest_path: PurePosixPath,
+    manifest_sha256: str,
+) -> dict[str, object]:
+    evidence = candidate.evidence
+    return {
+        "position": position,
+        "remote_path": candidate.remote_path,
+        "manifest_path": manifest_path.as_posix(),
+        "manifest_sha256": manifest_sha256,
+        "manifest_name": evidence.manifest_name,
+        "layer": evidence.layer,
+        "backup_date": evidence.backup_date.isoformat(),
+        "managed_remote_path": evidence.managed_remote_path,
+        "archive_name": evidence.archive_name,
+        "sha256": evidence.sha256,
+        "size_bytes": evidence.size_bytes,
+        "source_files": evidence.source_files,
+        "source_bytes": evidence.source_bytes,
+    }
+
+
+def _candidate_from_payload(
+    payload: dict[str, object],
+    *,
+    context_directory: Path,
+) -> BackupCandidate:
+    relative_manifest = PurePosixPath(str(payload.get("manifest_path", "")))
+    if (
+        relative_manifest.is_absolute()
+        or ".." in relative_manifest.parts
+        or relative_manifest.parent != PurePosixPath("manifests")
+    ):
+        raise RuntimeError("Caminho de manifesto invalido no contexto.")
+    manifest_path = context_directory / relative_manifest.as_posix()
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise RuntimeError(f"Manifesto ausente no contexto: {relative_manifest}.")
+    manifest_sha256 = str(payload.get("manifest_sha256", ""))
+    if (
+        not SHA256_PATTERN.fullmatch(manifest_sha256)
+        or calculate_sha256(manifest_path) != manifest_sha256
+    ):
+        raise RuntimeError(f"Manifesto adulterado no contexto: {relative_manifest}.")
+
+    layer = str(payload.get("layer", ""))
+    if layer not in RECOVERY_LAYERS:
+        raise RuntimeError("Camada de backup invalida no contexto.")
+    backup_date = date.fromisoformat(str(payload.get("backup_date", "")))
+    managed_remote_path = validate_layer_remote_path(
+        layer,
+        PurePosixPath(str(payload.get("managed_remote_path", ""))),
+    ).as_posix()
+    sha256 = str(payload.get("sha256", "")).lower()
+    if not SHA256_PATTERN.fullmatch(sha256):
+        raise RuntimeError("SHA-256 de backup invalido no contexto.")
+
+    numeric_fields: dict[str, int] = {}
+    for key in ("size_bytes", "source_files", "source_bytes"):
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise RuntimeError(f"Campo numerico invalido no contexto: {key}.")
+        numeric_fields[key] = value
+
+    remote_path = str(payload.get("remote_path", ""))
+    if not remote_path or PurePosixPath(remote_path).name != str(
+        payload.get("archive_name", "")
+    ):
+        raise RuntimeError("Caminho remoto invalido no contexto.")
+    return BackupCandidate(
+        evidence=ManifestEvidence(
+            manifest_path=manifest_path,
+            manifest_name=str(payload.get("manifest_name", "")),
+            layer=layer,
+            backup_date=backup_date,
+            managed_remote_path=managed_remote_path,
+            archive_name=str(payload.get("archive_name", "")),
+            sha256=sha256,
+            size_bytes=numeric_fields["size_bytes"],
+            source_files=numeric_fields["source_files"],
+            source_bytes=numeric_fields["source_bytes"],
+        ),
+        remote_path=remote_path,
+    )
+
+
+def _missing_raw_to_payload(item: MissingRaw) -> dict[str, object]:
+    return {
+        "collection_id": item.collection_id,
+        "source": item.source,
+        "stored_path": item.stored_path,
+        "target_path": item.target_path,
+        "expected_sha256": item.expected_sha256,
+    }
+
+
+def _missing_raw_from_payload(payload: dict[str, object]) -> MissingRaw:
+    collection_id = payload.get("collection_id")
+    if isinstance(collection_id, bool) or not isinstance(collection_id, int):
+        raise RuntimeError("ID de coleta invalido no contexto.")
+    expected_sha256 = str(payload.get("expected_sha256", "")).lower()
+    if not SHA256_PATTERN.fullmatch(expected_sha256):
+        raise RuntimeError("Hash de raw invalido no contexto.")
+    target_value = payload.get("target_path")
+    if target_value is not None and not isinstance(target_value, str):
+        raise RuntimeError("Destino de raw invalido no contexto.")
+    return MissingRaw(
+        collection_id=collection_id,
+        source=str(payload.get("source", "")),
+        stored_path=str(payload.get("stored_path", "")),
+        target_path=target_value,
+        expected_sha256=expected_sha256,
+    )
+
+
+def _raw_evidence_to_payload(item: RawEvidence) -> dict[str, object]:
+    return {
+        "expected_sha256": item.expected_sha256,
+        "backup_remote_path": item.backup_remote_path,
+        "backup_sha256": item.backup_sha256,
+        "backup_date": item.backup_date,
+        "manifest_name": item.manifest_name,
+        "content_location": item.content_location,
+        "content_kind": item.content_kind,
+        "content_size": item.content_size,
+    }
+
+
+def _raw_evidence_from_payload(payload: dict[str, object]) -> RawEvidence:
+    expected_sha256 = str(payload.get("expected_sha256", "")).lower()
+    backup_sha256 = str(payload.get("backup_sha256", "")).lower()
+    if not SHA256_PATTERN.fullmatch(expected_sha256) or not SHA256_PATTERN.fullmatch(
+        backup_sha256
+    ):
+        raise RuntimeError("Hash invalido em evidencia de raw.")
+    content_size = payload.get("content_size")
+    if (
+        isinstance(content_size, bool)
+        or not isinstance(content_size, int)
+        or content_size < 0
+    ):
+        raise RuntimeError("Tamanho invalido em evidencia de raw.")
+    return RawEvidence(
+        expected_sha256=expected_sha256,
+        backup_remote_path=str(payload.get("backup_remote_path", "")),
+        backup_sha256=backup_sha256,
+        backup_date=date.fromisoformat(
+            str(payload.get("backup_date", ""))
+        ).isoformat(),
+        manifest_name=str(payload.get("manifest_name", "")),
+        content_location=str(payload.get("content_location", "")),
+        content_kind=str(payload.get("content_kind", "")),
+        content_size=content_size,
+    )
+
+
+def _load_parallel_context(path: Path) -> dict[str, object]:
+    context = _read_json_object(path)
+    if context.get("schema_version") != 1:
+        raise RuntimeError("Versao invalida do contexto paralelo.")
+    if context.get("status") != "completed":
+        raise RuntimeError("O contexto paralelo nao esta concluido.")
+    if context.get("operation") != "raw_recovery_context":
+        raise RuntimeError("Operacao invalida no contexto paralelo.")
+    for key in (
+        "database",
+        "current_traceability",
+        "missing_raws",
+        "missing_hashes",
+        "candidates",
+        "skipped_backups",
+    ):
+        if key not in context:
+            raise RuntimeError(f"Campo ausente no contexto paralelo: {key}.")
+    if not isinstance(context["missing_raws"], list):
+        raise RuntimeError("Lista de raws invalida no contexto paralelo.")
+    if not isinstance(context["missing_hashes"], list):
+        raise RuntimeError("Lista de hashes invalida no contexto paralelo.")
+    if not isinstance(context["candidates"], list):
+        raise RuntimeError("Lista de candidatos invalida no contexto paralelo.")
+    if not isinstance(context["skipped_backups"], list):
+        raise RuntimeError("Lista de ignorados invalida no contexto paralelo.")
+    for digest in context["missing_hashes"]:
+        if not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest):
+            raise RuntimeError("Hash invalido no contexto paralelo.")
+    return context
+
+
+def _read_json_object(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"JSON invalido em {path.name}.") from error
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"O arquivo {path.name} nao contem um objeto JSON.")
+    return payload
 
 
 def _classify_missing_raws(

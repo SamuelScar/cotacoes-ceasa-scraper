@@ -211,11 +211,196 @@ class RawRecoveryPlanTest(unittest.TestCase):
             {str(item["Path"]) for item in inventory},
         )
 
+    def test_prepares_processes_and_consolidates_parallel_plan(self) -> None:
+        database_hash_before = calculate_sha256(self.database)
+        context_output = self.root / "parallel-context"
+        context_work = self.root / "parallel-context-work"
+
+        prepare_result, prepare_exit_code = self._prepare_parallel_context(
+            output=context_output,
+            work=context_work,
+        )
+
+        self.assertEqual(0, prepare_exit_code)
+        self.assertEqual("completed", prepare_result["status"])
+        self.assertEqual(1, prepare_result["validated_candidates"])
+        self.assertEqual(
+            {"include": [{"position": 1}]},
+            json.loads((context_output / "matriz.json").read_text()),
+        )
+        self.assertTrue(
+            (context_output / "manifests" / self.manifest_name).is_file()
+        )
+
+        shard_output = self.root / "parallel-shard"
+        shard_work = self.root / "parallel-shard-work"
+
+        def run_rclone(
+            *arguments: str,
+            capture_output: bool = False,
+        ) -> str:
+            self.assertFalse(capture_output)
+            self.assertEqual("copyto", arguments[0])
+            self.assertEqual(
+                "onedrive:cotacoes-ceasa/backups/staging/"
+                + self.archive_name,
+                arguments[1],
+            )
+            shutil.copy2(self.archive_path, Path(arguments[2]))
+            return ""
+
+        with patch.object(planner, "_run_rclone", side_effect=run_rclone):
+            shard_result, shard_exit_code = planner.process_parallel_candidate(
+                context_path=context_output / "contexto.json",
+                candidate_position=1,
+                output_directory=shard_output,
+                work_directory=shard_work,
+                remote="onedrive",
+            )
+
+        self.assertEqual(0, shard_exit_code)
+        self.assertEqual("completed", shard_result["status"])
+        self.assertEqual(2, len(shard_result["found"]))
+        self.assertTrue((shard_output / "evidencia-0001.json").is_file())
+
+        final_output = self.root / "parallel-final"
+        final_result, final_exit_code = planner.consolidate_parallel_results(
+            context_path=context_output / "contexto.json",
+            evidence_directory=shard_output,
+            output_directory=final_output,
+        )
+
+        self.assertEqual(0, final_exit_code)
+        self.assertEqual("completed", final_result["status"])
+        self.assertEqual(1, final_result["backup_inventory"]["processed"])
+        self.assertEqual(
+            2,
+            final_result["recovery_coverage"]["records_found_in_backups"],
+        )
+        self.assertEqual(
+            1,
+            final_result["parallel_execution"]["evidences_received"],
+        )
+        self.assertEqual(database_hash_before, calculate_sha256(self.database))
+        self.assertTrue((final_output / "resultado.json").is_file())
+        self.assertTrue((final_output / "resumo.md").is_file())
+        self.assertTrue(
+            (final_output / "classificacao-atual" / "raws_ausentes.csv").is_file()
+        )
+
+    def test_parallel_consolidation_refuses_missing_candidate_evidence(
+        self,
+    ) -> None:
+        context_output = self.root / "incomplete-context"
+        self._prepare_parallel_context(
+            output=context_output,
+            work=self.root / "incomplete-context-work",
+        )
+        empty_evidence = self.root / "empty-evidence"
+        empty_evidence.mkdir()
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"Conjunto de evidencias incompleto.*ausentes=\[1\]",
+        ):
+            planner.consolidate_parallel_results(
+                context_path=context_output / "contexto.json",
+                evidence_directory=empty_evidence,
+                output_directory=self.root / "refused-final",
+            )
+
+        self.assertFalse((self.root / "refused-final").exists())
+
+    def test_parallel_plan_handles_database_without_missing_raws(self) -> None:
+        direct_path = self.current_data / "raw" / "fonte" / "direct.html"
+        direct_path.parent.mkdir(parents=True)
+        direct_path.write_bytes(self.direct_content)
+        archived_path = self.current_data / "raw" / "fonte" / "archived.html"
+        archived_path.write_bytes(self.archived_content)
+
+        context_output = self.root / "complete-context"
+        prepare_result, prepare_exit_code = planner.prepare_parallel_context(
+            database_path=self.database,
+            output_directory=context_output,
+            work_directory=self.root / "complete-context-work",
+            remote="onedrive",
+            remote_root="cotacoes-ceasa",
+        )
+
+        self.assertEqual(0, prepare_exit_code)
+        self.assertEqual(0, prepare_result["missing_records"])
+        self.assertEqual(0, prepare_result["validated_candidates"])
+        self.assertEqual(
+            {"include": [{"position": 0}]},
+            json.loads((context_output / "matriz.json").read_text()),
+        )
+
+        shard_output = self.root / "complete-shard"
+        shard_result, shard_exit_code = planner.process_parallel_candidate(
+            context_path=context_output / "contexto.json",
+            candidate_position=0,
+            output_directory=shard_output,
+            work_directory=self.root / "complete-shard-work",
+            remote="onedrive",
+        )
+        self.assertEqual(0, shard_exit_code)
+        self.assertEqual("skipped_no_candidates", shard_result["status"])
+
+        final_result, final_exit_code = planner.consolidate_parallel_results(
+            context_path=context_output / "contexto.json",
+            evidence_directory=shard_output,
+            output_directory=self.root / "complete-final",
+        )
+        self.assertEqual(0, final_exit_code)
+        self.assertEqual(0, final_result["recovery_coverage"]["missing_records"])
+        self.assertEqual(0, final_result["backup_inventory"]["processed"])
+
     def test_refuses_remote_modification_commands(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "nao autorizada"):
             planner._run_rclone(
                 "deletefile",
                 "onedrive:cotacoes-ceasa/backups/staging/arquivo.zip",
+            )
+
+    def _prepare_parallel_context(
+        self,
+        *,
+        output: Path,
+        work: Path,
+    ) -> tuple[dict[str, object], int]:
+        def download_manifests(
+            remote: str,
+            remote_root: PurePosixPath,
+            destination: Path,
+        ) -> None:
+            self.assertEqual("onedrive", remote)
+            self.assertEqual(PurePosixPath("cotacoes-ceasa"), remote_root)
+            shutil.copy2(self.manifest_path, destination / self.manifest_name)
+
+        inventory = [
+            {
+                "Path": f"staging/{self.archive_name}",
+                "Size": self.archive_path.stat().st_size,
+            }
+        ]
+        with (
+            patch.object(
+                planner,
+                "_download_manifests",
+                side_effect=download_manifests,
+            ),
+            patch.object(
+                planner,
+                "_list_remote_backups",
+                return_value=inventory,
+            ),
+        ):
+            return planner.prepare_parallel_context(
+                database_path=self.database,
+                output_directory=output,
+                work_directory=work,
+                remote="onedrive",
+                remote_root="cotacoes-ceasa",
             )
 
     def _create_v4_database(self, path: Path) -> None:

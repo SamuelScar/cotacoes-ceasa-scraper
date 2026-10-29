@@ -12,6 +12,10 @@ ceasa-data-latest.tar.gz.tmp
 .backup-work/
 .migration-work/
 .raw-recovery-work/
+.raw-recovery-prepare/
+.raw-recovery-context/
+.raw-recovery-shard/
+.raw-recovery-consolidate/
 
 
 cotacoes.sqlite.xz
