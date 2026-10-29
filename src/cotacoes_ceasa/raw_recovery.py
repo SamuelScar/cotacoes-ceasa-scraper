@@ -141,11 +141,6 @@ def build_recovery_input_inventory(
             "audit",
             PurePosixPath("backups/audit") / reference.manifest_name,
         )
-        if layer_file_date("audit", manifest_path.name) != backup_date:
-            raise RawRecoveryError(
-                "A data do manifesto diverge do backup: "
-                f"{reference.manifest_name}."
-            )
 
         _reject_local_name_collision(
             archive_names,

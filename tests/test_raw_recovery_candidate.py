@@ -13,6 +13,7 @@ from cotacoes_ceasa.backups.restore import collect_data_inventory
 from cotacoes_ceasa.raw_recovery import (
     INCOMPLETE_MARKER,
     RawRecoveryError,
+    build_recovery_input_inventory,
     create_raw_recovery_candidate,
 )
 
@@ -42,7 +43,7 @@ class RawRecoveryCandidateTest(unittest.TestCase):
         self.archives.mkdir()
         self.manifests.mkdir()
         self.archive_name = "ceasa-data-20261029-120000.zip"
-        self.manifest_name = "backup-20261029-120000.json"
+        self.manifest_name = "backup-20261030-120000.json"
         self.archive_path = self.archives / self.archive_name
         self.manifest_path = self.manifests / self.manifest_name
         self._create_backup()
@@ -52,6 +53,20 @@ class RawRecoveryCandidateTest(unittest.TestCase):
         self.planning_result_path = self.root / "resultado.json"
         self._write_plan()
         self._write_planning_result()
+
+    def test_builds_input_inventory_for_manifest_created_later(self) -> None:
+        inventory = build_recovery_input_inventory(
+            plan_path=self.plan_path,
+            planning_result_path=self.planning_result_path,
+            remote_root="cotacoes-ceasa",
+        )
+
+        self.assertEqual("validated", inventory["status"])
+        self.assertEqual(1, inventory["backups_required"])
+        self.assertEqual(
+            "cotacoes-ceasa/backups/audit/" + self.manifest_name,
+            inventory["backups"][0]["manifest_remote_path"],
+        )
 
     def test_recovers_direct_and_zipped_raws_only_in_candidate(self) -> None:
         database_hash_before = calculate_sha256(self.database)
@@ -139,6 +154,32 @@ class RawRecoveryCandidateTest(unittest.TestCase):
         self.assertFalse(
             (candidate / "data" / "raw" / "fonte" / "arquivo-a.html").exists()
         )
+
+    def test_refuses_manifest_not_linked_to_planned_backup(self) -> None:
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["layers"]["staging"]["file_name"] = (
+            "ceasa-data-20261029-130000.zip"
+        )
+        self.manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "manifesto nao identifica exatamente uma camada",
+        ):
+            create_raw_recovery_candidate(
+                current_data_directory=self.current_data,
+                plan_path=self.plan_path,
+                planning_result_path=self.planning_result_path,
+                archives_directory=self.archives,
+                manifests_directory=self.manifests,
+                candidate_root=self.root / "unlinked-manifest-candidate",
+                work_directory=self.root / "unlinked-manifest-work",
+                result_path=self.root / "unlinked-manifest-result.json",
+                report_path=self.root / "unlinked-manifest-report.md",
+            )
 
     def test_refuses_plan_with_coverage_divergent_from_result(self) -> None:
         result = json.loads(
