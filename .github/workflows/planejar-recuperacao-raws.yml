@@ -11,11 +11,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  planejar-recuperacao:
-    name: Localizar raws ausentes nos backups
+  preparar_contexto:
+    name: Preparar contexto e candidatos
     runs-on: ubuntu-latest
     environment: Crawler
-    timeout-minutes: 360
+    timeout-minutes: 30
+    outputs:
+      should_run: ${{ steps.janela.outputs.should_run }}
+      matrix: ${{ steps.matriz.outputs.matrix || steps.janela.outputs.matrix }}
     env:
       DATA_MIGRATION_LOCKED: ${{ vars.DATA_MIGRATION_LOCKED || 'false' }}
       DATA_ONEDRIVE_BACKUP_ENABLED: ${{ vars.DATA_ONEDRIVE_BACKUP_ENABLED || 'false' }}
@@ -31,6 +34,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo 'matrix={"include":[{"position":0}]}' >> "$GITHUB_OUTPUT"
           case "${DATA_MIGRATION_LOCKED,,}" in
             true)
               echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -109,7 +113,7 @@ jobs:
             exit 1
           fi
 
-      - name: Preparar contexto somente leitura
+      - name: Preparar diretorios e credencial
         id: contexto
         if: steps.janela.outputs.should_run == 'true'
         env:
@@ -122,7 +126,113 @@ jobs:
             exit 1
           fi
 
-          runtime_dir=".raw-recovery-work/${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          runtime_dir=".raw-recovery-prepare/${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          output_dir="${runtime_dir}/context"
+          work_dir="${runtime_dir}/work"
+          config_path="${runtime_dir}/rclone.conf"
+          mkdir -p "$runtime_dir"
+          chmod 700 "$runtime_dir"
+          printf "%s\n" "$RCLONE_CONFIG_CONTENT" > "$config_path"
+          chmod 600 "$config_path"
+
+          {
+            echo "RAW_RECOVERY_PREPARE_OUTPUT=${output_dir}"
+            echo "RAW_RECOVERY_PREPARE_WORK=${work_dir}"
+            echo "RAW_RECOVERY_RCLONE_CONFIG=${config_path}"
+          } >> "$GITHUB_ENV"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+      - name: Preparar contexto paralelo
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e RCLONE_CONFIG="/app/${RAW_RECOVERY_RCLONE_CONFIG}" \
+            -e DATA_ONEDRIVE_REMOTE \
+            -e DATA_ONEDRIVE_DIR \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python \
+            app scripts/planejar_recuperacao_raws.py prepare \
+            --database /app/data/cotacoes.sqlite \
+            --output "/app/${RAW_RECOVERY_PREPARE_OUTPUT}" \
+            --work "/app/${RAW_RECOVERY_PREPARE_WORK}"
+
+      - name: Publicar matriz de candidatos
+        id: matriz
+        if: steps.janela.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          matrix_path="${RAW_RECOVERY_PREPARE_OUTPUT}/matriz.json"
+          if [ ! -f "$matrix_path" ]; then
+            echo "::error::A preparacao nao gerou a matriz de candidatos."
+            exit 1
+          fi
+          {
+            echo "matrix<<RAW_RECOVERY_MATRIX"
+            cat "$matrix_path"
+            echo "RAW_RECOVERY_MATRIX"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Remover credencial temporaria
+        if: always() && steps.contexto.outcome == 'success'
+        run: rm -f -- "$RAW_RECOVERY_RCLONE_CONFIG"
+
+      - name: Publicar contexto do planejamento
+        if: always() && steps.contexto.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: contexto-recuperacao-raws-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.contexto.outputs.output_dir }}/
+          if-no-files-found: error
+          retention-days: 90
+
+  processar_backups:
+    name: Backup ${{ matrix.position }}
+    needs: preparar_contexto
+    if: >-
+      needs.preparar_contexto.result == 'success' &&
+      needs.preparar_contexto.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    environment: Crawler
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.preparar_contexto.outputs.matrix) }}
+    env:
+      DATA_ONEDRIVE_REMOTE: ${{ vars.DATA_ONEDRIVE_REMOTE || 'onedrive' }}
+
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Build da imagem Docker
+        run: docker compose build app
+
+      - name: Baixar contexto do planejamento
+        uses: actions/download-artifact@v4
+        with:
+          name: contexto-recuperacao-raws-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .raw-recovery-context
+
+      - name: Preparar diretorios e credencial
+        id: shard
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$RCLONE_CONFIG_CONTENT" ]; then
+            echo "::error::O secret RCLONE_CONFIG nao esta configurado."
+            exit 1
+          fi
+
+          runtime_dir=".raw-recovery-shard/${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}/${{ matrix.position }}"
           output_dir="${runtime_dir}/results"
           work_dir="${runtime_dir}/work"
           config_path="${runtime_dir}/rclone.conf"
@@ -132,19 +242,14 @@ jobs:
           chmod 600 "$config_path"
 
           {
-            echo "RAW_RECOVERY_RUNTIME_DIR=${runtime_dir}"
-            echo "RAW_RECOVERY_OUTPUT_DIR=${output_dir}"
-            echo "RAW_RECOVERY_WORK_DIR=${work_dir}"
+            echo "RAW_RECOVERY_SHARD_OUTPUT=${output_dir}"
+            echo "RAW_RECOVERY_SHARD_WORK=${work_dir}"
             echo "RAW_RECOVERY_RCLONE_CONFIG=${config_path}"
           } >> "$GITHUB_ENV"
-          {
-            echo "output_dir=${output_dir}"
-            echo "work_dir=${work_dir}"
-          } >> "$GITHUB_OUTPUT"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-      - name: Gerar plano de recuperacao
-        id: plano
-        if: steps.janela.outputs.should_run == 'true'
+      - name: Analisar backup candidato
+        id: candidato
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -153,61 +258,124 @@ jobs:
             --user "$(id -u):$(id -g)" \
             -e RCLONE_CONFIG="/app/${RAW_RECOVERY_RCLONE_CONFIG}" \
             -e DATA_ONEDRIVE_REMOTE \
-            -e DATA_ONEDRIVE_DIR \
-            -e GITHUB_REPOSITORY \
-            -e GITHUB_RUN_ID \
-            -e GITHUB_RUN_ATTEMPT \
-            -e GITHUB_SHA \
-            -e GITHUB_REF \
             -e PYTHONDONTWRITEBYTECODE=1 \
             --entrypoint python \
-            app scripts/planejar_recuperacao_raws.py \
-            --database /app/data/cotacoes.sqlite \
-            --output "/app/${RAW_RECOVERY_OUTPUT_DIR}" \
-            --work "/app/${RAW_RECOVERY_WORK_DIR}"
+            app scripts/planejar_recuperacao_raws.py process \
+            --context /app/.raw-recovery-context/contexto.json \
+            --candidate-position "${{ matrix.position }}" \
+            --output "/app/${RAW_RECOVERY_SHARD_OUTPUT}" \
+            --work "/app/${RAW_RECOVERY_SHARD_WORK}"
+
+      - name: Remover credencial temporaria
+        if: always() && steps.shard.outcome == 'success'
+        run: rm -f -- "$RAW_RECOVERY_RCLONE_CONFIG"
+
+      - name: Publicar evidencia do candidato
+        if: always() && steps.shard.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidencia-recuperacao-raws-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.position }}
+          path: ${{ steps.shard.outputs.output_dir }}/evidencia-*.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Validar processamento do candidato
+        if: always()
+        run: |
+          if [ "${{ steps.candidato.outcome }}" != "success" ]; then
+            echo "::error::O candidato ${{ matrix.position }} terminou com falha."
+            exit 1
+          fi
+
+  consolidar_plano:
+    name: Consolidar plano de recuperacao
+    needs:
+      - preparar_contexto
+      - processar_backups
+    if: >-
+      always() &&
+      needs.preparar_contexto.result == 'success' &&
+      needs.preparar_contexto.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Build da imagem Docker
+        run: docker compose build app
+
+      - name: Baixar contexto do planejamento
+        uses: actions/download-artifact@v4
+        with:
+          name: contexto-recuperacao-raws-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .raw-recovery-consolidate/context
+
+      - name: Baixar evidencias dos candidatos
+        uses: actions/download-artifact@v4
+        with:
+          pattern: evidencia-recuperacao-raws-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: .raw-recovery-consolidate/evidence
+          merge-multiple: true
+
+      - name: Preparar diretorios da consolidacao
+        id: consolidacao
+        run: |
+          set -euo pipefail
+
+          runtime_dir=".raw-recovery-consolidate/${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          output_dir="${runtime_dir}/results"
+          echo "RAW_RECOVERY_FINAL_OUTPUT=${output_dir}" >> "$GITHUB_ENV"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+      - name: Consolidar evidencias
+        id: plano
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          docker compose run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python \
+            app scripts/planejar_recuperacao_raws.py consolidate \
+            --context /app/.raw-recovery-consolidate/context/contexto.json \
+            --evidence /app/.raw-recovery-consolidate/evidence \
+            --output "/app/${RAW_RECOVERY_FINAL_OUTPUT}"
 
       - name: Publicar resumo do planejamento
-        if: always() && steps.contexto.outcome == 'success'
+        if: always() && steps.consolidacao.outcome == 'success'
         run: |
-          report_path="${RAW_RECOVERY_OUTPUT_DIR}/resumo.md"
+          report_path="${RAW_RECOVERY_FINAL_OUTPUT}/resumo.md"
           if [ -f "$report_path" ]; then
             cat "$report_path" >> "$GITHUB_STEP_SUMMARY"
           else
             {
               echo "# Plano de recuperacao dos arquivos raw"
               echo
-              echo "O planejamento nao gerou o relatorio esperado."
+              echo "A consolidacao nao gerou o relatorio esperado."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Remover credencial temporaria
-        if: always() && steps.contexto.outcome == 'success'
-        run: rm -f -- "$RAW_RECOVERY_RCLONE_CONFIG"
-
       - name: Publicar artefato do planejamento
-        if: always() && steps.contexto.outcome == 'success'
+        if: always() && steps.consolidacao.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: plano-recuperacao-raws-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.contexto.outputs.output_dir }}/
+          path: ${{ steps.consolidacao.outputs.output_dir }}/
           if-no-files-found: error
           retention-days: 90
 
       - name: Consolidar resultado
-        if: always() && steps.janela.outputs.should_run == 'true'
+        if: always()
         run: |
           set -euo pipefail
 
-          if [ "${{ steps.restaurar_data.outcome }}" != "success" ]; then
-            echo "::error::A restauracao do pacote atual falhou."
-            exit 1
-          fi
-          if [ "${{ steps.contexto.outcome }}" != "success" ]; then
-            echo "::error::A preparacao do planejamento falhou."
-            exit 1
-          fi
           if [ "${{ steps.plano.outcome }}" != "success" ]; then
-            echo "::error::O planejamento terminou com falha ou backups invalidos."
+            echo "::error::A consolidacao do plano terminou com falha ou backups invalidos."
             exit 1
           fi
           echo "Plano somente leitura concluido e publicado como artefato."
