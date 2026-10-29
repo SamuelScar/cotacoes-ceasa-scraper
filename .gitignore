@@ -16,6 +16,8 @@ ceasa-data-latest.tar.gz.tmp
 .raw-recovery-context/
 .raw-recovery-shard/
 .raw-recovery-consolidate/
+.raw-recovery-input/
+.raw-recovery-run/
 
 
 cotacoes.sqlite.xz
