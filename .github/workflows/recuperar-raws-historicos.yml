@@ -201,6 +201,7 @@ jobs:
             -e PYTHONDONTWRITEBYTECODE=1 \
             --entrypoint python \
             app scripts/preparar_insumos_recuperacao_raws.py \
+            --database /app/data/cotacoes.sqlite \
             --plano "/app/${RAW_RECOVERY_PLAN}" \
             --resultado-planejamento "/app/${RAW_RECOVERY_PLANNING_RESULT}" \
             --remote "$DATA_ONEDRIVE_REMOTE" \

@@ -15,6 +15,7 @@ from cotacoes_ceasa.raw_recovery import (
     RawRecoveryError,
     build_recovery_input_inventory,
     create_raw_recovery_candidate,
+    validate_raw_recovery_source,
 )
 
 
@@ -127,6 +128,73 @@ class RawRecoveryCandidateTest(unittest.TestCase):
         self.assertTrue(result_path.is_file())
         self.assertTrue(report_path.is_file())
 
+    def test_accepts_new_collections_after_planning(self) -> None:
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                """
+                INSERT INTO coletas (
+                    id, fonte_id, caminho_relativo_raw, sha256
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    5,
+                    1,
+                    "raw/fonte/nova.html",
+                    self._sha256(b"nova coleta"),
+                ),
+            )
+
+        compatibility = validate_raw_recovery_source(
+            current_database_path=self.database,
+            plan_path=self.plan_path,
+            planning_result_path=self.planning_result_path,
+        )
+
+        self.assertEqual("compatible", compatibility["status"])
+        self.assertFalse(compatibility["exact_database_match"])
+        self.assertEqual(4, compatibility["planned_collections"])
+        self.assertEqual(4, compatibility["matched_collections"])
+
+        candidate = self.root / "evolved-candidate"
+        result = create_raw_recovery_candidate(
+            current_data_directory=self.current_data,
+            plan_path=self.plan_path,
+            planning_result_path=self.planning_result_path,
+            archives_directory=self.archives,
+            manifests_directory=self.manifests,
+            candidate_root=candidate,
+            work_directory=self.root / "evolved-work",
+            result_path=self.root / "evolved-result.json",
+            report_path=self.root / "evolved-report.md",
+        )
+
+        self.assertFalse(result["source"]["exact_planning_snapshot"])
+        self.assertEqual(4, result["source"]["plan_collections_validated"])
+        with sqlite3.connect(candidate / "data" / "cotacoes.sqlite") as connection:
+            self.assertEqual(
+                1,
+                connection.execute(
+                    "SELECT COUNT(*) FROM coletas WHERE id = 5"
+                ).fetchone()[0],
+            )
+
+    def test_refuses_changed_collection_referenced_by_plan(self) -> None:
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "UPDATE coletas SET sha256 = ? WHERE id = 1",
+                (self._sha256(b"conteudo alterado"),),
+            )
+
+        with self.assertRaisesRegex(
+            RawRecoveryError,
+            "alterou ou removeu coletas",
+        ):
+            validate_raw_recovery_source(
+                current_database_path=self.database,
+                plan_path=self.plan_path,
+                planning_result_path=self.planning_result_path,
+            )
+
     def test_refuses_to_overwrite_divergent_candidate_file(self) -> None:
         conflicting = self.current_data / "raw" / "fonte" / "recuperado.html"
         conflicting.write_bytes(b"conteudo divergente")
@@ -212,8 +280,20 @@ class RawRecoveryCandidateTest(unittest.TestCase):
 
     def _create_database(self, path: Path) -> None:
         with sqlite3.connect(path) as connection:
-            connection.execute(
-                "CREATE TABLE coletas (id INTEGER PRIMARY KEY, sha256 TEXT)"
+            connection.executescript(
+                """
+                CREATE TABLE fontes (
+                    id INTEGER PRIMARY KEY,
+                    slug TEXT NOT NULL
+                );
+                CREATE TABLE coletas (
+                    id INTEGER PRIMARY KEY,
+                    fonte_id INTEGER NOT NULL,
+                    caminho_relativo_raw TEXT,
+                    sha256 TEXT
+                );
+                INSERT INTO fontes (id, slug) VALUES (1, 'fonte');
+                """
             )
 
     def _create_backup(self) -> None:
@@ -366,12 +446,27 @@ class RawRecoveryCandidateTest(unittest.TestCase):
             writer.writerows(rows)
 
     def _write_planning_result(self) -> None:
+        with sqlite3.connect(self.database) as connection:
+            connection.executemany(
+                """
+                INSERT INTO coletas (
+                    id, fonte_id, caminho_relativo_raw, sha256
+                ) VALUES (?, 1, ?, ?)
+                """,
+                (
+                    (1, "raw/fonte/recuperado.html", self.direct_hash),
+                    (2, "raw/fonte/arquivo-a.html", self.archived_hash),
+                    (3, "raw/fonte/arquivo-b.html", self.archived_hash),
+                    (4, "raw/fonte/ausente.html", self.missing_hash),
+                ),
+            )
         database_sha256 = calculate_sha256(self.database)
         payload = {
             "schema_version": 1,
             "status": "completed",
             "operation": "raw_recovery_plan",
             "database": {
+                "model": "v4",
                 "sha256_before": database_sha256,
                 "sha256_after": database_sha256,
                 "unchanged": True,

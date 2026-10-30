@@ -101,11 +101,28 @@ def consolidate_raw_recovery(
     ):
         raise RawRecoveryReportError("O SQLite candidato foi alterado.")
     planning_database = _object(planning, "database", "planejamento")
-    if candidate.get("database_sha256_after") != planning_database.get(
-        "sha256_before"
+    planning_database_sha256 = planning_database.get("sha256_before")
+    source_database_sha256 = source.get("database_sha256_after")
+    if source.get("planning_database_sha256") != planning_database_sha256:
+        raise RawRecoveryReportError(
+            "A recuperacao referencia outro SQLite de planejamento."
+        )
+    if candidate.get("database_sha256_after") != source_database_sha256:
+        raise RawRecoveryReportError(
+            "O SQLite candidato diverge do pacote atual validado."
+        )
+    exact_planning_snapshot = source.get("exact_planning_snapshot")
+    if not isinstance(exact_planning_snapshot, bool) or (
+        exact_planning_snapshot
+        != (source_database_sha256 == planning_database_sha256)
     ):
         raise RawRecoveryReportError(
-            "O SQLite candidato diverge do planejamento."
+            "A compatibilidade entre os SQLite possui evidencia invalida."
+        )
+    planned_collections = _integer(coverage, "missing_records")
+    if _integer(source, "plan_collections_validated") != planned_collections:
+        raise RawRecoveryReportError(
+            "Nem todas as coletas do plano foram validadas no SQLite atual."
         )
 
     if (
@@ -121,7 +138,12 @@ def consolidate_raw_recovery(
             "A auditoria nao confirmou o modo somente leitura."
         )
 
-    _validate_traceability(before, after, recoverable_records)
+    _validate_traceability(
+        before,
+        after,
+        recoverable_records,
+        exact_planning_snapshot=exact_planning_snapshot,
+    )
     _validate_audit_findings(audit, after["missing"])
     not_found_records = _integer(coverage, "records_not_found")
     rejected_records = _integer(coverage, "records_with_invalid_target")
@@ -164,6 +186,11 @@ def consolidate_raw_recovery(
             "before": before,
             "after": after,
             "missing_reduction": before["missing"] - after["missing"],
+            "exact_planning_snapshot": exact_planning_snapshot,
+            "collections_added_since_planning": max(
+                0,
+                after["checked"] - before["checked"],
+            ),
         },
         "audit": {
             "status": verdict.get("status"),
@@ -209,32 +236,54 @@ def _validate_traceability(
     before: dict[str, int],
     after: dict[str, int],
     recovered_records: int,
+    *,
+    exact_planning_snapshot: bool,
 ) -> None:
-    if before["checked"] != after["checked"]:
+    if after["checked"] < before["checked"]:
         raise RawRecoveryReportError(
-            "A quantidade de raws verificados mudou entre as auditorias."
+            "A quantidade de raws verificados diminuiu desde o planejamento."
         )
     expected_missing = before["missing"] - recovered_records
-    if expected_missing < 0 or after["missing"] != expected_missing:
+    if expected_missing < 0:
         raise RawRecoveryReportError(
             "A reducao de raws ausentes diverge da recuperacao planejada."
         )
     matched_before = before["exact_match"] + before["relocated_match"]
     matched_after = after["exact_match"] + after["relocated_match"]
-    if matched_after != matched_before + recovered_records:
-        raise RawRecoveryReportError(
-            "O aumento de raws localizados diverge da recuperacao."
-        )
-    for key in (
-        "ambiguous_candidates",
-        "hash_mismatch",
-        "unreadable",
-        "missing_hash",
-    ):
-        if before.get(key, 0) != after.get(key, 0):
+    if exact_planning_snapshot:
+        if after["checked"] != before["checked"]:
             raise RawRecoveryReportError(
-                f"A classificacao {key} mudou inesperadamente."
+                "A quantidade de raws verificados mudou entre as auditorias."
             )
+        if after["missing"] != expected_missing:
+            raise RawRecoveryReportError(
+                "A reducao de raws ausentes diverge da recuperacao planejada."
+            )
+        if matched_after != matched_before + recovered_records:
+            raise RawRecoveryReportError(
+                "O aumento de raws localizados diverge da recuperacao."
+            )
+        for key in (
+            "ambiguous_candidates",
+            "hash_mismatch",
+            "unreadable",
+            "missing_hash",
+        ):
+            if before.get(key, 0) != after.get(key, 0):
+                raise RawRecoveryReportError(
+                    f"A classificacao {key} mudou inesperadamente."
+                )
+        return
+
+    added_collections = after["checked"] - before["checked"]
+    if after["missing"] > expected_missing:
+        raise RawRecoveryReportError(
+            "Surgiram raws ausentes que nao estavam cobertos pelo plano."
+        )
+    if matched_after < matched_before + recovered_records + added_collections:
+        raise RawRecoveryReportError(
+            "As coletas recuperadas ou adicionadas nao aparecem na auditoria final."
+        )
 
 
 def _validate_audit_findings(
@@ -330,6 +379,8 @@ def _build_report(result: dict[str, object]) -> str:
     traceability = _object(result, "traceability", "resultado")
     before = _object(traceability, "before", "rastreabilidade")
     after = _object(traceability, "after", "rastreabilidade")
+    exact_snapshot = traceability.get("exact_planning_snapshot") is True
+    added_collections = traceability.get("collections_added_since_planning", 0)
     return "\n".join(
         [
             "# Validacao da recuperacao dos raws historicos",
@@ -338,6 +389,10 @@ def _build_report(result: dict[str, object]) -> str:
             "- Pacote atual alterado: **nao**",
             "- Backups remotos alterados: **0**",
             "- Pacote publicado: **nao**",
+            "- SQLite identico ao usado no planejamento: "
+            f"**{'sim' if exact_snapshot else 'nao; coletas do plano validadas'}**",
+            "- Novas coletas desde o planejamento: "
+            f"**{added_collections:,}**",
             "",
             "## Resultado da recuperacao",
             "",

@@ -85,6 +85,14 @@ class RecoveryOperation:
 
 
 @dataclass(frozen=True)
+class PlannedCollection:
+    collection_id: int
+    source: str
+    stored_path: str
+    expected_sha256: str
+
+
+@dataclass(frozen=True)
 class RecoveryPlan:
     rows: int
     missing_unique_hashes: int
@@ -92,6 +100,7 @@ class RecoveryPlan:
     recoverable_unique_hashes: int
     not_found_records: int
     invalid_target_records: int
+    collections: tuple[PlannedCollection, ...]
     operations: tuple[RecoveryOperation, ...]
 
 
@@ -192,6 +201,30 @@ def build_recovery_input_inventory(
     }
 
 
+def validate_raw_recovery_source(
+    *,
+    current_database_path: Path,
+    plan_path: Path,
+    planning_result_path: Path,
+) -> dict[str, object]:
+    """Confirma que as coletas planejadas permanecem iguais no SQLite atual."""
+    database = _resolve_file(current_database_path, "SQLite atual")
+    plan_file = _resolve_file(plan_path, "plano de recuperacao")
+    planning_result_file = _resolve_file(
+        planning_result_path,
+        "resultado do planejamento",
+    )
+    _validate_sqlite(database)
+    plan = _read_plan(plan_file)
+    planning_result = _read_json(planning_result_file)
+    _validate_planning_result(planning_result, plan, plan_file.name)
+    return _validate_current_database_compatibility(
+        database,
+        plan,
+        planning_result,
+    )
+
+
 def create_raw_recovery_candidate(
     *,
     current_data_directory: Path,
@@ -232,13 +265,14 @@ def create_raw_recovery_candidate(
     if not source_sqlite.is_file() or source_sqlite.is_symlink():
         raise RawRecoveryError("O SQLite atual nao e um arquivo regular.")
     _validate_sqlite(source_sqlite)
-    source_database_sha256 = calculate_sha256(source_sqlite)
-    planned_database = planning_result["database"]
-    assert isinstance(planned_database, dict)
-    if planned_database.get("sha256_before") != source_database_sha256:
-        raise RawRecoveryError(
-            "O SQLite atual diverge do SQLite usado para gerar o plano."
-        )
+    source_compatibility = _validate_current_database_compatibility(
+        source_sqlite,
+        plan,
+        planning_result,
+    )
+    source_database_sha256 = str(
+        source_compatibility["current_database_sha256"]
+    )
 
     source_inventory = collect_data_inventory(current_data)
     candidate.mkdir(parents=True)
@@ -370,8 +404,17 @@ def create_raw_recovery_candidate(
         "finished_at": execution_now().isoformat(timespec="seconds"),
         "source": {
             "data_directory": current_data.as_posix(),
+            "planning_database_sha256": source_compatibility[
+                "planning_database_sha256"
+            ],
             "database_sha256_before": source_database_sha256,
             "database_sha256_after": source_database_sha256_after,
+            "exact_planning_snapshot": source_compatibility[
+                "exact_database_match"
+            ],
+            "plan_collections_validated": source_compatibility[
+                "matched_collections"
+            ],
             "database_unchanged": True,
             "inventory_before": source_inventory.as_dict(),
             "inventory_after": source_inventory_after.as_dict(),
@@ -444,9 +487,26 @@ def _read_plan(path: Path) -> RecoveryPlan:
     not_found_records = 0
     invalid_target_records = 0
     backup_signatures: dict[str, tuple[str, str, str]] = {}
+    planned_collections: dict[int, PlannedCollection] = {}
     for row in rows:
         collection_id = _positive_int(row["coleta_id"], "coleta_id")
         expected_sha256 = _sha256(row["sha256_esperado"], "sha256_esperado")
+        source = row["fonte"].strip()
+        stored_path = row["caminho_registrado"].strip()
+        if not source or not stored_path:
+            raise RawRecoveryError(
+                f"Coleta {collection_id} sem fonte ou caminho no plano."
+            )
+        if collection_id in planned_collections:
+            raise RawRecoveryError(
+                f"Coleta duplicada no plano: {collection_id}."
+            )
+        planned_collections[collection_id] = PlannedCollection(
+            collection_id=collection_id,
+            source=source,
+            stored_path=stored_path,
+            expected_sha256=expected_sha256,
+        )
         missing_hashes.add(expected_sha256)
         status = row["status"]
         if status == "nao_encontrado":
@@ -537,6 +597,10 @@ def _read_plan(path: Path) -> RecoveryPlan:
         recoverable_unique_hashes=len(recoverable_hashes),
         not_found_records=not_found_records,
         invalid_target_records=invalid_target_records,
+        collections=tuple(
+            planned_collections[item]
+            for item in sorted(planned_collections)
+        ),
         operations=tuple(operations.values()),
     )
 
@@ -567,9 +631,21 @@ def _validate_planning_result(
     assert isinstance(inventory, dict)
     assert isinstance(files, dict)
     assert isinstance(safety, dict)
+    if database.get("model") not in {"v4", "legacy"}:
+        raise RawRecoveryError(
+            "O planejamento nao identifica o modelo do SQLite."
+        )
+    planned_sha256 = _sha256(
+        str(database.get("sha256_before", "")),
+        "database.sha256_before",
+    )
+    final_sha256 = _sha256(
+        str(database.get("sha256_after", "")),
+        "database.sha256_after",
+    )
     if (
         database.get("unchanged") is not True
-        or database.get("sha256_before") != database.get("sha256_after")
+        or planned_sha256 != final_sha256
     ):
         raise RawRecoveryError("O planejamento nao preservou o SQLite.")
     if inventory.get("errors") != 0:
@@ -595,6 +671,110 @@ def _validate_planning_result(
         or safety.get("database_replaced") is not False
     ):
         raise RawRecoveryError("As garantias de seguranca do plano sao invalidas.")
+
+
+def _validate_current_database_compatibility(
+    database: Path,
+    plan: RecoveryPlan,
+    planning_result: dict[str, object],
+) -> dict[str, object]:
+    planned_database = planning_result["database"]
+    assert isinstance(planned_database, dict)
+    planned_model = str(planned_database["model"])
+    planned_sha256 = str(planned_database["sha256_before"])
+    current_sha256 = calculate_sha256(database)
+    uri = f"{database.resolve().as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(uri, uri=True) as connection:
+            current_model = _current_database_model(connection)
+            if current_model != planned_model:
+                raise RawRecoveryError(
+                    "O modelo do SQLite atual diverge do planejamento: "
+                    f"planejado={planned_model}, atual={current_model}."
+                )
+            current_collections = _load_current_collection_evidence(
+                connection,
+                current_model,
+                {item.collection_id for item in plan.collections},
+            )
+    except sqlite3.Error as error:
+        raise RawRecoveryError(
+            "Nao foi possivel validar as coletas do SQLite atual."
+        ) from error
+
+    incompatible: list[int] = []
+    for planned in plan.collections:
+        current = current_collections.get(planned.collection_id)
+        expected = (
+            planned.source,
+            planned.stored_path,
+            planned.expected_sha256,
+        )
+        if current != expected:
+            incompatible.append(planned.collection_id)
+    if incompatible:
+        samples = ", ".join(str(item) for item in incompatible[:10])
+        raise RawRecoveryError(
+            "O SQLite atual alterou ou removeu coletas referenciadas pelo "
+            f"plano: total={len(incompatible)}, exemplos=[{samples}]."
+        )
+
+    return {
+        "status": "compatible",
+        "model": current_model,
+        "planning_database_sha256": planned_sha256,
+        "current_database_sha256": current_sha256,
+        "exact_database_match": current_sha256 == planned_sha256,
+        "planned_collections": len(plan.collections),
+        "matched_collections": len(plan.collections),
+    }
+
+
+def _current_database_model(connection: sqlite3.Connection) -> str:
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(coletas)")
+    }
+    if {"fonte_id", "caminho_relativo_raw", "sha256"}.issubset(columns):
+        return "v4"
+    if {"ceasa_id", "arquivo_raw", "hash_raw"}.issubset(columns):
+        return "legacy"
+    raise RawRecoveryError("O SQLite atual possui um modelo desconhecido.")
+
+
+def _load_current_collection_evidence(
+    connection: sqlite3.Connection,
+    model: str,
+    collection_ids: set[int],
+) -> dict[int, tuple[str, str, str]]:
+    evidence: dict[int, tuple[str, str, str]] = {}
+    ordered_ids = sorted(collection_ids)
+    for start in range(0, len(ordered_ids), 900):
+        chunk = ordered_ids[start : start + 900]
+        placeholders = ", ".join("?" for _ in chunk)
+        if model == "v4":
+            query = f"""
+                SELECT c.id, f.slug, c.caminho_relativo_raw, c.sha256
+                FROM coletas c
+                JOIN fontes f ON f.id = c.fonte_id
+                WHERE c.id IN ({placeholders})
+            """
+        else:
+            query = f"""
+                SELECT c.id, f.slug, c.arquivo_raw, c.hash_raw
+                FROM coletas c
+                JOIN ceasas f ON f.id = c.ceasa_id
+                WHERE c.id IN ({placeholders})
+            """
+        for collection_id, source, stored_path, expected_sha256 in (
+            connection.execute(query, chunk)
+        ):
+            evidence[int(collection_id)] = (
+                str(source),
+                str(stored_path),
+                str(expected_sha256).lower(),
+            )
+    return evidence
 
 
 def _preflight_targets(

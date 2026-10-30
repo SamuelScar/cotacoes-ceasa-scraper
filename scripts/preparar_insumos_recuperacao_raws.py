@@ -23,6 +23,7 @@ from cotacoes_ceasa.execution import (  # noqa: E402
 )
 from cotacoes_ceasa.raw_recovery import (  # noqa: E402
     build_recovery_input_inventory,
+    validate_raw_recovery_source,
 )
 
 
@@ -39,6 +40,7 @@ def main() -> int:
         type=Path,
         required=True,
     )
+    parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--remote", required=True)
     parser.add_argument("--raiz-remota", required=True)
     parser.add_argument("--arquivos-backup", type=Path, required=True)
@@ -53,11 +55,17 @@ def main() -> int:
         _require_new_directory(archives, "arquivos de backup")
         _require_new_directory(manifests, "manifestos")
         remote = validate_remote_name(args.remote)
+        source_compatibility = validate_raw_recovery_source(
+            current_database_path=args.database,
+            plan_path=args.plano,
+            planning_result_path=args.resultado_planejamento,
+        )
         inventory = build_recovery_input_inventory(
             plan_path=args.plano,
             planning_result_path=args.resultado_planejamento,
             remote_root=args.raiz_remota,
         )
+        inventory["source_compatibility"] = source_compatibility
         write_json_atomic(inventory_path, inventory)
         archives.mkdir(parents=True)
         manifests.mkdir(parents=True)
